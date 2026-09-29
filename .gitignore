@@ -50,3 +50,16 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# UnRAR sources (proprietary freeware license, fetched manually, see README)
+/unrarsrc/
+unrarsrc-*.tar*
+
+# Build trees and tooling
+/build*/
+/out/
+/.cache/
+compile_commands.json
+CMakeUserPresets.json
+.DS_Store
+__pycache__/
