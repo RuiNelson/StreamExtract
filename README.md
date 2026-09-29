@@ -105,8 +105,11 @@ cmake --build build
 
 The binary is `build/rarftp`. UnRAR is always linked statically into it.
 
-Developed and tested on macOS. Linux and Windows builds will come from CI in a
-later version.
+Developed and tested on macOS. The GitHub Actions workflow
+(`.github/workflows/ci.yml`) builds and tests Linux (x64), macOS (universal)
+and Windows (x64), always with libcurl built from source and linked
+statically (Windows does not ship it), and publishes one `.rar` per platform
+as a build artifact.
 
 ## Testing
 

@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  UNRAR_VERSION: "7.3.1"
+  UNRAR_SHA256: 634900842a3737d9cc15bbcc71d4c74cc713437e0bca296a573424fe5f2660ab
+  # Only used to create the .rar artifacts (evaluation copy of the RAR archiver).
+  RAR_ARCHIVE: rarlinux-x64-723.tar.gz
+  RAR_SHA256: 759b4b6aa0d9f77131882162951193f3a0e54bf60e1d8dc4255aa308accab588
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            # Oldest hosted image, for the widest glibc compatibility.
+            os: ubuntu-22.04
+            exe: rarftp
+            configure: >-
+              -G Ninja
+              -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          - name: macos-universal
+            os: macos-latest
+            exe: rarftp
+            configure: >-
+              -G Ninja
+              "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          - name: windows-x64
+            os: windows-latest
+            exe: Release/rarftp.exe
+            # Static CRT: the binary must not need the VC++ redistributable.
+            configure: >-
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+              -DCURL_STATIC_CRT=ON
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # The UnRAR sources are not part of the repository (see README).
+      - name: Fetch UnRAR sources
+        run: |
+          curl -fsSLO "https://www.rarlab.com/rar/unrarsrc-${UNRAR_VERSION}.tar.gz"
+          actual="$(cmake -E sha256sum "unrarsrc-${UNRAR_VERSION}.tar.gz" | cut -d' ' -f1)"
+          test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
+          mkdir unrarsrc
+          tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+
+      # libcurl is always built from source and linked statically (FTP only, no
+      # TLS), so the binary depends on nothing that Windows does not ship.
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DRARFTP_BUNDLED_CURL=ON
+          ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Unit tests
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Check dynamic dependencies
+        run: |
+          case "$RUNNER_OS" in
+            Linux) ldd "build/${{ matrix.exe }}" ;;
+            macOS) otool -L "build/${{ matrix.exe }}"; lipo -info "build/${{ matrix.exe }}" ;;
+            *) echo "skipped" ;;
+          esac
+
+      - name: Stage files
+        run: |
+          mkdir -p dist/rarftp
+          cp "build/${{ matrix.exe }}" dist/rarftp/
+          cp LICENSE README.md THIRD_PARTY_NOTICES.md dist/rarftp/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.name }}
+          path: dist
+          if-no-files-found: error
+
+  package:
+    name: Package .rar
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: bin
+
+      - name: Get the RAR archiver
+        run: |
+          curl -fsSLO "https://www.rarlab.com/rar/${RAR_ARCHIVE}"
+          echo "${RAR_SHA256}  ${RAR_ARCHIVE}" | sha256sum -c -
+          tar -xzf "${RAR_ARCHIVE}"
+
+      - name: Create archives
+        run: |
+          # Artifact download drops the executable bit.
+          chmod +x bin/bin-linux-x64/rarftp/rarftp bin/bin-macos-universal/rarftp/rarftp
+          mkdir out
+          for name in linux-x64 macos-universal windows-x64; do
+            (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-${name}.rar" .)
+          done
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-linux-x64
+          path: out/rarftp-linux-x64.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-macos-universal
+          path: out/rarftp-macos-universal.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-windows-x64
+          path: out/rarftp-windows-x64.rar
+          if-no-files-found: error
