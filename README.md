@@ -89,6 +89,63 @@ some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 
+## Install
+
+Prebuilt binaries are published as assets of each release on the repository's
+[**Releases** page](./releases). Download the file for your platform:
+
+| Platform | Asset |
+|---|---|
+| Windows (x64) | `rarftp-windows-x64.rar` |
+| macOS (Intel and Apple Silicon) | `rarftp-macos-universal.rar` |
+| Linux (x64, glibc 2.35+) | `rarftp-linux-x64.rar` |
+
+Each archive holds the `rarftp` executable, `LICENSE`, `README.md` and
+`THIRD_PARTY_NOTICES.md` . Extracting it needs a program that reads RAR5 (WinRAR,
+7-Zip, Keka, `unrar`, ...). The executables are statically linked and need no other
+installation.
+
+### Windows
+
+1. Extract `rarftp-windows-x64.rar` into `C:\rarftp`, so that the
+   result is `C:\rarftp\rarftp.exe`.
+
+2. Run it from a terminal:
+
+   ```powershell
+   C:\rarftp\rarftp.exe --version
+   ```
+
+The binary is not code-signed, so if it does not start at all, check whether
+your antivirus quarantined it.
+
+### macOS
+
+The binary is not code-signed or notarized, so Gatekeeper blocks it after it
+is downloaded (*"rarftp" cannot be opened because the developer cannot be
+verified*). Extract the archive into a directory of its own, remove the
+quarantine attribute, and install it:
+
+```bash
+xattr -d com.apple.quarantine rarftp                # in the extracted directory
+sudo install -d /usr/local/bin
+sudo install -m 755 rarftp /usr/local/bin/rarftp
+rarftp --version
+```
+
+### Linux
+
+```bash
+unrar x rarftp-linux-x64.rar rarftp/        # or: 7z x -orarftp rarftp-linux-x64.rar
+sudo install -m 755 rarftp/rarftp /usr/local/bin/rarftp
+rarftp --version
+```
+
+Without root, install it into a directory in your `PATH` instead, for example
+`install -D -m 755 rarftp/rarftp ~/.local/bin/rarftp`. The binary is built on
+Ubuntu 22.04, so it runs on distributions with glibc 2.35 or newer; libstdc++
+is linked statically.
+
 ## Building
 
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
@@ -115,8 +172,7 @@ The binary is `build/rarftp`. UnRAR is always linked statically into it.
 Developed and tested on macOS. The GitHub Actions workflow
 (`.github/workflows/ci.yml`) builds and tests Linux (x64), macOS (universal)
 and Windows (x64), always with libcurl built from source and linked
-statically (Windows does not ship it), and publishes one `.rar` per platform
-as a build artifact.
+statically (Windows does not ship it), and produces one `.rar` per platform.
 
 ## Testing
 

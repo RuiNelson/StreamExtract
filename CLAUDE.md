@@ -43,3 +43,11 @@ Exit codes: `0` ok, `1` error, `2` usage, `130` cancelled.
 ## CI
 
 `.github/workflows/ci.yml` builds Linux/macOS/Windows with bundled static libcurl, downloads UnRAR sources (pinned SHA-256), runs the unit tests only (the Docker integration tests are local-only), and publishes a `.rar` per platform as an artifact (RARLAB's `rar` is used only to create those archives).
+
+## Releases
+
+Use the CI-generated artifacts to get the RAR files for binary distribution.
+
+The project uses semantic versioning, tag the repository (`vX.X.X`), the GitHub version name follows the format `Version X.X.X`
+
+Release notes format is a list of what's new for the user (do not include changes not relevant to the end user such as documentation, CI, etc.), ordered by significance.

@@ -91,9 +91,9 @@ jobs:
 
       - name: Stage files
         run: |
-          mkdir -p dist/rarftp
-          cp "build/${{ matrix.exe }}" dist/rarftp/
-          cp LICENSE README.md THIRD_PARTY_NOTICES.md dist/rarftp/
+          mkdir dist
+          cp "build/${{ matrix.exe }}" dist/
+          cp LICENSE README.md THIRD_PARTY_NOTICES.md dist/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -120,7 +120,7 @@ jobs:
       - name: Create archives
         run: |
           # Artifact download drops the executable bit.
-          chmod +x bin/bin-linux-x64/rarftp/rarftp bin/bin-macos-universal/rarftp/rarftp
+          chmod +x bin/bin-linux-x64/rarftp bin/bin-macos-universal/rarftp
           mkdir out
           for name in linux-x64 macos-universal windows-x64; do
             (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-${name}.rar" .)
