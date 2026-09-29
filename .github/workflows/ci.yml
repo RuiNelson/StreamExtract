@@ -29,6 +29,13 @@ jobs:
             configure: >-
               -G Ninja
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          - name: linux-arm64
+            # Native arm64 runner, same glibc baseline as linux-x64.
+            os: ubuntu-22.04-arm
+            exe: rarftp
+            configure: >-
+              -G Ninja
+              -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: macos-universal
             os: macos-latest
             exe: rarftp
@@ -120,9 +127,9 @@ jobs:
       - name: Create archives
         run: |
           # Artifact download drops the executable bit.
-          chmod +x bin/bin-linux-x64/rarftp bin/bin-macos-universal/rarftp
+          chmod +x bin/bin-linux-x64/rarftp bin/bin-linux-arm64/rarftp bin/bin-macos-universal/rarftp
           mkdir out
-          for name in linux-x64 macos-universal windows-x64; do
+          for name in linux-x64 linux-arm64 macos-universal windows-x64; do
             (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-${name}.rar" .)
           done
           ls -l out
@@ -131,6 +138,11 @@ jobs:
         with:
           name: rarftp-linux-x64
           path: out/rarftp-linux-x64.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-linux-arm64
+          path: out/rarftp-linux-arm64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:

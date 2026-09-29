@@ -99,6 +99,7 @@ Prebuilt binaries are published as assets of each release on the repository's
 | Windows (x64) | `rarftp-windows-x64.rar` |
 | macOS (Intel and Apple Silicon) | `rarftp-macos-universal.rar` |
 | Linux (x64, glibc 2.35+) | `rarftp-linux-x64.rar` |
+| Linux (arm64, glibc 2.35+) | `rarftp-linux-arm64.rar` |
 
 Each archive holds the `rarftp` executable, `LICENSE`, `README.md` and
 `THIRD_PARTY_NOTICES.md` . Extracting it needs a program that reads RAR5 (WinRAR,
@@ -170,7 +171,7 @@ cmake --build build
 The binary is `build/rarftp`. UnRAR is always linked statically into it.
 
 Developed and tested on macOS. The GitHub Actions workflow
-(`.github/workflows/ci.yml`) builds and tests Linux (x64), macOS (universal)
+(`.github/workflows/ci.yml`) builds and tests Linux (x64 and arm64), macOS (universal)
 and Windows (x64), always with libcurl built from source and linked
 statically (Windows does not ship it), and produces one `.rar` per platform.
 
