@@ -17,9 +17,16 @@ decompressor to the FTP data connection instead:
   upload correctly from case-insensitive systems (macOS, Windows) to
   case-sensitive servers.
 
-```
+```bash
 rarftp --file archive.rar --host ftp.example.com --port 21 --mode passive \
-       --user username --password password --directory "/destination/dir"
+       --user username --password "password" --directory "/destination/dir"
+```
+
+`rarftp` supports advanced RAR functionalities like multi-part archives and
+password protection:
+
+```bash
+--rar-password "*[open sesame]*"
 ```
 
 ## How it works
