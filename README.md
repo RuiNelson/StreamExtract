@@ -92,7 +92,7 @@ create links.
 ## Install
 
 Prebuilt binaries are published as assets of each release on the repository's
-[**Releases** page](./releases). Download the file for your platform:
+[**Releases** page](https://github.com/RuiNelson/rarftp/releases). Download the file for your platform:
 
 | Platform | Asset |
 |---|---|
