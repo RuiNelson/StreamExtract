@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "targets": ["appimage"],
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/rarftp-gui/librarftpcore.so": "../../build/librarftpcore.so"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rarftp-gui",
+  "identifier": "io.github.ruinelson.rarftp-gui",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "rarftp",
+        "width": 640,
+        "height": 800,
+        "minWidth": 560,
+        "minHeight": 640,
+        "resizable": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Utility",
+    "shortDescription": "Upload a RAR archive to an FTP server without extracting it",
+    "longDescription": "rarftp-gui streams the contents of a RAR archive to an FTP server without extracting anything to disk. Files are decompressed and verified on the fly while they are uploaded.",
+    "copyright": "Rui Nelson",
+    "publisher": "Rui Nelson",
+    "license": "MIT",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
