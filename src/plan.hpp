@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -14,20 +15,28 @@ namespace rarftp {
 class FtpClient;
 class Logger;
 
-// Supplies the archive password: the one given on the command line, or asks
-// for it once when interactive.
+// Supplies the archive password: the one given up front, or the answer to
+// `prompt` (asked at most once, e.g. on the terminal or in a dialog).
 class PasswordSource {
  public:
-  PasswordSource(std::optional<std::string> password, std::string archive_name, bool interactive);
+  using Prompt = std::function<std::optional<std::string>()>;
+
+  // `prompt` may be empty: never ask.
+  PasswordSource(std::optional<std::string> password, Prompt prompt);
   std::optional<std::string> get();
   bool has_password() const { return password_.has_value(); }
   // After the interactive phase: never prompt again (worker threads).
-  void disable_prompt() { interactive_ = false; }
+  void disable_prompt() { prompt_ = nullptr; }
 
  private:
   std::optional<std::string> password_;
-  std::string archive_name_;
-  bool interactive_;
+  Prompt prompt_;
+};
+
+// The archive password is wrong; the caller may ask for another one.
+class ArchivePasswordError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
 };
 
 struct ArchiveListing {
@@ -36,7 +45,8 @@ struct ArchiveListing {
   unsigned volumes = 1;
 };
 
-// Reads every header of every volume. Throws RarError.
+// Reads every header of every volume. Throws std::runtime_error, or ArchivePasswordError when the password is
+// wrong.
 ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log);
 
 struct PlannedEntry {

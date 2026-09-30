@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "app_version.hpp"
 #include "ftp_client.hpp"
 
 namespace rarftp {
@@ -31,7 +32,5 @@ struct ParsedOptions {
 // Parses and validates the command line. Help, version and usage errors are
 // printed here.
 ParsedOptions parse_options(int argc, char** argv);
-
-std::string version_string();
 
 }  // namespace rarftp

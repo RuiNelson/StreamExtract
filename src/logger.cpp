@@ -22,16 +22,19 @@ const char* level_name(LogLevel level) {
 
 }  // namespace
 
-std::string format_log_line(const LogLine& line) {
-  const std::time_t t = std::chrono::system_clock::to_time_t(line.time);
+std::string format_log_time(std::chrono::system_clock::time_point time) {
+  const std::time_t t = std::chrono::system_clock::to_time_t(time);
   std::tm tm{};
 #ifdef _WIN32
   localtime_s(&tm, &t);
 #else
   localtime_r(&t, &tm);
 #endif
-  return fmt::format("{:02}:{:02}:{:02} {} {}", tm.tm_hour, tm.tm_min, tm.tm_sec, level_name(line.level),
-                     line.text);
+  return fmt::format("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+std::string format_log_line(const LogLine& line) {
+  return fmt::format("{} {} {}", format_log_time(line.time), level_name(line.level), line.text);
 }
 
 void Logger::set_sink(Sink sink) {

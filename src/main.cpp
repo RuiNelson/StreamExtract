@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <exception>
 #include <string>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -14,6 +15,7 @@
 #include "options.hpp"
 #include "plan.hpp"
 #include "progress.hpp"
+#include "summary.hpp"
 #include "transfer.hpp"
 #include "ui.hpp"
 #include "util/remote_path.hpp"
@@ -40,30 +42,9 @@ void print_line(const LogLine& line) {
 }
 
 void print_summary(const TransferResult& result, const TransferPlan& plan, const Logger& log, bool show_problems) {
-  const double average = result.seconds > 0.0 ? static_cast<double>(result.bytes_uploaded) / result.seconds : 0.0;
   std::string text;
-  switch (result.status) {
-    case TransferResult::Status::Success:
-      text +=
-          fmt::format("Done: {} file(s), {} uploaded in {} ({} on average).\n", result.files_uploaded,
-                      format_bytes(result.bytes_uploaded), format_duration(result.seconds), format_speed(average));
-      break;
-    case TransferResult::Status::Failed:
-      text += fmt::format("FAILED: {}\n", result.error);
-      text += fmt::format("{} file(s), {} uploaded before the failure.\n", result.files_uploaded,
-                          format_bytes(result.bytes_uploaded));
-      break;
-    case TransferResult::Status::Cancelled:
-      text += fmt::format("Cancelled: {} file(s), {} uploaded.\n", result.files_uploaded,
-                          format_bytes(result.bytes_uploaded));
-      break;
-  }
-  if (plan.skip_files > 0) {
-    text += fmt::format("Skipped {} file(s), {} already on the server with the same size.\n", plan.skip_files,
-                        format_bytes(plan.skip_bytes));
-  }
-  if (plan.ignored > 0) {
-    text += fmt::format("Not uploaded: {} link(s) or unsupported entries (see the warnings).\n", plan.ignored);
+  for (const std::string& line : summary_lines(result, plan)) {
+    text += line + "\n";
   }
 
   const auto problems = log.problems();
@@ -109,7 +90,11 @@ int run(const Options& options) {
 
   // 1. Archive: list every volume first, so a missing volume or a wrong
   //    password fails before anything is sent.
-  PasswordSource passwords(options.rar_password, file_name_of(options.file), interactive);
+  PasswordSource::Prompt prompt;
+  if (interactive) {
+    prompt = [&] { return prompt_hidden(fmt::format("Password for {}: ", file_name_of(options.file))); };
+  }
+  PasswordSource passwords(options.rar_password, std::move(prompt));
   ArchiveListing listing;
   try {
     log.info("Reading {}", options.file);

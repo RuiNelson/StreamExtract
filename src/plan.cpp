@@ -12,7 +12,6 @@
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "util/remote_path.hpp"
-#include "util/terminal.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -30,15 +29,16 @@ std::string ascii_lower(std::string text) {
 
 }  // namespace
 
-PasswordSource::PasswordSource(std::optional<std::string> password, std::string archive_name, bool interactive)
-    : password_(std::move(password)), archive_name_(std::move(archive_name)), interactive_(interactive) {}
+PasswordSource::PasswordSource(std::optional<std::string> password, Prompt prompt)
+    : password_(std::move(password)), prompt_(std::move(prompt)) {}
 
 std::optional<std::string> PasswordSource::get() {
-  if (password_ || !interactive_) {
+  if (password_ || !prompt_) {
     return password_;
   }
-  interactive_ = false;  // Ask only once.
-  password_ = prompt_hidden(fmt::format("Password for {}: ", archive_name_));
+  const Prompt prompt = std::move(prompt_);
+  prompt_ = nullptr;  // Ask only once.
+  password_ = prompt();
   return password_;
 }
 
@@ -80,7 +80,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
       throw std::runtime_error(fmt::format("volume not found: {}", missing_volume));
     }
     if (rar_is_bad_password(error.code())) {
-      throw std::runtime_error("wrong archive password");
+      throw ArchivePasswordError("wrong archive password");
     }
     if (rar_is_missing_password(error.code())) {
       throw std::runtime_error("the archive is encrypted: pass --rar-password");

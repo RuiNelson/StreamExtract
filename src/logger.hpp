@@ -21,6 +21,9 @@ struct LogLine {
   std::string text;
 };
 
+// "12:34:56" in local time.
+std::string format_log_time(std::chrono::system_clock::time_point time);
+
 // "12:34:56 WARN  message".
 std::string format_log_line(const LogLine& line);
 
