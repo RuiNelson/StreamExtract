@@ -40,22 +40,26 @@ Keka, `unrar`, ...).
 
 The app offers:
 
-- **Archive**: drop a `.rar`, `.zip`, `.7z` or `.tar` (also `.tar.gz`, `.tgz`,
-  `.tar.xz`...) on the window (the first volume, for multi-volume sets:
-  `.part1.rar`, `.zip.001`, `.7z.001`) or pick it with a file dialog. When the archive is encrypted and no password was typed in, the
-  app asks for it, and asks again if it was wrong.
-- **Server**: host, port, passive or active mode, user and password (anonymous
-  without a user), destination directory and *Create directory if missing*.
+- **Archive**: drop a RAR, ZIP, 7z or tar archive (also compressed: `.tar.gz`,
+  `.tgz`, `.tar.xz`...) on the window, or pick it with a file dialog; for
+  multi-volume sets, the first volume (`.part1.rar`, `.zip.001`, `.7z.001`...).
+  When the archive is encrypted and no password was typed in, the app asks for
+  it, and asks again if it was wrong (7z archives with a password are not
+  supported).
+- **Server**: host, port, passive or active mode, username and password
+  (anonymous without a username), destination directory and *Create directory
+  if missing*.
   *Advanced* has the buffer size and the verbose log.
 - **Memory Save**, **Memory Recall** and **Memory Clear**: keep the server
   settings between runs in `~/.config/rarftp-gui/memory.ini` (under the home
   directory on every OS), a **plain text** file. The first time a login with a
-  user name is saved, the app asks whether the user name and password may be
+  username is saved, the app asks whether the username and password may be
   stored unencrypted; if not, they are left out (Memory Clear also forgets the
   answer). The archive password is never stored.
 - **Progress**: the current step, the current file and the whole archive with
-  their ETAs, the upload and decompression speeds, the buffer fill, a live log,
-  and a final summary with any warnings. **Cancel** stops the transfer and
+  their ETAs (for a compressed tar, by how much of the archive has been read),
+  the upload and decompression speeds, the buffer fill, a live log, and a final
+  summary with any warnings. **Cancel** stops the transfer and
   removes the incomplete remote file; closing the window during a transfer asks
   for confirmation first.
 
@@ -95,7 +99,10 @@ rarftp --file archive.rar \
        --directory "/destination/dir" --mkdir
 ```
 
-Multi-volume and password-protected archives are supported:
+The archive can be RAR, ZIP, 7z or tar (also compressed, such as
+`backup.tar.zst`); it is recognized by its content. Multi-volume and
+password-protected archives are supported (except 7z archives with a
+password):
 
 ```bash
 --archive-password "*[open sesame]*"
@@ -117,8 +124,9 @@ Multi-volume and password-protected archives are supported:
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
 
 The interface shows a fixed log panel, the progress of the current file and of
-the whole archive with their ETAs, the upload and decompression speeds, and
-how full the buffer is (full: the network is the bottleneck; empty: the CPU
+the whole archive with their ETAs (for a compressed tar, by how much of the
+archive has been read), the upload and decompression speeds, and how full the
+buffer is (full: the network is the bottleneck; empty: the CPU
 is). **Cancel** with `q`, `Esc` or `Ctrl-C` (or `SIGINT`/`SIGTERM` in plain
 mode).
 
@@ -207,11 +215,12 @@ Behaviour, in both:
   archives split into numbered parts (`.zip.001`, `.zip.002`, ...). A wrong
   password is detected while reading the archive, before anything is sent. Names
   without the UTF-8 flag are read as UTF-8 when they are valid UTF-8 (macOS
-  writes them like that), otherwise as code page 437 (on Windows: the system's
-  OEM code page, as Windows itself does).
+  writes them like that), otherwise as code page 437, the format's default.
 - **7z**: LZMA, LZMA2, BZip2, Deflate, PPMd and Zstandard with their filters
   (BCJ, BCJ2, ARM, ...), solid archives and archives split into numbered parts
-  (`.7z.001`, ...).
+  (`.7z.001`, ...). **Not 7z archives with a password** (encrypted contents or
+  encrypted file names): libarchive cannot decrypt them, so rarftp stops with an
+  error while reading the archive, before anything is sent.
 - **tar**, every variant libarchive reads (POSIX, GNU, pax, old Unix ones),
   plain or compressed with gzip (`.tar.gz`, `.tgz`), bzip2 (`.tar.bz2`), xz
   (`.tar.xz`), lzma (`.tar.lzma`), Zstandard (`.tar.zst`) or LZ4 (`.tar.lz4`),
@@ -220,7 +229,7 @@ Behaviour, in both:
   are uploaded without verification; a warning says so (gzip, xz, Zstandard and
   LZ4 check their own data, but over the whole stream or large blocks, not per
   file). Names without a pax header are read as UTF-8 when valid, otherwise as
-  Latin-1 (on Windows: as UTF-8).
+  Latin-1.
 - **Compressed tar is read once, as it is uploaded.** Its files can only be
   reached by decompressing everything before them, so instead of listing the
   archive first, rarftp plans each file when it reaches it and checks the
@@ -229,6 +238,7 @@ Behaviour, in both:
   and the ETA of the whole archive come from how much of the archive file has
   been read.
 - The **format** is recognized by the content of the file, not by its extension.
+- **Names** are uploaded as Unicode NFC, the same whatever system runs rarftp.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
 - **Fail-fast**: a checksum error, a missing volume or a network failure stops
@@ -354,8 +364,9 @@ End-to-end tests upload archives created with RARLAB's `rar`, Python's
 `zipfile` and `tarfile`, 7-Zip and Info-ZIP's `zip` to vsftpd running in Docker
 ([delfer/alpine-ftp-server](https://hub.docker.com/r/delfer/alpine-ftp-server))
 and compare what arrives, byte by byte. They need Docker, `rar` and Python 3.9+
-(standard library only); the tests that need 7-Zip (`7zz`, found in `PATH` or
-given with `--7z`) or `zip` are skipped without them:
+(standard library only). Archives that cannot be made are skipped: those that
+need 7-Zip (`7zz`, found in `PATH` or given with `--7z`), Info-ZIP's `zip`, the
+`lz4` command (for `.tar.lz4`) or Python 3.14+ (for Zstandard):
 
 ```bash
 python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar --7z /path/to/7zz
@@ -367,7 +378,8 @@ container address is reachable directly; Docker Desktop only publishes ports.
 With the library built (`-DRARFTP_BUILD_LIBRARY=ON`), `ctest` also runs a
 smoke test of its C API, and `--lib` adds tests that drive the library the way
 the app does (through its C API, with `ctypes`): uploads, re-runs, multi-volume
-and encrypted archives, the password prompt, errors and cancelling. They are
+and encrypted archives, ZIP, 7z and compressed tar, the password prompt, errors
+and cancelling, checking the JSON state at every poll. They are
 named `lib_*`:
 
 ```bash
