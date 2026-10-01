@@ -6,7 +6,7 @@ if(POLICY CMP0135)
 endif()
 
 project(rarftp
-  VERSION 2.1.0
+  VERSION 2.2.0
   DESCRIPTION "Uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
   LANGUAGES C CXX)
 
