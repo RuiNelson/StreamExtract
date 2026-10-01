@@ -41,7 +41,7 @@ typedef struct rarftp_job_config {
   unsigned buffer_mib;          /* Buffer between decompression and upload; 0: 64. */
 } rarftp_job_config;
 
-/* "rarftp 2.0.0 (UnRAR 7.31, libarchive 3.8.9, libcurl 8.22.0)". Static
+/* "rarftp 2.1.0 (UnRAR 7.31, libarchive 3.8.9, libcurl 8.22.0)". Static
  * storage, never freed. */
 RARFTP_API const char* rarftp_version(void);
 
