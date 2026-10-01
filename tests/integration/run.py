@@ -354,10 +354,17 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
         sz_a("basic.7z", main_parent)
         sz_a("multivolume.7z", main_parent, "-v2m")
         sz_a("bzip2.7z", main_parent, "-m0=BZip2")
+        sz_a("deflate.7z", main_parent, "-m0=Deflate")
+        sz_a("deflate64.7z", main_parent, "-m0=Deflate64")
         sz_a("ppmd.7z", main_parent, "-m0=PPMd")
         sz_a("dirs.7z", dirs_tree, what="*")
+        sz_a("bcj2.7z", main_parent, "-mf=BCJ2")
         sz_a("encrypted.7z", main_parent, f"-p{ARCHIVE_PASSWORD}")
         sz_a("encrypted-headers.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-mhe=on")
+        sz_a("encrypted-nonsolid.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-ms=off")
+        sz_a("encrypted-multivolume.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-mhe=on", "-v2m")
+        sz_a("encrypted-bzip2.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-m0=BZip2")
+        sz_a("encrypted-deflate.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-m0=Deflate", "-mhe=on")
         sz_a("aes.zip", main_parent, "-tzip", "-mem=AES256", f"-p{ZIP_AES_PASSWORD}")
         sz_a("split.zip", main_parent, "-tzip", "-v2m")
         sz_a("deflate64.zip", main_parent, "-tzip", "-mm=Deflate64")
@@ -788,6 +795,7 @@ def test_rerun_skips_identical_files(env):
 def test_changed_size_is_uploaded_again(env):
     with open(env.remote("basic", "tree", "random-5M.bin"), "r+b") as f:
         f.truncate(1234)
+    time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
     out = env.run("basic.rar", "--directory", "basic")
     check("To upload: 1 file(s)" in out, "expected exactly one upload", out)
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
@@ -1111,8 +1119,11 @@ def test_zip_deflate64_is_reported(env):
     env.require("deflate64.zip")
     out = env.run("deflate64.zip", "--directory", "deflate64", "--mkdir", expect=1)
     check("Unsupported ZIP compression method" in out, "Deflate64 not reported", out)
-    leftovers = [p for p in env.remote("deflate64").rglob("*") if p.is_file()]
-    check(not leftovers, f"files left on the server: {leftovers}", out)
+    # 7-Zip stores the other files, so only text-8M.txt is Deflate64 and the files before it are uploaded.
+    check(not env.remote("deflate64", "tree", "text-8M.txt").exists(), "unsupported file left on the server", out)
+    expected = tree_snapshot(env.fixtures["main"])
+    damaged = sorted(k for k, v in tree_snapshot(env.remote("deflate64", "tree")).items() if expected.get(k) != v)
+    check(not damaged, f"files on the server differ from the source: {damaged}", out)
 
 
 def test_7z_basic(env):
@@ -1137,7 +1148,9 @@ def test_7z_rerun_and_repair(env):
 
 
 def test_7z_methods_and_directories(env):
-    for name, tree, directory in (("bzip2.7z", "main", "bzip2-7z"), ("ppmd.7z", "main", "ppmd-7z"),
+    # BZip2 and Deflate: rarftp's own decoders (7-Zip's SDK lacks them); BCJ2 has four streams per block.
+    for name, tree, directory in (("bzip2.7z", "main", "bzip2-7z"), ("deflate.7z", "main", "deflate-7z"),
+                                  ("ppmd.7z", "main", "ppmd-7z"), ("bcj2.7z", "main", "bcj2-7z"),
                                   ("dirs.7z", "dirs", "dirs-7z")):
         env.require(name)
         out = env.run(name, "--directory", directory, "--mkdir")
@@ -1154,12 +1167,56 @@ def test_7z_multivolume(env):
     check(f"{len(parts)} volumes" in out, "volume count not reported", out)
 
 
-def test_7z_encrypted_is_reported(env):
+def test_7z_encrypted(env):
     for name in ("encrypted.7z", "encrypted-headers.7z"):
         env.require(name)
-        out = env.run(name, "--directory", "enc-7z", "--mkdir", "--archive-password", ARCHIVE_PASSWORD, expect=1)
-        check("7z archives with a password are not supported" in out, f"{name}: not reported", out)
-        check(not env.remote("enc-7z").exists(), f"{name}: went on after reading the archive", out)
+        directory = "enc-" + name.replace(".", "-")
+        out = env.run(name, "--directory", directory, "--mkdir", expect=1)
+        check("--archive-password" in out, f"{name}: no hint about --archive-password", out)
+        # Wrong: found while reading the archive (its names, or the start of the first file).
+        out = env.run(name, "--directory", directory, "--mkdir", "--archive-password", "wrong", expect=1)
+        check("wrong archive password" in out, f"{name}: wrong password not reported", out)
+        check(not env.remote(directory).exists(), f"{name}: went on after reading the archive", out)
+        out = env.run(name, "--directory", directory, "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
+        check("encrypted" in out, f"{name}: not reported as encrypted", out)
+        compare_trees(env.fixtures["main"], env.remote(directory, "tree"), out)
+        compare_mtimes(env.fixtures["main"], env.remote(directory, "tree"), out)
+
+
+def test_7z_encrypted_rerun(env):
+    env.require("encrypted-nonsolid.7z")
+    env.run("encrypted-nonsolid.7z", "--directory", "enc-7z-rerun", "--mkdir", "--archive-password",
+            ARCHIVE_PASSWORD)
+    env.remote("enc-7z-rerun", "tree", "sub", "dir", "deep.bin").unlink()
+    time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
+    out = env.run("encrypted-nonsolid.7z", "--directory", "enc-7z-rerun", "--archive-password", ARCHIVE_PASSWORD)
+    check("To upload: 1 file(s)" in out, "expected exactly the deleted file", out)
+    compare_trees(env.fixtures["main"], env.remote("enc-7z-rerun", "tree"), out)
+
+
+def test_7z_encrypted_multivolume(env):
+    env.require("encrypted-multivolume.7z.001")
+    parts = sorted(p.name for p in env.fixtures["archives"].glob("encrypted-multivolume.7z.0*"))
+    check(len(parts) >= 3, f"expected several parts, got {parts}")
+    out = env.run(parts[0], "--directory", "enc-multi-7z", "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
+    compare_trees(env.fixtures["main"], env.remote("enc-multi-7z", "tree"), out)
+    check(f"{len(parts)} volumes" in out, "volume count not reported", out)
+
+
+def test_7z_encrypted_methods(env):
+    # Methods 7-Zip's SDK lacks, decrypted by it and decoded by rarftp's own decoders.
+    for name in ("encrypted-bzip2.7z", "encrypted-deflate.7z"):
+        env.require(name)
+        directory = "enc-" + name.replace(".", "-")
+        out = env.run(name, "--directory", directory, "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
+        compare_trees(env.fixtures["main"], env.remote(directory, "tree"), out)
+
+
+def test_7z_deflate64_is_reported(env):
+    env.require("deflate64.7z")
+    out = env.run("deflate64.7z", "--directory", "deflate64-7z", "--mkdir", expect=1)
+    check("unsupported 7z compression method: Deflate64" in out, "not reported", out)
+    check(not env.remote("deflate64-7z").exists(), "went on after reading the archive", out)
 
 
 def test_tar_basic(env):
@@ -1418,6 +1475,20 @@ def test_lib_zip_password_prompt(env):
     compare_trees(env.fixtures["main"], env.remote("lib-aes-zip", "tree"), out)
 
 
+def test_lib_7z_password_prompt(env):
+    require_lib(env)
+    for name in ("encrypted.7z", "encrypted-headers.7z"):
+        env.require(name)
+        directory = "lib-enc-" + name.replace(".", "-")
+        job = env.lib_run(name, directory=directory, mkdir=1, on_prompt=answer_with("wrong", ARCHIVE_PASSWORD))
+        out = job.describe()
+        check(job.prompts == [{"kind": "archive_password", "archive": name, "error": None},
+                              {"kind": "archive_password", "archive": name, "error": "Wrong password"}],
+              f"{name}: wrong prompts {job.prompts}", out)
+        check(has_fields(job.state["archive"], format="7z", encrypted=True), "archive not reported as encrypted", out)
+        compare_trees(env.fixtures["main"], env.remote(directory, "tree"), out)
+
+
 def test_lib_7z_multivolume(env):
     require_lib(env)
     env.require("multivolume.7z.001")
@@ -1506,7 +1577,11 @@ TESTS = [
     test_7z_rerun_and_repair,
     test_7z_methods_and_directories,
     test_7z_multivolume,
-    test_7z_encrypted_is_reported,
+    test_7z_encrypted,
+    test_7z_encrypted_rerun,
+    test_7z_encrypted_multivolume,
+    test_7z_encrypted_methods,
+    test_7z_deflate64_is_reported,
     test_tar_basic,
     test_tar_split,
     test_tar_gz_is_read_as_it_is_uploaded,
@@ -1523,6 +1598,7 @@ TESTS = [
     test_lib_cancel_removes_partial_file,
     test_lib_zip_7z_and_tar,
     test_lib_zip_password_prompt,
+    test_lib_7z_password_prompt,
     test_lib_7z_multivolume,
     test_lib_streamed_tar,
     test_big_file,

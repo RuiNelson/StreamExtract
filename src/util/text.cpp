@@ -129,6 +129,37 @@ std::wstring from_utf8(std::string_view utf8) {
   return out;
 }
 
+std::string utf16_to_utf8(std::u16string_view utf16) {
+  std::string out;
+  out.reserve(utf16.size());
+  for (size_t i = 0; i < utf16.size(); ++i) {
+    char32_t cp = utf16[i];
+    if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < utf16.size() && utf16[i + 1] >= 0xDC00 && utf16[i + 1] <= 0xDFFF) {
+      cp = 0x10000 + ((cp - 0xD800) << 10) + (utf16[i + 1] - 0xDC00);
+      ++i;
+    }
+    append_utf8(out, cp);
+  }
+  return out;
+}
+
+std::u16string utf8_to_utf16(std::string_view utf8) {
+  std::u16string out;
+  out.reserve(utf8.size());
+  size_t i = 0;
+  while (i < utf8.size()) {
+    char32_t cp = decode_utf8(utf8, i);
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      out += static_cast<char16_t>(0xD800 + (cp >> 10));
+      out += static_cast<char16_t>(0xDC00 + (cp & 0x3FF));
+    } else {
+      out += static_cast<char16_t>(cp);
+    }
+  }
+  return out;
+}
+
 bool is_valid_utf8(std::string_view text) {
   size_t i = 0;
   while (i < text.size()) {

@@ -8,6 +8,7 @@
 
 #include "libarchive_reader.hpp"
 #include "rar_archive.hpp"
+#include "sevenzip_archive.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -88,6 +89,10 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
   // else goes to UnRAR, which also finds RAR archives inside self-extracting
   // executables, and reports the file as unreadable or not an archive.
   if (const std::optional<ArchiveFormat> format = libarchive_format(parts)) {
+    // libarchive only recognizes 7z: 7-Zip's own code reads it.
+    if (*format == ArchiveFormat::SevenZip) {
+      return SevenZipArchive::open(parts, mode, callbacks);
+    }
     return std::make_unique<LibArchiveReader>(std::move(parts), *format, mode, std::move(callbacks));
   }
   if (parts.size() > 1) {

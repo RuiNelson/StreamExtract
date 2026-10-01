@@ -42,7 +42,7 @@ extern "C" {
     pub fn rarftp_free(string: *mut c_char);
 }
 
-/// `"rarftp 2.1.0 (UnRAR 7.31, libarchive 3.8.9, libcurl 8.22.0)"`.
+/// `"rarftp 2.1.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
     unsafe { CStr::from_ptr(rarftp_version()) }

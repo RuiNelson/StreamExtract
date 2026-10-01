@@ -2,14 +2,16 @@
 
 `rarftp` itself is MIT licensed. Its binaries include or link the components
 below, under their own licenses. There are two programs: the command-line
-`rarftp` (UnRAR, libarchive and its compression libraries, libcurl, FTXUI,
-CLI11 and {fmt}) and the desktop app `rarftp-gui` (UnRAR, libarchive and its
-compression libraries, libcurl and {fmt}, inside its `librarftpcore` shared
-library, plus Tauri and the Rust crates below). FTXUI and CLI11 are not in the
-GUI, and Tauri and the Rust crates are not in the `rarftp` binary. libarchive
-reads the ZIP, 7z and tar archives, with zlib, bzip2, liblzma (XZ Utils),
-Zstandard and LZ4 for decompression, and with mbed TLS for encrypted ZIP files in the
-Linux builds only.
+`rarftp` (UnRAR, the LZMA SDK, libarchive and its compression libraries,
+libcurl, FTXUI, CLI11 and {fmt}) and the desktop app `rarftp-gui` (UnRAR, the
+LZMA SDK, libarchive and its compression libraries, libcurl and {fmt}, inside
+its `librarftpcore` shared library, plus Tauri and the Rust crates below). FTXUI
+and CLI11 are not in the GUI, and Tauri and the Rust crates are not in the
+`rarftp` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
+zlib, bzip2 and Zstandard for the methods it lacks. libarchive reads the ZIP and
+tar archives, with zlib, bzip2, liblzma (XZ Utils), Zstandard and LZ4 for
+decompression, and with mbed TLS for encrypted ZIP files in the Linux builds
+only.
 
 ## UnRAR
 
@@ -27,6 +29,24 @@ in documentation if license is not available, and in source code comments of
 resulting package.
 
 The full license is in `unrarsrc/license.txt`.
+
+## LZMA SDK
+
+By Igor Pavlov. Source: <https://www.7-zip.org/sdk.html>. The sources are not
+distributed with this repository; they are built from the `lzmasdk/` directory
+supplied by the user. From its `DOC/lzma-sdk.txt`:
+
+```
+LZMA SDK is written and placed in the public domain by Igor Pavlov.
+
+Some code in LZMA SDK is based on public domain code from another developers:
+  1) PPMd var.H (2001): Dmitry Shkarin
+  2) SHA-256: Wei Dai (Crypto++ library)
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute the
+original LZMA SDK code, either in source code form or as a compiled binary, for
+any purpose, commercial or non-commercial, and by any means.
+```
 
 ## libcurl
 

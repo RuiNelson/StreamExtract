@@ -44,8 +44,7 @@ The app offers:
   `.tgz`, `.tar.xz`...) on the window, or pick it with a file dialog; for
   multi-volume sets, the first volume (`.part1.rar`, `.zip.001`, `.7z.001`...).
   When the archive is encrypted and no password was typed in, the app asks for
-  it, and asks again if it was wrong (7z archives with a password are not
-  supported).
+  it, and asks again if it was wrong.
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
   if missing*.
@@ -101,8 +100,7 @@ rarftp --file archive.rar \
 
 The archive can be RAR, ZIP, 7z or tar (also compressed, such as
 `backup.tar.zst`); it is recognized by its content. Multi-volume and
-password-protected archives are supported (except 7z archives with a
-password):
+password-protected archives are supported:
 
 ```bash
 --archive-password "*[open sesame]*"
@@ -186,14 +184,15 @@ is linked statically.
 ## How it works
 
 ```
- extractor thread                         uploader thread
- UnRAR RAR_TEST / libarchive ──(1 MiB blocks)──▶ [ bounded buffer ] ──▶ libcurl STOR
- (checks CRC/BLAKE2, CRC-32)                                            (one control connection)
+ extractor thread                                   uploader thread
+ UnRAR RAR_TEST / 7-Zip / libarchive ──(1 MiB blocks)──▶ [ bounded buffer ] ──▶ libcurl STOR
+ (checks CRC/BLAKE2, CRC-32)                                                    (one control connection)
 ```
 
-RAR archives are read with UnRAR's test mode, ZIP, 7z and tar archives with
-libarchive: both decompress and verify every file in memory, without creating
-it, and the decompressed data goes into the buffer, which the FTP upload drains.
+RAR archives are read with UnRAR's test mode, 7z archives with 7-Zip's own
+code (its LZMA SDK), ZIP and tar archives with libarchive: all of them
+decompress and verify every file in memory, without creating it, and the
+decompressed data goes into the buffer, which the FTP upload drains.
 A file only counts as uploaded after its checksum was confirmed (tar has none,
 see below); on any error the incomplete remote file is deleted.
 
@@ -216,11 +215,14 @@ Behaviour, in both:
   password is detected while reading the archive, before anything is sent. Names
   without the UTF-8 flag are read as UTF-8 when they are valid UTF-8 (macOS
   writes them like that), otherwise as code page 437, the format's default.
-- **7z**: LZMA, LZMA2, BZip2, Deflate, PPMd and Zstandard with their filters
-  (BCJ, BCJ2, ARM, ...), solid archives and archives split into numbered parts
-  (`.7z.001`, ...). **Not 7z archives with a password** (encrypted contents or
-  encrypted file names): libarchive cannot decrypt them, so rarftp stops with an
-  error while reading the archive, before anything is sent.
+- **7z**: LZMA, LZMA2, PPMd, BZip2, Deflate and Zstandard with their filters
+  (BCJ, BCJ2, ARM64, Delta, ...), solid archives, archives split into numbered
+  parts (`.7z.001`, ...) and archives with a password (AES-256), also with
+  encrypted file names (`-mhe`). A wrong password is detected while reading the
+  archive (by decrypting the names, or the start of the first file), before
+  anything is sent. They are read with 7-Zip's own code; BZip2, Deflate and
+  Zstandard, which 7-Zip's SDK does not include, are decoded with the libraries
+  libarchive uses too (bzip2, zlib and Zstandard).
 - **tar**, every variant libarchive reads (POSIX, GNU, pax, old Unix ones),
   plain or compressed with gzip (`.tar.gz`, `.tgz`), bzip2 (`.tar.bz2`), xz
   (`.tar.xz`), lzma (`.tar.lzma`), Zstandard (`.tar.zst`) or LZ4 (`.tar.lz4`),
@@ -238,7 +240,9 @@ Behaviour, in both:
   and the ETA of the whole archive come from how much of the archive file has
   been read.
 - The **format** is recognized by the content of the file, not by its extension.
-- **Names** are uploaded as Unicode NFC, the same whatever system runs rarftp.
+- **Names** of ZIP and tar archives are uploaded as Unicode NFC, the same
+  whatever system runs rarftp; RAR and 7z names are uploaded as the archive
+  stores them.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
 - **Fail-fast**: a checksum error, a missing volume or a network failure stops
@@ -251,8 +255,9 @@ some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 
-Also not supported, with an explicit error: 7z archives with a password
-(libarchive cannot decrypt them), ZIP entries compressed with Deflate64 (which
+Also not supported, with an explicit error: 7z archives compressed with
+Deflate64 (reported while reading the archive, before anything is sent), ZIP
+entries compressed with Deflate64 (which
 Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 `.z02`, ..., `.zip`) and single compressed files that are not tar archives
 (a plain `.gz`).
@@ -275,6 +280,15 @@ curl -LO https://www.rarlab.com/rar/unrarsrc-7.3.1.tar.gz
 mkdir unrarsrc && tar -xzf unrarsrc-7.3.1.tar.gz -C unrarsrc --strip-components=1
 ```
 
+7-Zip's [LZMA SDK](https://www.7-zip.org/sdk.html), which reads the 7z
+archives, is not part of the repository either; extract it into `lzmasdk/`, with
+bsdtar (the `tar` of macOS) or 7-Zip:
+
+```bash
+curl -LO https://github.com/ip7z/7zip/releases/download/26.03/lzma2603.7z
+mkdir lzmasdk && tar -xf lzma2603.7z -C lzmasdk    # or: 7z x -olzmasdk lzma2603.7z
+```
+
 ### Command line
 
 ```bash
@@ -282,8 +296,8 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The binary is `build/rarftp`. UnRAR and libarchive are always linked statically
-into it.
+The binary is `build/rarftp`. UnRAR, the LZMA SDK and libarchive are always
+linked statically into it.
 
 ### Desktop app
 
@@ -306,7 +320,7 @@ cargo tauri dev       # or: run the app without bundling it
 ```
 
 The library is `build/librarftpcore.dylib` (`.so` on Linux, `rarftpcore.dll` on
-Windows). UnRAR, libarchive and {fmt} are linked statically into it, and it exports only the
+Windows). UnRAR, the LZMA SDK, libarchive and {fmt} are linked statically into it, and it exports only the
 `rarftp_*` functions of `src/capi/rarftp.h`; the `rarftp` executable does not use
 it. Add `-DRARFTP_BUNDLED_CURL=ON` to link libcurl statically too, which makes
 the library self-contained instead of relying on the system's libcurl.
@@ -395,8 +409,9 @@ The Rust side has its own unit tests, which link the built library:
 | Library | Use | License |
 |---|---|---|
 | [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
-| [libarchive](https://www.libarchive.org) | ZIP, 7z and tar reading | BSD-2-Clause |
-| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
+| [LZMA SDK](https://www.7-zip.org/sdk.html) | 7z reading (7-Zip's own code) | Public domain |
+| [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
+| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive (and BZip2, Deflate and Zstandard in 7z) | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | AES for encrypted ZIP files (Linux only; macOS and Windows use the system's) | Apache-2.0 |
 | [libcurl](https://curl.se/libcurl/) | FTP client | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
@@ -410,6 +425,7 @@ The Rust side has its own unit tests, which link the built library:
 This project is licensed under the MIT license (see `LICENSE`). Binaries also
 contain UnRAR, whose license allows free use in any software handling RAR
 archives but forbids using its code to re-create the RAR compression
-algorithm, and libarchive with the libraries above; see
+algorithm, 7-Zip's LZMA SDK (public domain), and libarchive with the libraries
+above; see
 `THIRD_PARTY_NOTICES.md`, which also covers what only the app contains (Tauri
 and its Rust dependencies).

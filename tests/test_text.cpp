@@ -16,6 +16,14 @@ TEST_CASE("UTF-8 round trip through wide strings") {
   CHECK(to_utf8(emoji) == "😀");
 }
 
+TEST_CASE("UTF-8 round trip through UTF-16") {
+  const std::string text = "ação – 日本語 😀";
+  CHECK(utf16_to_utf8(utf8_to_utf16(text)) == text);
+  CHECK(utf8_to_utf16("😀") == u"\xD83D\xDE00");  // A surrogate pair.
+  const std::u16string unpaired{u'a', static_cast<char16_t>(0xD83D), u'b'};
+  CHECK(utf16_to_utf8(unpaired) == "a\uFFFDb");  // An unpaired surrogate becomes U+FFFD.
+}
+
 TEST_CASE("invalid UTF-8 becomes U+FFFD") {
   const std::wstring replacement(1, static_cast<wchar_t>(0xFFFD));
   CHECK(from_utf8("\xff") == replacement);

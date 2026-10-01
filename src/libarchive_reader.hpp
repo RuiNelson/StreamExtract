@@ -9,7 +9,8 @@
 
 namespace rarftp {
 
-// ZIP, 7z and tar archives, read with libarchive.
+// ZIP and tar archives, read with libarchive. (7z archives are recognized with
+// libarchive_format() but read by SevenZipArchive.)
 class LibArchiveReader final : public Archive {
  public:
   // `parts`: the archive, or every part of a split one in order. Throws
