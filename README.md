@@ -31,7 +31,14 @@ Keka, `unrar`, ...).
 
 ## Desktop app (rarftp-gui)
 
-The window offers:
+<table>
+<tr>
+<td><img src="docs/shot.webp" alt="Main window" width="501" /></td>
+<td><img src="docs/upload.webp" alt="Transfer in progress" width="501" /></td>
+</tr>
+</table>
+
+The app offers:
 
 - **Archive**: drop a `.rar` on the window (the first volume, for multi-volume
   sets) or pick it with a file dialog. When the archive is encrypted and no
