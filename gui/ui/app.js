@@ -14,6 +14,9 @@
   const QUIT_WAIT_MS = 30000;
   const UNKNOWN_TIME = "--:--:--";
   const LEVELS = ["debug", "info", "warn", "error"];
+  // What the file dialog offers; .001 is the first part of a split ZIP, 7z or tar archive.
+  const ARCHIVE_EXTENSIONS = ["rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "lzma",
+    "zst", "tzst", "lz4", "001"];
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -266,11 +269,10 @@
     setText(els.dzSub, path);
     setTitle(els.dzSub, path);
     els.btnChoose.textContent = "Change…";
-    // .001: the first part of a split ZIP, 7z or tar archive.
-    const looksLikeArchive = /\.(rar|zip|7z|tar|001)$/i.test(name);
+    const looksLikeArchive = new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(name);
     els.archiveHint.textContent = looksLikeArchive
       ? ""
-      : "This file does not have a .rar, .zip, .7z or .tar extension. rarftp will still try to read it.";
+      : "This file does not look like a RAR, ZIP, 7z or tar archive. rarftp will still try to read it.";
     setHidden(els.archiveHint, looksLikeArchive);
     updateSubmitState();
   }
@@ -280,7 +282,7 @@
       const selected = await tauri.dialog.open({
         multiple: false,
         directory: false,
-        filters: [{ name: "RAR, ZIP, 7z and tar archives", extensions: ["rar", "zip", "7z", "tar", "001"] }],
+        filters: [{ name: "RAR, ZIP, 7z and tar archives", extensions: ARCHIVE_EXTENSIONS }],
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       const value = path && typeof path === "object" ? path.path : path;
@@ -721,9 +723,10 @@
     els.chips.replaceChildren();
     if (!archive) return;
     const add = (text) => els.chips.append(el("li", null, text));
-    if (archive.format) add(archive.format);
-    add(plural(archive.files, "file"));
-    add(archive.bytes_text);
+    if (archive.format) add(archive.compression ? `${archive.format} (${archive.compression})` : archive.format);
+    // A compressed tar is read as it is uploaded: its contents are not known up front.
+    if (archive.files !== null) add(plural(archive.files, "file"));
+    if (archive.bytes_text !== null) add(archive.bytes_text);
     add(plural(archive.volumes, "volume"));
     if (archive.solid) add("Solid");
     if (archive.encrypted) add("Encrypted");
@@ -736,7 +739,8 @@
     const t = p.text || {};
     const uploading = Boolean(p.current_file);
     const r = uploading ? ratio(p.current_sent, p.current_size) : 0;
-    setText(els.curLabel, uploading ? `File ${p.current_number}/${p.total_files}` : "File");
+    const number = p.totals_known ? `${p.current_number}/${p.total_files}` : `${p.current_number}`;
+    setText(els.curLabel, uploading ? `File ${number}` : "File");
     const name = uploading ? p.current_file : p.activity || "-";
     setText(els.curName, name);
     setTitle(els.curName, name);
@@ -753,10 +757,25 @@
     const p = snap.progress;
     if (!p) return;
     const t = p.text || {};
-    let r = ratio(p.sent_bytes, p.total_bytes);
-    if (p.total_bytes === 0 && snap.phase === "finished" && snap.result && snap.result.status === "success") r = 1;
-    setBar(els.totalBar, r);
     const finished = snap.phase === "finished";
+    if (!p.totals_known) {
+      // A streamed archive (compressed tar): no totals until its end, progress by position in the archive.
+      const r = ratio(p.archive_read, p.archive_size);
+      setBar(els.totalBar, r);
+      setText(
+        els.totalStats,
+        `${formatPercent(r)} of the archive read · ${t.sent_bytes} uploaded · ETA ${etaText(t.eta_total, p.eta_total)}`
+      );
+      let files = `${plural(p.files_done, "file")} uploaded so far`;
+      if (p.files_skipped > 0) {
+        files += ` · ${p.files_skipped} skipped, already on the server (${t.skipped_bytes})`;
+      }
+      setText(els.totalFiles, files);
+      return;
+    }
+    let r = ratio(p.sent_bytes, p.total_bytes);
+    if (p.total_bytes === 0 && finished && snap.result && snap.result.status === "success") r = 1;
+    setBar(els.totalBar, r);
     setText(
       els.totalStats,
       finished

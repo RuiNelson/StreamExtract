@@ -25,6 +25,7 @@ class LibArchiveReader final : public Archive {
   void test() override;
   void skip() override;
   bool aborted_by_callback() const override;
+  uint64_t bytes_read() const override;
 
   struct Impl;
 
@@ -33,12 +34,8 @@ class LibArchiveReader final : public Archive {
 };
 
 // The format of `parts` (an archive, or the parts of a split one) according to
-// libarchive's own detection, if it is ZIP, 7z or tar.
+// libarchive's own detection, if it is ZIP, 7z or tar (compressed or not).
 std::optional<ArchiveFormat> libarchive_format(const std::vector<std::string>& parts);
-
-// The compression of a compressed tar archive (.tar.gz...), which is not
-// supported: "gzip", "bzip2", "xz", "lzma" or "zstd".
-std::optional<std::string> tar_compression(const std::vector<std::string>& parts);
 
 // libarchive version, e.g. "3.8.9".
 std::string libarchive_version();

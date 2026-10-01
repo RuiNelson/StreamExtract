@@ -44,6 +44,9 @@ Transfer::~Transfer() {
 
 void Transfer::start() {
   progress_.set_totals(plan_.upload_files, plan_.upload_bytes, plan_.skip_files, plan_.skip_bytes);
+  if (plan_.streamed) {
+    progress_.set_streamed();
+  }
   started_ = std::chrono::steady_clock::now();
   running_ = 2;
   extractor_ = std::thread([this] { run_extractor(); });
@@ -71,6 +74,9 @@ TransferResult Transfer::wait() {
   result.files_uploaded = files_uploaded_;
   result.bytes_uploaded = bytes_uploaded_;
   result.seconds = std::chrono::duration<double>(stopped_ - started_).count();
+  result.skipped_files = plan_.streamed ? skipped_files_ : plan_.skip_files;
+  result.skipped_bytes = plan_.streamed ? skipped_bytes_ : plan_.skip_bytes;
+  result.ignored = plan_.streamed ? ignored_ : plan_.ignored;
   if (!error_.empty()) {
     result.status = TransferResult::Status::Failed;
     result.error = error_;
@@ -153,6 +159,9 @@ void Transfer::extract() {
       return false;
     }
     progress_.add_unpacked(size);
+    if (reading_ != nullptr) {
+      progress_.set_archive_read(reading_->bytes_read());
+    }
     if (discard) {
       return true;
     }
@@ -174,6 +183,11 @@ void Transfer::extract() {
   callbacks.on_volume = [&](const std::string& volume) { log_.info("Reading volume {}", file_name_of(volume)); };
   callbacks.on_missing_volume = [&](const std::string& volume) { missing_volume_ = volume; };
   callbacks.on_large_dictionary = [](uint64_t, uint64_t) { return true; };  // Warned while listing.
+
+  if (plan_.streamed) {
+    extract_streamed(callbacks, flush);
+    return;
+  }
 
   // Nothing after the last file to upload needs decompressing: stop reading
   // there (skipped files of a solid archive would otherwise be unpacked for
@@ -288,6 +302,94 @@ void Transfer::extract() {
   pipe_.push(std::move(end));
 }
 
+const PlannedEntry& Transfer::entry(size_t index) {
+  if (!plan_.streamed) {
+    return plan_.entries[index];
+  }
+  std::lock_guard lock(entries_mutex_);
+  return streamed_[index];  // A deque: the reference survives later push_back()s.
+}
+
+void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function<bool()>& flush) {
+  const std::unique_ptr<Archive> archive = open_archive(plan_.archive_path, Archive::Mode::Extract, callbacks);
+  progress_.set_archive_size(archive->flags().size);
+  reading_ = archive.get();
+  struct Unset {
+    const Archive*& reading;
+    ~Unset() { reading = nullptr; }
+  } unset{reading_};
+
+  Planner planner(plan_.format, plan_.remote_root, log_);
+  ArchiveEntry header;
+  while (archive->next(header)) {
+    if (cancel_requested_ || pipe_.aborted()) {
+      return;
+    }
+    size_t index = 0;
+    {
+      std::lock_guard lock(entries_mutex_);
+      streamed_.push_back(planner.plan(header));
+      index = streamed_.size() - 1;
+    }
+    const PlannedEntry& planned = entry(index);
+    try {
+      switch (planned.action) {
+        case PlannedEntry::Action::MakeDir: {
+          PipeMessage message;
+          message.kind = PipeMessage::Kind::EnsureDir;
+          message.entry = index;
+          if (!pipe_.push(std::move(message))) {
+            return;
+          }
+          archive->skip();
+          break;
+        }
+        case PlannedEntry::Action::Upload: {
+          // The uploader checks the server first, and drops the data of a file
+          // that is already there: it has to be decompressed anyway.
+          progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
+          PipeMessage begin;
+          begin.kind = PipeMessage::Kind::FileBegin;
+          begin.entry = index;
+          if (!pipe_.push(std::move(begin))) {
+            return;
+          }
+          archive->test();
+          if (!flush()) {
+            return;
+          }
+          PipeMessage end;
+          end.kind = PipeMessage::Kind::FileEnd;
+          end.entry = index;
+          if (!pipe_.push(std::move(end))) {
+            return;
+          }
+          break;
+        }
+        case PlannedEntry::Action::Skip:  // Not decided here.
+        case PlannedEntry::Action::Ignore: {
+          {
+            std::lock_guard lock(mutex_);
+            ++ignored_;
+          }
+          archive->skip();
+          break;
+        }
+      }
+    } catch (const ArchiveError& error) {
+      if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
+        return;  // Stopped on purpose.
+      }
+      fail(describe_archive_error(error, planned.relative));
+      return;
+    }
+    progress_.set_archive_read(archive->bytes_read());
+  }
+  PipeMessage end;
+  end.kind = PipeMessage::Kind::End;
+  pipe_.push(std::move(end));
+}
+
 // ---------------------------------------------------------------------------
 // Uploader thread
 
@@ -314,14 +416,35 @@ void Transfer::upload_loop() {
     }
     switch (message->kind) {
       case PipeMessage::Kind::EnsureDir:
-        ftp_.ensure_directory(plan_.entries[message->entry].remote);
+        ftp_.ensure_directory(entry(message->entry).remote);
         break;
       case PipeMessage::Kind::FileBegin:
+        if (plan_.streamed) {
+          const PlannedEntry& planned = entry(message->entry);
+          if (!probe_) {
+            probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_);
+          }
+          if (probe_->same_size(planned)) {
+            progress_.add_skipped(planned.entry.size);
+            progress_.set_activity(fmt::format("Skipping {} (already on the server)", planned.relative));
+            {
+              std::lock_guard lock(mutex_);
+              ++skipped_files_;
+              skipped_bytes_ += planned.entry.size;
+            }
+            if (!discard_file()) {
+              return;
+            }
+            break;
+          }
+          progress_.add_upload(planned.entry.size);
+        }
         if (!upload_file(message->entry, ++number)) {
           return;
         }
         break;
       case PipeMessage::Kind::End:
+        progress_.set_totals_known();
         return;
       case PipeMessage::Kind::Data:
       case PipeMessage::Kind::FileEnd:
@@ -331,7 +454,7 @@ void Transfer::upload_loop() {
 }
 
 bool Transfer::upload_file(size_t index, uint64_t number) {
-  const PlannedEntry& planned = plan_.entries[index];
+  const PlannedEntry& planned = entry(index);
   const uint64_t size = planned.entry.size;
   progress_.begin_file(number, planned.relative, size);
 
@@ -454,6 +577,26 @@ bool Transfer::await_file_end(const PlannedEntry& planned) {
         }
         fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
         return false;
+      default:
+        fail("internal error: missing end of file marker");
+        return false;
+    }
+  }
+}
+
+bool Transfer::discard_file() {
+  while (true) {
+    std::optional<PipeMessage> message = pipe_.pop();
+    progress_.set_buffer_used(pipe_.buffered());
+    if (!message) {
+      return false;  // The extractor failed or a cancellation.
+    }
+    switch (message->kind) {
+      case PipeMessage::Kind::Data:
+        pipe_.release_buffer(std::move(message->data));
+        break;
+      case PipeMessage::Kind::FileEnd:
+        return true;
       default:
         fail("internal error: missing end of file marker");
         return false;

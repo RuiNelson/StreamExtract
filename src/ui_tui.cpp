@@ -70,11 +70,13 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
 
   SpeedMeter upload_meter;
   SpeedMeter unpack_meter;
+  SpeedMeter read_meter;
 
   auto renderer = Renderer([&] {
     const Progress::Snapshot s = progress.snapshot();
     upload_meter.add_sample(s.elapsed, s.sent_bytes);
     unpack_meter.add_sample(s.elapsed, s.unpacked_bytes);
+    read_meter.add_sample(s.elapsed, s.archive_read);
     const double upload_rate = upload_meter.rate();
     const double average = s.elapsed > 0.0 ? static_cast<double>(s.sent_bytes) / s.elapsed : 0.0;
 
@@ -86,7 +88,8 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
     const bool uploading = !s.current_file.empty();
     std::string file_title = " File ";
     if (uploading) {
-      file_title = fmt::format(" File {}/{} ", s.current_number, s.total_files);
+      file_title = s.totals_known ? fmt::format(" File {}/{} ", s.current_number, s.total_files)
+                                  : fmt::format(" File {} ", s.current_number);
     }
     const std::string file_label = uploading ? s.current_file : (s.activity.empty() ? "-" : s.activity);
     const std::string file_details =
@@ -102,18 +105,30 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
                    progress_line(uploading ? ratio(s.current_sent, s.current_size) : 0.0f, file_details),
                }));
 
-    const std::string total_details =
-        fmt::format("{:5.1f}%  {} / {}  ETA {}", 100.0 * ratio(s.sent_bytes, s.total_bytes),
-                    format_bytes(s.sent_bytes), format_bytes(s.total_bytes),
-                    format_duration(eta_seconds(remaining(s.total_bytes, s.sent_bytes), upload_rate)));
-    std::string files_line = fmt::format("{} of {} files uploaded", s.files_done, s.total_files);
+    // A streamed archive has no totals until its end: its progress is the
+    // position in the archive.
+    float total_fraction = ratio(s.sent_bytes, s.total_bytes);
+    std::string total_details;
+    std::string files_line;
+    if (s.totals_known) {
+      const double eta = eta_seconds(remaining(s.total_bytes, s.sent_bytes), upload_rate);
+      total_details = fmt::format("{:5.1f}%  {} / {}  ETA {}", 100.0 * total_fraction, format_bytes(s.sent_bytes),
+                                  format_bytes(s.total_bytes), format_duration(eta));
+      files_line = fmt::format("{} of {} files uploaded", s.files_done, s.total_files);
+    } else {
+      total_fraction = ratio(s.archive_read, s.archive_size);
+      total_details = fmt::format(
+          "{:5.1f}% of the archive read  {} uploaded  ETA {}", 100.0 * total_fraction, format_bytes(s.sent_bytes),
+          format_duration(eta_seconds(remaining(s.archive_size, s.archive_read), read_meter.rate())));
+      files_line = fmt::format("{} files uploaded so far", s.files_done);
+    }
     if (s.files_skipped > 0) {
       files_line +=
           fmt::format(" · {} skipped, already on the server ({})", s.files_skipped, format_bytes(s.skipped_bytes));
     }
     Element total_box =
         window(text(" Archive total "), vbox({
-                                            progress_line(ratio(s.sent_bytes, s.total_bytes), total_details),
+                                            progress_line(total_fraction, total_details),
                                             text(files_line),
                                         }));
 

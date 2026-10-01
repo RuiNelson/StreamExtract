@@ -40,9 +40,9 @@ Keka, `unrar`, ...).
 
 The app offers:
 
-- **Archive**: drop a `.rar`, `.zip`, `.7z` or `.tar` on the window (the first
-  volume, for multi-volume sets: `.part1.rar`, `.zip.001`, `.7z.001`) or pick it
-  with a file dialog. When the archive is encrypted and no password was typed in, the
+- **Archive**: drop a `.rar`, `.zip`, `.7z` or `.tar` (also `.tar.gz`, `.tgz`,
+  `.tar.xz`...) on the window (the first volume, for multi-volume sets:
+  `.part1.rar`, `.zip.001`, `.7z.001`) or pick it with a file dialog. When the archive is encrypted and no password was typed in, the
   app asks for it, and asks again if it was wrong.
 - **Server**: host, port, passive or active mode, user and password (anonymous
   without a user), destination directory and *Create directory if missing*.
@@ -101,7 +101,7 @@ Multi-volume and password-protected archives are supported:
 
 | Option | Description |
 |---|---|
-| `--file PATH` | RAR, ZIP, 7z or uncompressed tar archive, recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
+| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
 | `--host HOST` | FTP server name or address (IPv4 or IPv6). |
 | `--port PORT` | Default `21`. |
 | `--mode passive\|active` | Data connection mode. Default `passive`. |
@@ -210,12 +210,22 @@ Behaviour, in both:
 - **7z**: LZMA, LZMA2, BZip2, Deflate, PPMd and Zstandard with their filters
   (BCJ, BCJ2, ARM, ...), solid archives and archives split into numbered parts
   (`.7z.001`, ...).
-- **tar**, uncompressed only (every variant libarchive reads: POSIX, GNU, pax,
-  old Unix ones), also split into numbered parts (`.tar.001`, ...). The format
+- **tar**, every variant libarchive reads (POSIX, GNU, pax, old Unix ones),
+  plain or compressed with gzip (`.tar.gz`, `.tgz`), bzip2 (`.tar.bz2`), xz
+  (`.tar.xz`), lzma (`.tar.lzma`), Zstandard (`.tar.zst`) or LZ4 (`.tar.lz4`),
+  also split into numbered parts (`.tar.001`, `.tar.gz.001`, ...). The format
   has **no checksum of the file contents**, only of its headers, so these files
-  are uploaded without verification; a warning says so. Names without a pax
-  header are read as UTF-8 when valid, otherwise as Latin-1 (on Windows: as
-  UTF-8).
+  are uploaded without verification; a warning says so (gzip, xz, Zstandard and
+  LZ4 check their own data, but over the whole stream or large blocks, not per
+  file). Names without a pax header are read as UTF-8 when valid, otherwise as
+  Latin-1 (on Windows: as UTF-8).
+- **Compressed tar is read once, as it is uploaded.** Its files can only be
+  reached by decompressing everything before them, so instead of listing the
+  archive first, rarftp plans each file when it reaches it and checks the
+  server just before sending it (a file already there with the same size is
+  decompressed and dropped). There are no totals until the end: the progress
+  and the ETA of the whole archive come from how much of the archive file has
+  been read.
 - The **format** is recognized by the content of the file, not by its extension.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
@@ -232,16 +242,16 @@ create links.
 Also not supported, with an explicit error: 7z archives with a password
 (libarchive cannot decrypt them), ZIP entries compressed with Deflate64 (which
 Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
-`.z02`, ..., `.zip`) and compressed tar archives (`.tar.gz`, `.tgz`,
-`.tar.bz2`, `.tar.xz`, `.tar.zst`).
+`.z02`, ..., `.zip`) and single compressed files that are not tar archives
+(a plain `.gz`).
 
 ## Building
 
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
 used when present; otherwise, or with `-DRARFTP_BUNDLED_CURL=ON`, an FTP-only
 libcurl is built from source). The other libraries are fetched by CMake.
-libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard
-and, on Linux, mbed TLS) are built from source as static libraries during the
+libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
+LZ4 and, on Linux, mbed TLS) are built from source as static libraries during the
 first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
 longer.
 
@@ -372,7 +382,7 @@ The Rust side has its own unit tests, which link the built library:
 |---|---|---|
 | [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
 | [libarchive](https://www.libarchive.org) | ZIP, 7z and tar reading | BSD-2-Clause |
-| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/) | Decompression for libarchive | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause |
+| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | AES for encrypted ZIP files (Linux only; macOS and Windows use the system's) | Apache-2.0 |
 | [libcurl](https://curl.se/libcurl/) | FTP client | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |

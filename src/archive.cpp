@@ -90,11 +90,6 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
   if (const std::optional<ArchiveFormat> format = libarchive_format(parts)) {
     return std::make_unique<LibArchiveReader>(std::move(parts), *format, mode, std::move(callbacks));
   }
-  if (const std::optional<std::string> compression = tar_compression(parts)) {
-    throw ArchiveError(ArchiveError::Kind::Other,
-                       fmt::format("{} is compressed with {}; tar archives are only supported uncompressed",
-                                   file_name_of(path), *compression));
-  }
   if (parts.size() > 1) {
     throw ArchiveError(ArchiveError::Kind::Other,
                        fmt::format("{} is a numbered part of a split archive; only split ZIP, 7z and tar archives "

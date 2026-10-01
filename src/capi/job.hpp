@@ -58,8 +58,9 @@ class Job {
   struct ArchiveInfo {
     std::string name;
     ArchiveFormat format = ArchiveFormat::Rar;
-    uint64_t files = 0;
-    uint64_t bytes = 0;
+    std::string compression;  // Compressed tar; empty otherwise.
+    std::optional<uint64_t> files;  // Unknown for a streamed archive.
+    std::optional<uint64_t> bytes;
     unsigned volumes = 1;
     bool solid = false;
     bool encrypted = false;
@@ -125,6 +126,7 @@ class Job {
   std::optional<Result> result_;
   SpeedMeter upload_meter_;
   SpeedMeter unpack_meter_;
+  SpeedMeter read_meter_;  // Position in a streamed archive.
 
   // The job's own copy of the log, numbered. Never held while calling into log_.
   std::mutex log_mutex_;

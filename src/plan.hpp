@@ -3,9 +3,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "archive.hpp"
@@ -46,8 +50,12 @@ struct ArchiveListing {
   unsigned volumes = 1;
 };
 
-// Reads every header of every volume. Throws std::runtime_error, or ArchivePasswordError when the password is
-// wrong.
+// "ZIP, 8 file(s), 13.3 MiB, 3 volumes, encrypted"; "tar (gzip), read as it is
+// uploaded" for a stream_only archive, whose contents are not known yet.
+std::string describe_archive(const ArchiveListing& listing, bool encrypted);
+
+// Reads every header of every volume; for a stream_only archive (compressed tar) only opens it, leaving the
+// entries empty. Throws std::runtime_error, or ArchivePasswordError when the password is wrong.
 ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log);
 
 struct PlannedEntry {
@@ -67,7 +75,11 @@ struct PlannedEntry {
 struct TransferPlan {
   std::string archive_path;
   std::string remote_root;
+  ArchiveFormat format = ArchiveFormat::Rar;
   bool skip_decompresses = false;  // See ArchiveFlags.
+  // A stream_only archive: no entries here; the transfer plans each one as it
+  // reads it and checks the server just before uploading it.
+  bool streamed = false;
   std::vector<PlannedEntry> entries;  // Same order as ArchiveListing::entries.
 
   uint64_t upload_files = 0;
@@ -79,10 +91,48 @@ struct TransferPlan {
   void recount();
 };
 
-// Maps archive entries to remote paths and logs anything that will not be
-// uploaded as-is (links, sanitized names, duplicates, case collisions).
+// Maps archive entries to remote paths, one at a time, and logs anything that
+// will not be uploaded as-is (links, sanitized names, duplicates, case
+// collisions).
+class Planner {
+ public:
+  Planner(ArchiveFormat format, std::string remote_root, Logger& log);
+  PlannedEntry plan(const ArchiveEntry& entry);
+
+ private:
+  std::string remote_root_;
+  Logger& log_;
+  bool backslash_separators_;
+  std::unordered_set<std::string> files_seen_;
+  std::unordered_map<std::string, std::string> folded_;  // Lower-cased path -> first spelling.
+};
+
+// The plan of a listed archive (Planner over every entry). For a stream_only
+// one, an empty plan marked `streamed`.
 TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& listing,
                         const std::string& remote_root, Logger& log);
+
+// Tells whether files are already on the server with a given size, one at a
+// time: one existence check and one listing per directory, then SIZE only for
+// the names that are there.
+class RemoteProbe {
+ public:
+  RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log);
+  bool same_size(const PlannedEntry& planned);
+
+ private:
+  struct Directory {
+    bool exists = false;
+    std::optional<std::unordered_set<std::string>> names;  // std::nullopt: no listing, ask for every file.
+  };
+  bool under_missing(std::string dir) const;
+
+  FtpClient& ftp_;
+  std::string remote_root_;
+  Logger& log_;
+  std::set<std::string> missing_;
+  std::map<std::string, Directory> directories_;
+};
 
 // Marks files already present on the server with the same size as Skip.
 // `on_progress(done, total)` is called after each checked file.

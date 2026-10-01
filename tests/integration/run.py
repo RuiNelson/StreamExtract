@@ -20,6 +20,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import lzma
 import os
 import random
 import re
@@ -235,7 +236,7 @@ def split_file(path, parts):
         Path(f"{path}.{i + 1:03}").write_bytes(data[i * size:(i + 1) * size])
 
 
-def build_fixtures(work, rar, big, sevenzip, infozip):
+def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     rnd = random.Random(20260929)
     trees = work / "trees"
     archives = work / "archives"
@@ -318,14 +319,23 @@ def build_fixtures(work, rar, big, sevenzip, infozip):
     zip_tree(archives / "links.zip", trees / "links")
     zip_tree(archives / "tiny.zip", trees / "tiny")
 
-    # tar, with Python's tarfile: plain, split into parts and compressed (not supported).
+    # tar, with Python's tarfile: plain, compressed in every way it can (the old
+    # .lzma format and lz4 by hand), and split into parts.
     with tarfile.open(archives / "basic.tar", "w") as tar:
         tar.add(main_tree, arcname="tree")
-    shutil.copy(archives / "basic.tar", archives / "split.tar")
-    split_file(archives / "split.tar", 3)
-    (archives / "split.tar").unlink()
-    with tarfile.open(archives / "basic.tar.gz", "w:gz") as tar:
-        tar.add(main_tree, arcname="tree")
+    for suffix, mode in (("gz", "w:gz"), ("bz2", "w:bz2"), ("xz", "w:xz"), ("zst", "w:zst")):
+        if mode == "w:zst" and sys.version_info < (3, 14):
+            continue
+        with tarfile.open(archives / f"basic.tar.{suffix}", mode) as tar:
+            tar.add(main_tree, arcname="tree")
+    (archives / "basic.tar.lzma").write_bytes(lzma.compress((archives / "basic.tar").read_bytes(),
+                                                            format=lzma.FORMAT_ALONE))
+    if lz4:
+        subprocess.run([lz4, "-q", "-f", str(archives / "basic.tar"), str(archives / "basic.tar.lz4")], check=True)
+    for name in ("split.tar", "split.tar.gz"):
+        shutil.copy(archives / name.replace("split", "basic"), archives / name)
+        split_file(archives / name, 3)
+        (archives / name).unlink()
 
     # Info-ZIP's zip: Unicode names in its own extra field, traditional (ZipCrypto) encryption.
     if infozip:
@@ -423,14 +433,16 @@ LIB_STATE_KEYS = {"phase", "cancelling", "prompt", "archive", "target", "mode", 
                   "log", "result"}
 LIB_PHASES = ["reading", "connecting", "checking", "transferring", "finished"]
 LIB_LEVELS = ["debug", "info", "warn", "error"]
-LIB_ARCHIVE_KEYS = {"name", "format", "files", "bytes", "bytes_text", "volumes", "solid", "encrypted"}
-LIB_PROGRESS_INTS = ["total_files", "total_bytes", "sent_bytes", "unpacked_bytes", "files_done", "files_skipped",
+LIB_ARCHIVE_KEYS = {"name", "format", "compression", "files", "bytes", "bytes_text", "volumes", "solid",
+                    "encrypted"}
+LIB_PROGRESS_INTS = ["total_files", "total_bytes", "archive_read", "archive_size", "sent_bytes", "unpacked_bytes",
+                     "files_done", "files_skipped",
                      "skipped_bytes", "buffer_used", "buffer_capacity", "current_number", "current_size",
                      "current_sent"]
 LIB_PROGRESS_NUMBERS = ["elapsed", "upload_rate", "average_rate", "unpack_rate", "eta_file", "eta_total"]
-LIB_PROGRESS_TEXTS = ["total_bytes", "sent_bytes", "skipped_bytes", "current_size", "current_sent",
-                      "buffer_capacity", "upload_rate", "average_rate", "unpack_rate", "eta_file", "eta_total",
-                      "elapsed"]
+LIB_PROGRESS_TEXTS = ["total_bytes", "archive_read", "archive_size", "sent_bytes", "skipped_bytes", "current_size",
+                      "current_sent", "buffer_capacity", "upload_rate", "average_rate", "unpack_rate", "eta_file",
+                      "eta_total", "elapsed"]
 LIB_RESULT_INTS = ["files_uploaded", "bytes_uploaded", "skipped_files", "skipped_bytes", "ignored",
                    "problems_dropped"]
 LIB_CONFIG_DEFAULTS = {"archive": None, "archive_password": None, "host": None, "port": 21, "active_mode": 0,
@@ -548,10 +560,18 @@ class LibJob:
         archive = state["archive"]
         if archive is not None:
             ok(set(archive) == LIB_ARCHIVE_KEYS, f"archive keys differ: {sorted(set(archive) ^ LIB_ARCHIVE_KEYS)}")
-            ok(isinstance(archive["name"], str) and isinstance(archive["bytes_text"], str), "archive text fields")
+            ok(isinstance(archive["name"], str), "archive.name is not a string")
             ok(archive["format"] in ("RAR", "ZIP", "7z", "tar"), f"unknown archive format {archive['format']!r}")
-            ok(all(is_int(archive[key]) and archive[key] >= 0 for key in ("files", "bytes", "volumes")),
-               "archive counters are not non-negative integers")
+            ok(archive["compression"] in (None, "gzip", "bzip2", "xz", "lzma", "zstd", "lz4"),
+               f"unknown compression {archive['compression']!r}")
+            # A compressed tar is not listed first: its contents are unknown.
+            unknown = archive["compression"] is not None
+            ok(all((archive[key] is None) if unknown else (is_int(archive[key]) and archive[key] >= 0)
+                   for key in ("files", "bytes")), "archive.files/bytes must be integers, or null exactly when "
+                                                   "the archive is compressed")
+            ok((archive["bytes_text"] is None) if unknown else isinstance(archive["bytes_text"], str),
+               "archive.bytes_text")
+            ok(is_int(archive["volumes"]) and archive["volumes"] >= 1, "archive.volumes is not a positive integer")
             ok(isinstance(archive["solid"], bool) and isinstance(archive["encrypted"], bool),
                "archive flags are not booleans")
         ok(state["target"] is None or isinstance(state["target"], str), "target is not null or a string")
@@ -569,7 +589,8 @@ class LibJob:
         else:
             self._had_progress = True
             ok(phase >= LIB_PHASES.index("transferring"), f"progress while {state['phase']}")
-            expected = set(LIB_PROGRESS_INTS + LIB_PROGRESS_NUMBERS + ["current_file", "activity", "text"])
+            expected = set(LIB_PROGRESS_INTS + LIB_PROGRESS_NUMBERS + ["current_file", "activity", "text",
+                                                                        "totals_known"])
             ok(set(progress) == expected, f"progress keys differ: {sorted(set(progress) ^ expected)}")
             ok(all(is_int(progress[key]) and progress[key] >= 0 for key in LIB_PROGRESS_INTS),
                "progress counters are not non-negative integers")
@@ -577,6 +598,11 @@ class LibJob:
                "progress rates/ETAs are not numbers")
             ok(isinstance(progress["current_file"], str) and isinstance(progress["activity"], str),
                "current_file/activity are not strings")
+            ok(isinstance(progress["totals_known"], bool), "totals_known is not a boolean")
+            ok(progress["totals_known"] or (archive is not None and archive["compression"] is not None),
+               "totals unknown for an archive that was listed")
+            ok(progress["archive_read"] <= progress["archive_size"] or progress["archive_size"] == 0,
+               "archive_read exceeds archive_size")
             ok(progress["sent_bytes"] <= progress["total_bytes"], "sent_bytes exceeds total_bytes")
             ok(progress["files_done"] <= progress["total_files"], "files_done exceeds total_files")
             text = progress["text"]
@@ -672,11 +698,12 @@ class Env:
         self.rarftp = str(Path(args.rarftp).resolve())
         self.sevenzip = shutil.which(args.sevenzip) if args.sevenzip else (shutil.which("7zz") or shutil.which("7z"))
         self.infozip = shutil.which("zip")
+        self.lz4 = shutil.which("lz4")
         self.lib = Library(Path(args.lib).resolve()) if args.lib else None  # Fails fast on a bad library.
         self.work = work
         self.server = Server(work / "ftp")  # First: fails fast without Docker.
         try:
-            self.fixtures = build_fixtures(work, args.rar, args.big, self.sevenzip, self.infozip)
+            self.fixtures = build_fixtures(work, args.rar, args.big, self.sevenzip, self.infozip, self.lz4)
         except BaseException:
             self.server.close()
             raise
@@ -1151,12 +1178,37 @@ def test_tar_split(env):
     check("3 volumes" in out, "volume count not reported", out)
 
 
-def test_compressed_tar_is_reported(env):
-    out = env.run("basic.tar.gz", "--directory", "tgz", "--mkdir", expect=1)
-    check("basic.tar.gz is compressed with gzip; tar archives are only supported uncompressed" in out,
-          "compressed tar not reported", out)
-    check(not env.remote("tgz").exists(), "went on after reading the archive", out)
+def test_tar_gz_is_read_as_it_is_uploaded(env):
+    out = env.run("basic.tar.gz", "--directory", "tgz", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("tgz", "tree"), out)
+    compare_mtimes(env.fixtures["main"], env.remote("tgz", "tree"), out)
+    check("Archive: tar (gzip), read as it is uploaded" in out, "streamed reading not reported", out)
+    check("Checking the files already on the server" not in out and "To upload:" not in out,
+          "the archive was listed first", out)
+    check("Done: 8 file(s)" in out, "wrong count", out)
+    # Again: everything is on the server, checked file by file.
+    out = env.run("basic.tar.gz", "--directory", "tgz")
+    check("Done: 0 file(s)" in out and "Skipped 8 file(s)" in out, "files were uploaded again", out)
+    # Damaged: only those two are sent.
+    env.remote("tgz", "tree", "sub", "dir", "deep.bin").unlink()
+    with open(env.remote("tgz", "tree", "small.txt"), "r+b") as f:
+        f.truncate(1)
+    time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
+    out = env.run("basic.tar.gz", "--directory", "tgz")
+    check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "expected exactly the two damaged files", out)
+    compare_trees(env.fixtures["main"], env.remote("tgz", "tree"), out)
 
+
+def test_tar_compressions(env):
+    for suffix in ("bz2", "xz", "lzma", "zst", "lz4"):
+        name = f"basic.tar.{suffix}"
+        if not Path(env.archive(name)).exists():
+            print(f"    {name} skipped: not created (Python 3.14+ for zst, the lz4 command for lz4)")
+            continue
+        out = env.run(name, "--directory", f"tar-{suffix}", "--mkdir")
+        compare_trees(env.fixtures["main"], env.remote(f"tar-{suffix}", "tree"), out)
+    out = env.run("split.tar.gz.001", "--directory", "split-tgz", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("split-tgz", "tree"), out)
 
 def require_lib(env):
     if env.lib is None:
@@ -1376,6 +1428,25 @@ def test_lib_7z_multivolume(env):
     check(job.state["archive"]["volumes"] == len(parts), f"expected {len(parts)} volumes", out)
 
 
+def test_lib_streamed_tar(env):
+    require_lib(env)
+    files, size = tree_totals(env.fixtures["main"])
+    job = env.lib_run("basic.tar.xz", directory="lib-txz", mkdir=1)
+    out = job.describe()
+    compare_trees(env.fixtures["main"], env.remote("lib-txz", "tree"), out)
+    check(has_fields(job.state["archive"], format="tar", compression="xz", files=None, bytes=None),
+          f"wrong archive info {job.state['archive']}", out)
+    check(job.state["probe"] is None, "a separate check of the server ran", out)
+    check(has_fields(job.state["progress"], totals_known=True, total_files=files, total_bytes=size,
+                     files_done=files), f"wrong final progress {job.state['progress']}", out)
+    check(job.state["progress"]["archive_read"] == job.state["progress"]["archive_size"] > 0,
+          "the archive was not read to its end", out)
+    check(has_fields(job.result, files_uploaded=files, skipped_files=0), f"wrong counters {job.result}", out)
+    job = env.lib_run("basic.tar.xz", directory="lib-txz")
+    check(has_fields(job.result, files_uploaded=0, skipped_files=files, skipped_bytes=size),
+          f"wrong counters on the second run {job.result}", job.describe())
+
+
 def test_big_file(env):
     if env.fixtures["big"] is None:
         raise Skipped("pass --big")
@@ -1438,7 +1509,8 @@ TESTS = [
     test_7z_encrypted_is_reported,
     test_tar_basic,
     test_tar_split,
-    test_compressed_tar_is_reported,
+    test_tar_gz_is_read_as_it_is_uploaded,
+    test_tar_compressions,
     test_lib_version,
     test_lib_basic_upload,
     test_lib_rerun_skips_identical_files,
@@ -1452,6 +1524,7 @@ TESTS = [
     test_lib_zip_7z_and_tar,
     test_lib_zip_password_prompt,
     test_lib_7z_multivolume,
+    test_lib_streamed_tar,
     test_big_file,
 ]
 

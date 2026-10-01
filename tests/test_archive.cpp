@@ -276,9 +276,35 @@ TEST_CASE("a tar archive") {
   CHECK(read.entries[0].size == 6);
   CHECK(read.entries[0].mtime > 1767000000);  // 2026.
   CHECK(read.contents == std::vector<std::string>{"hello\n"});
+  CHECK(read.flags.compression.empty());
+  CHECK_FALSE(read.flags.stream_only);
+}
 
-  CHECK(error_text(dir.write("a.tar.gz", fixtures::kTinyTarGz)) ==
-        "a.tar.gz is compressed with gzip; tar archives are only supported uncompressed");
+TEST_CASE("compressed tar archives") {
+  const TempDir dir;
+  struct Case {
+    const char* name;
+    const unsigned char* data;
+    size_t size;
+    const char* compression;
+  };
+  for (const Case& c : {Case{"a.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz), "gzip"},
+                        Case{"a.tar.bz2", fixtures::kTinyTarBz2, sizeof(fixtures::kTinyTarBz2), "bzip2"},
+                        Case{"a.tar.xz", fixtures::kTinyTarXz, sizeof(fixtures::kTinyTarXz), "xz"},
+                        Case{"a.tar.lzma", fixtures::kTinyTarLzma, sizeof(fixtures::kTinyTarLzma), "lzma"},
+                        Case{"a.tar.zst", fixtures::kTinyTarZst, sizeof(fixtures::kTinyTarZst), "zstd"},
+                        Case{"a.tar.lz4", fixtures::kTinyTarLz4, sizeof(fixtures::kTinyTarLz4), "lz4"}}) {
+    CAPTURE(c.name);
+    const Read read = read_all(dir.write(c.name, c.data, c.size));
+    CHECK(read.format == ArchiveFormat::Tar);
+    CHECK(read.flags.compression == c.compression);
+    CHECK(read.flags.stream_only);
+    CHECK(read.flags.skip_decompresses);
+    CHECK(read.flags.size == c.size);
+    REQUIRE(read.entries.size() == 1);
+    CHECK(read.entries[0].name == "hello.txt");
+    CHECK(read.contents == std::vector<std::string>{"hello\n"});
+  }
 }
 
 TEST_CASE("files that are not archives") {

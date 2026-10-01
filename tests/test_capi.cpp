@@ -186,7 +186,7 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  CHECK(contains(json, "\"archive\":{\"name\":\"rarftpcore-tiny.rar\",\"format\":\"RAR\","));
+  CHECK(contains(json, "\"archive\":{\"name\":\"rarftpcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
   CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
   CHECK(contains(json, "\"bytes_text\":\"6 B\",\"volumes\":1,\"solid\":false,\"encrypted\":false}"));
   CHECK(contains(json, "\"target\":null"));
@@ -218,6 +218,21 @@ TEST_CASE("ZIP, 7z and tar archives are read too") {
     CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
     rarftp_job_free(job);
   }
+}
+
+TEST_CASE("a compressed tar archive is read as it is uploaded") {
+  const TempFile archive("rarftpcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
+  const std::string path = archive.path();
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* job = rarftp_job_start(&config);
+  REQUIRE(job != nullptr);
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
+  // Not listed first: its contents are only known once it has been read.
+  CHECK(contains(json, "\"format\":\"tar\",\"compression\":\"gzip\",\"files\":null,\"bytes\":null,"
+                       "\"bytes_text\":null,"));
+  CHECK(contains(json, "read as it is uploaded"));
+  rarftp_job_free(job);
 }
 
 TEST_CASE("a wrong ZIP password is noticed while reading the archive") {

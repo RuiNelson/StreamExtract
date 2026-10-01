@@ -44,6 +44,15 @@ struct ArchiveFlags {
   // Entries carry a checksum of their data, verified by test(). False for
   // tar, which only checksums its headers.
   bool checksums = true;
+  // Compressed tar: "gzip", "bzip2", "xz", "lzma", "zstd" or "lz4"; empty otherwise.
+  std::string compression;
+  // The entries can only be reached by decompressing everything before them
+  // (compressed tar): rarftp reads such an archive once, planning each file
+  // as it comes, instead of listing it first.
+  bool stream_only = false;
+  // Bytes of the archive (all its parts), to measure progress with
+  // Archive::bytes_read() when the totals are not known up front.
+  uint64_t size = 0;
   // Volumes known up front (split ZIP, 7z and tar: .001, .002, ...); 0 for RAR,
   // whose volumes are only met while reading.
   unsigned volume_count = 0;
@@ -95,11 +104,15 @@ class Archive {
 
   // True if the last failure came from one of the callbacks returning "abort".
   virtual bool aborted_by_callback() const = 0;
+
+  // Bytes of the archive file(s) read so far (compressed data for compressed
+  // tar); 0 when not known.
+  virtual uint64_t bytes_read() const { return 0; }
 };
 
-// Opens a RAR, ZIP, 7z or uncompressed tar archive, recognized by its content.
-// A split ZIP, 7z or tar archive (name.zip.001, name.zip.002, ...) is opened
-// through its first part. Throws ArchiveError.
+// Opens a RAR, ZIP, 7z or tar archive (also compressed: .tar.gz...), recognized
+// by its content. A split ZIP, 7z or tar archive (name.zip.001, name.zip.002,
+// ...) is opened through its first part. Throws ArchiveError.
 std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mode, ArchiveCallbacks callbacks);
 
 // --- Exposed for the tests ---------------------------------------------------

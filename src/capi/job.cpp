@@ -64,15 +64,22 @@ void write_log_line(JsonWriter& json, uint64_t seq, const LogLine& line) {
   json.end_object();
 }
 
-void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload_rate, double unpack_rate) {
+void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload_rate, double unpack_rate,
+                    double read_rate) {
   const double average = s.elapsed > 0.0 ? static_cast<double>(s.sent_bytes) / s.elapsed : 0.0;
   const bool uploading = !s.current_file.empty();
   const double eta_file = uploading ? eta_seconds(remaining(s.current_size, s.current_sent), upload_rate) : -1.0;
-  const double eta_total = eta_seconds(remaining(s.total_bytes, s.sent_bytes), upload_rate);
+  // Without totals (a streamed archive), from the position in the archive.
+  const double eta_total = s.totals_known       ? eta_seconds(remaining(s.total_bytes, s.sent_bytes), upload_rate)
+                           : s.archive_size > 0 ? eta_seconds(remaining(s.archive_size, s.archive_read), read_rate)
+                                                : -1.0;
 
   json.begin_object();
   json.member("total_files", s.total_files);
   json.member("total_bytes", s.total_bytes);
+  json.member("totals_known", s.totals_known);
+  json.member("archive_read", s.archive_read);
+  json.member("archive_size", s.archive_size);
   json.member("sent_bytes", s.sent_bytes);
   json.member("unpacked_bytes", s.unpacked_bytes);
   json.member("files_done", s.files_done);
@@ -94,6 +101,8 @@ void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload
   json.key("text");
   json.begin_object();
   json.member("total_bytes", format_bytes(s.total_bytes));
+  json.member("archive_read", format_bytes(s.archive_read));
+  json.member("archive_size", format_bytes(s.archive_size));
   json.member("sent_bytes", format_bytes(s.sent_bytes));
   json.member("skipped_bytes", format_bytes(s.skipped_bytes));
   json.member("current_size", format_bytes(s.current_size));
@@ -203,9 +212,30 @@ std::string Job::poll(uint64_t log_cursor) {
     json.begin_object();
     json.member("name", archive_name_);
     json.member("format", format_name(archive_->format));
-    json.member("files", archive_->files);
-    json.member("bytes", archive_->bytes);
-    json.member("bytes_text", format_bytes(archive_->bytes));
+    json.key("compression");
+    if (archive_->compression.empty()) {
+      json.null();
+    } else {
+      json.value(archive_->compression);
+    }
+    json.key("files");
+    if (archive_->files) {
+      json.value(*archive_->files);
+    } else {
+      json.null();
+    }
+    json.key("bytes");
+    if (archive_->bytes) {
+      json.value(*archive_->bytes);
+    } else {
+      json.null();
+    }
+    json.key("bytes_text");
+    if (archive_->bytes) {
+      json.value(format_bytes(*archive_->bytes));
+    } else {
+      json.null();
+    }
     json.member("volumes", archive_->volumes);
     json.member("solid", archive_->solid);
     json.member("encrypted", archive_->encrypted);
@@ -235,12 +265,13 @@ std::string Job::poll(uint64_t log_cursor) {
 
   json.key("progress");
   if (final_progress_) {
-    write_progress(json, *final_progress_, 0.0, 0.0);
+    write_progress(json, *final_progress_, 0.0, 0.0, 0.0);
   } else if (transfer_started_) {
     const Progress::Snapshot s = progress_.snapshot();
     upload_meter_.add_sample(s.elapsed, s.sent_bytes);
     unpack_meter_.add_sample(s.elapsed, s.unpacked_bytes);
-    write_progress(json, s, upload_meter_.rate(), unpack_meter_.rate());
+    read_meter_.add_sample(s.elapsed, s.archive_read);
+    write_progress(json, s, upload_meter_.rate(), unpack_meter_.rate(), read_meter_.rate());
   } else {
     json.null();
   }
@@ -327,7 +358,7 @@ Job::Result Job::cancelled_result() {
   cancelled.status = TransferResult::Status::Cancelled;
   Result result;
   result.status = cancelled.status;
-  result.summary = summary_lines(cancelled, TransferPlan());
+  result.summary = summary_lines(cancelled);
   return result;
 }
 
@@ -427,18 +458,21 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
   ArchiveInfo info;
   info.name = archive_name_;
   info.format = listing.format;
-  for (const auto& entry : listing.entries) {
-    if (entry.kind == EntryKind::File) {
-      ++info.files;
-      info.bytes += entry.size;
+  info.compression = listing.flags.compression;
+  if (!listing.flags.stream_only) {
+    info.files = 0;
+    info.bytes = 0;
+    for (const auto& entry : listing.entries) {
+      if (entry.kind == EntryKind::File) {
+        ++*info.files;
+        *info.bytes += entry.size;
+      }
     }
   }
   info.volumes = listing.volumes;
   info.solid = listing.flags.solid;
   info.encrypted = encrypted;
-  log_.info("Archive: {}, {} file(s), {}{}{}{}", format_name(info.format), info.files, format_bytes(info.bytes),
-            info.volumes > 1 ? fmt::format(", {} volumes", info.volumes) : std::string(),
-            info.solid ? ", solid" : "", encrypted ? ", encrypted" : "");
+  log_.info("Archive: {}", describe_archive(listing, encrypted));
   {
     std::lock_guard lock(state_mutex_);
     archive_ = std::move(info);
@@ -509,7 +543,7 @@ Job::Result Job::pipeline() {
   // 3. Plan: map entries to remote paths, skip what is already there.
   set_phase(Phase::Checking);
   TransferPlan plan = build_plan(config_.archive, listing, target, log_);
-  if (plan.upload_files > 0) {
+  if (!plan.streamed && plan.upload_files > 0) {
     const auto set_probe = [this](size_t done, size_t total) {
       std::lock_guard lock(state_mutex_);
       probe_ = std::make_pair(done, total);
@@ -525,7 +559,9 @@ Job::Result Job::pipeline() {
     log_.info("{} file(s), {} already on the server with the same size: skipping them", plan.skip_files,
               format_bytes(plan.skip_bytes));
   }
-  log_.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes));
+  if (!plan.streamed) {
+    log_.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes));
+  }
 
   // 4. Transfer.
   const size_t buffer_mib =
@@ -568,10 +604,10 @@ Job::Result Job::pipeline() {
   result.files_uploaded = transferred.files_uploaded;
   result.bytes_uploaded = transferred.bytes_uploaded;
   result.seconds = transferred.seconds;
-  result.skipped_files = plan.skip_files;
-  result.skipped_bytes = plan.skip_bytes;
-  result.ignored = plan.ignored;
-  result.summary = summary_lines(transferred, plan);
+  result.skipped_files = transferred.skipped_files;
+  result.skipped_bytes = transferred.skipped_bytes;
+  result.ignored = transferred.ignored;
+  result.summary = summary_lines(transferred);
   return result;
 }
 

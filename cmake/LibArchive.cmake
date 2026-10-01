@@ -38,6 +38,7 @@ if(MSVC)
 else()
   _rarftp_static_lib(_zstd_lib zstd)
 endif()
+_rarftp_static_lib(_lz4_lib lz4)
 _rarftp_static_lib(_mbedcrypto_lib mbedcrypto)
 _rarftp_static_lib(_mbedx509_lib mbedx509)
 _rarftp_static_lib(_mbedtls_lib mbedtls)
@@ -137,7 +138,15 @@ _rarftp_dependency(rarftp_zstd
        -DZSTD_BUILD_CONTRIB=OFF -DZSTD_LEGACY_SUPPORT=OFF -DZSTD_MULTITHREAD_SUPPORT=OFF
   BYPRODUCTS "${_zstd_lib}")
 
-set(_archive_depends rarftp_zlib rarftp_bzip2 rarftp_xz rarftp_zstd)
+# --- LZ4 (BSD-2-Clause for the library) --------------------------------------
+_rarftp_dependency(rarftp_lz4
+  URL https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
+  SHA256 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+  SOURCE_SUBDIR build/cmake
+  ARGS -DBUILD_STATIC_LIBS=ON -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
+  BYPRODUCTS "${_lz4_lib}")
+
+set(_archive_depends rarftp_zlib rarftp_bzip2 rarftp_xz rarftp_zstd rarftp_lz4)
 set(_archive_crypto_args -DENABLE_MBEDTLS=OFF)
 
 # --- mbed TLS (Apache-2.0), only its crypto library is used ------------------
@@ -167,8 +176,8 @@ _rarftp_dependency(rarftp_libarchive
   ARGS
     -DENABLE_TAR=OFF -DENABLE_CPIO=OFF -DENABLE_CAT=OFF -DENABLE_UNZIP=OFF -DENABLE_TEST=OFF
     -DENABLE_INSTALL=ON -DENABLE_WERROR=OFF -DENABLE_COVERAGE=OFF
-    -DENABLE_ZLIB=ON -DENABLE_BZip2=ON -DENABLE_LZMA=ON -DENABLE_ZSTD=ON
-    -DENABLE_LZ4=OFF -DENABLE_LZO=OFF -DENABLE_LIBB2=OFF -DENABLE_MD=OFF
+    -DENABLE_ZLIB=ON -DENABLE_BZip2=ON -DENABLE_LZMA=ON -DENABLE_ZSTD=ON -DENABLE_LZ4=ON
+    -DENABLE_LZO=OFF -DENABLE_LIBB2=OFF -DENABLE_MD=OFF
     -DENABLE_OPENSSL=OFF -DENABLE_NETTLE=OFF -DENABLE_CNG=ON
     -DENABLE_LIBXML2=OFF -DENABLE_EXPAT=OFF -DENABLE_WIN32_XMLLITE=OFF -DENABLE_BSDXML=OFF
     -DENABLE_PCREPOSIX=OFF -DENABLE_PCRE2POSIX=OFF -DENABLE_LIBGCC=OFF
@@ -177,6 +186,7 @@ _rarftp_dependency(rarftp_libarchive
     "-DBZIP2_INCLUDE_DIR=${_ad}/include" "-DBZIP2_LIBRARY_RELEASE=${_bzip2_lib}"
     "-DLIBLZMA_INCLUDE_DIR=${_ad}/include" "-DLIBLZMA_LIBRARY_RELEASE=${_lzma_lib}"
     "-DZSTD_INCLUDE_DIR=${_ad}/include" "-DZSTD_LIBRARY=${_zstd_lib}"
+    "-DLZ4_INCLUDE_DIR=${_ad}/include" "-DLZ4_LIBRARY=${_lz4_lib}"
     ${_archive_crypto_args}
   DEPENDS ${_archive_depends}
   BYPRODUCTS "${_archive_lib}")
@@ -184,7 +194,7 @@ _rarftp_dependency(rarftp_libarchive
 ExternalProject_Add_StepDependencies(rarftp_libarchive download "${CMAKE_CURRENT_LIST_DIR}/libarchive-patches.cmake")
 
 # Link order matters for static libraries: libarchive first, then what it uses.
-set(_archive_link "${_zstd_lib}" "${_lzma_lib}" "${_bzip2_lib}" "${_zlib_lib}")
+set(_archive_link "${_zstd_lib}" "${_lz4_lib}" "${_lzma_lib}" "${_bzip2_lib}" "${_zlib_lib}")
 if(_use_mbedtls)
   list(APPEND _archive_link "${_mbedcrypto_lib}")
 endif()

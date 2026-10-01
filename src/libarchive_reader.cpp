@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <optional>
 #include <utility>
 
@@ -167,6 +168,20 @@ int open_parts(struct archive* handle, const std::vector<std::string>& parts) {
 #endif
 }
 
+// The tar reader, with the decompression filters for compressed tar. Only
+// filters built on the libraries linked in: libarchive would otherwise run an
+// external program, and says so with ARCHIVE_WARN.
+int support_tar(struct archive* handle) {
+  for (const auto support : {archive_read_support_filter_gzip, archive_read_support_filter_bzip2,
+                             archive_read_support_filter_xz, archive_read_support_filter_lzma,
+                             archive_read_support_filter_zstd, archive_read_support_filter_lz4}) {
+    if (support(handle) != ARCHIVE_OK) {
+      return ARCHIVE_FATAL;
+    }
+  }
+  return archive_read_support_format_tar(handle);
+}
+
 using Handle = std::unique_ptr<struct archive, int (*)(struct archive*)>;
 
 // `parts` opened with only what `setup` registers; empty if libarchive does not
@@ -193,30 +208,10 @@ std::optional<ArchiveFormat> libarchive_format(const std::vector<std::string>& p
   if (probe(parts, archive_read_support_format_7zip)) {
     return ArchiveFormat::SevenZip;
   }
-  if (probe(parts, archive_read_support_format_tar)) {
+  if (probe(parts, support_tar)) {
     return ArchiveFormat::Tar;
   }
   return std::nullopt;
-}
-
-std::optional<std::string> tar_compression(const std::vector<std::string>& parts) {
-  const Utf8Locale utf8;
-  // Only filters built on the libraries linked in: none of them runs an
-  // external program.
-  const Handle handle = probe(parts, [](struct archive* a) {
-    for (const auto support : {archive_read_support_filter_gzip, archive_read_support_filter_bzip2,
-                               archive_read_support_filter_xz, archive_read_support_filter_lzma,
-                               archive_read_support_filter_zstd}) {
-      if (support(a) != ARCHIVE_OK) {
-        return ARCHIVE_FATAL;
-      }
-    }
-    return archive_read_support_format_tar(a);
-  });
-  if (!handle || archive_filter_code(handle.get(), 0) == ARCHIVE_FILTER_NONE) {
-    return std::nullopt;
-  }
-  return std::string(archive_filter_name(handle.get(), 0));
 }
 
 struct LibArchiveReader::Impl {
@@ -331,7 +326,7 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
       supported = archive_read_support_format_7zip(m.handle);
       break;
     case ArchiveFormat::Tar:
-      supported = archive_read_support_format_tar(m.handle);
+      supported = support_tar(m.handle);
 #ifdef _WIN32
       // Names without a pax header are bytes in no stated charset: UTF-8 today.
       if (supported == ARCHIVE_OK) {
@@ -350,6 +345,20 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
   const int opened = open_parts(m.handle, parts);
   if (opened != ARCHIVE_OK) {
     throw m.error();
+  }
+  if (archive_filter_code(m.handle, 0) != ARCHIVE_FILTER_NONE) {
+    m.flags.compression = archive_filter_name(m.handle, 0);
+    m.flags.skip_decompresses = true;
+    m.flags.stream_only = true;
+  }
+  for (const std::string& part : parts) {
+    std::error_code ignored;
+#ifdef _WIN32
+    const auto size = std::filesystem::file_size(std::filesystem::path(from_utf8(part)), ignored);
+#else
+    const auto size = std::filesystem::file_size(part, ignored);
+#endif
+    m.flags.size += size != static_cast<std::uintmax_t>(-1) ? static_cast<uint64_t>(size) : 0;
   }
 }
 
@@ -450,6 +459,12 @@ void LibArchiveReader::skip() {
 }
 
 bool LibArchiveReader::aborted_by_callback() const { return impl_->aborted; }
+
+uint64_t LibArchiveReader::bytes_read() const {
+  // The last filter is the one reading the files.
+  const la_int64_t read = archive_filter_bytes(impl_->handle, -1);
+  return read > 0 ? static_cast<uint64_t>(read) : 0;
+}
 
 std::string libarchive_version() {
   const int number = archive_version_number();  // 3008009 for 3.8.9.
