@@ -1,7 +1,7 @@
 # rarftp
 
-Uploads the contents of a RAR archive straight to an FTP server, **without
-extracting it to disk first**.
+Uploads the contents of a RAR, ZIP, 7z or tar archive straight to an FTP
+server, **without extracting it to disk first**.
 
 The usual way to publish a huge archive is to extract it (needing as much free
 space as the unpacked data, with the CPU busy and the network idle) and then
@@ -40,9 +40,10 @@ Keka, `unrar`, ...).
 
 The app offers:
 
-- **Archive**: drop a `.rar` on the window (the first volume, for multi-volume
-  sets) or pick it with a file dialog. When the archive is encrypted and no
-  password was typed in, the app asks for it, and asks again if it was wrong.
+- **Archive**: drop a `.rar`, `.zip`, `.7z` or `.tar` on the window (the first
+  volume, for multi-volume sets: `.part1.rar`, `.zip.001`, `.7z.001`) or pick it
+  with a file dialog. When the archive is encrypted and no password was typed in, the
+  app asks for it, and asks again if it was wrong.
 - **Server**: host, port, passive or active mode, user and password (anonymous
   without a user), destination directory and *Create directory if missing*.
   *Advanced* has the buffer size and the verbose log.
@@ -95,12 +96,12 @@ rarftp --file archive.rar --host ftp.example.com --port 21 --mode passive \
 Multi-volume and password-protected archives are supported:
 
 ```bash
---rar-password "*[open sesame]*"
+--archive-password "*[open sesame]*"
 ```
 
 | Option | Description |
 |---|---|
-| `--file PATH` | RAR archive. For multi-volume sets, the first volume (`.part1.rar`, `.rar`). |
+| `--file PATH` | RAR, ZIP, 7z or uncompressed tar archive, recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
 | `--host HOST` | FTP server name or address (IPv4 or IPv6). |
 | `--port PORT` | Default `21`. |
 | `--mode passive\|active` | Data connection mode. Default `passive`. |
@@ -108,7 +109,7 @@ Multi-volume and password-protected archives are supported:
 | `--password PASSWORD` | Requires `--user`. If omitted, it is asked for (hidden) on the terminal. |
 | `--directory DIR` | Destination, absolute or relative to the login directory. Without it the login directory is used and a warning says which one. |
 | `--mkdir` | Create the destination if it does not exist, with a single `MKD` (not recursive). Without it, a missing destination is an error. |
-| `--rar-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. |
+| `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
 | `--verbose` | Log every FTP command and reply (the password is masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
@@ -175,15 +176,16 @@ is linked statically.
 ## How it works
 
 ```
- extractor thread                      uploader thread
- UnRAR RAR_TEST ──(1 MiB blocks)──▶ [ bounded buffer ] ──▶ libcurl STOR
- (checks CRC/BLAKE2)                                         (one control connection)
+ extractor thread                         uploader thread
+ UnRAR RAR_TEST / libarchive ──(1 MiB blocks)──▶ [ bounded buffer ] ──▶ libcurl STOR
+ (checks CRC/BLAKE2, CRC-32)                                            (one control connection)
 ```
 
-UnRAR's test mode decompresses and verifies every file without creating it;
-the decompressed data arrives in a callback and goes into the buffer, which the
-FTP upload drains. A file only counts as uploaded after UnRAR confirmed its
-checksum; on any error the incomplete remote file is deleted.
+RAR archives are read with UnRAR's test mode, ZIP, 7z and tar archives with
+libarchive: both decompress and verify every file in memory, without creating
+it, and the decompressed data goes into the buffer, which the FTP upload drains.
+A file only counts as uploaded after its checksum was confirmed (tar has none,
+see below); on any error the incomplete remote file is deleted.
 
 The command line links this engine statically. The app uses it through a
 shared library (`librarftpcore`, C API in `src/capi/rarftp.h`).
@@ -196,8 +198,25 @@ Behaviour, in both:
 - **Directories** of the archive, including empty ones, are created.
 - **Modification times** are preserved with `MFMT` (or vsftpd's `MDTM` form)
   when the server allows it.
-- **Multi-volume**, **solid** and **encrypted** (`-p`, `-hp`) archives are
-  supported, in every format UnRAR reads (RAR 5.x and older).
+- **RAR**: multi-volume, solid and encrypted (`-p`, `-hp`) archives, in every
+  format UnRAR reads (RAR 5.x and older).
+- **ZIP**: Stored, Deflate, BZip2, LZMA, XZ, Zstandard and PPMd entries, Zip64
+  (files and archives over 4 GiB), traditional (ZipCrypto) and AES encryption, and
+  archives split into numbered parts (`.zip.001`, `.zip.002`, ...). A wrong
+  password is detected while reading the archive, before anything is sent. Names
+  without the UTF-8 flag are read as UTF-8 when they are valid UTF-8 (macOS
+  writes them like that), otherwise as code page 437 (on Windows: the system's
+  OEM code page, as Windows itself does).
+- **7z**: LZMA, LZMA2, BZip2, Deflate, PPMd and Zstandard with their filters
+  (BCJ, BCJ2, ARM, ...), solid archives and archives split into numbered parts
+  (`.7z.001`, ...).
+- **tar**, uncompressed only (every variant libarchive reads: POSIX, GNU, pax,
+  old Unix ones), also split into numbered parts (`.tar.001`, ...). The format
+  has **no checksum of the file contents**, only of its headers, so these files
+  are uploaded without verification; a warning says so. Names without a pax
+  header are read as UTF-8 when valid, otherwise as Latin-1 (on Windows: as
+  UTF-8).
+- The **format** is recognized by the content of the file, not by its extension.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
 - **Fail-fast**: a checksum error, a missing volume or a network failure stops
@@ -210,11 +229,21 @@ some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 
+Also not supported, with an explicit error: 7z archives with a password
+(libarchive cannot decrypt them), ZIP entries compressed with Deflate64 (which
+Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
+`.z02`, ..., `.zip`) and compressed tar archives (`.tar.gz`, `.tgz`,
+`.tar.bz2`, `.tar.xz`, `.tar.zst`).
+
 ## Building
 
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
 used when present; otherwise, or with `-DRARFTP_BUNDLED_CURL=ON`, an FTP-only
 libcurl is built from source). The other libraries are fetched by CMake.
+libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard
+and, on Linux, mbed TLS) are built from source as static libraries during the
+first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
+longer.
 
 The UnRAR sources are not part of this repository (they have their own
 license) and must be extracted into `unrarsrc/`:
@@ -231,7 +260,8 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The binary is `build/rarftp`. UnRAR is always linked statically into it.
+The binary is `build/rarftp`. UnRAR and libarchive are always linked statically
+into it.
 
 ### Desktop app
 
@@ -254,7 +284,7 @@ cargo tauri dev       # or: run the app without bundling it
 ```
 
 The library is `build/librarftpcore.dylib` (`.so` on Linux, `rarftpcore.dll` on
-Windows). UnRAR and {fmt} are linked statically into it, and it exports only the
+Windows). UnRAR, libarchive and {fmt} are linked statically into it, and it exports only the
 `rarftp_*` functions of `src/capi/rarftp.h`; the `rarftp` executable does not use
 it. Add `-DRARFTP_BUNDLED_CURL=ON` to link libcurl statically too, which makes
 the library self-contained instead of relying on the system's libcurl.
@@ -308,13 +338,15 @@ Unit tests:
 ctest --test-dir build --output-on-failure
 ```
 
-End-to-end tests upload archives created with RARLAB's `rar` to vsftpd running
-in Docker ([delfer/alpine-ftp-server](https://hub.docker.com/r/delfer/alpine-ftp-server))
+End-to-end tests upload archives created with RARLAB's `rar`, Python's
+`zipfile` and `tarfile`, 7-Zip and Info-ZIP's `zip` to vsftpd running in Docker
+([delfer/alpine-ftp-server](https://hub.docker.com/r/delfer/alpine-ftp-server))
 and compare what arrives, byte by byte. They need Docker, `rar` and Python 3.9+
-(standard library only):
+(standard library only); the tests that need 7-Zip (`7zz`, found in `PATH` or
+given with `--7z`) or `zip` are skipped without them:
 
 ```bash
-python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar
+python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar --7z /path/to/7zz
 ```
 
 `--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
@@ -339,6 +371,9 @@ The Rust side has its own unit tests, which link the built library:
 | Library | Use | License |
 |---|---|---|
 | [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
+| [libarchive](https://www.libarchive.org) | ZIP, 7z and tar reading | BSD-2-Clause |
+| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/) | Decompression for libarchive | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause |
+| [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | AES for encrypted ZIP files (Linux only; macOS and Windows use the system's) | Apache-2.0 |
 | [libcurl](https://curl.se/libcurl/) | FTP client | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
@@ -351,5 +386,6 @@ The Rust side has its own unit tests, which link the built library:
 This project is licensed under the MIT license (see `LICENSE`). Binaries also
 contain UnRAR, whose license allows free use in any software handling RAR
 archives but forbids using its code to re-create the RAR compression
-algorithm; see `THIRD_PARTY_NOTICES.md`, which also covers what only the app
-contains (Tauri and its Rust dependencies).
+algorithm, and libarchive with the libraries above; see
+`THIRD_PARTY_NOTICES.md`, which also covers what only the app contains (Tauri
+and its Rust dependencies).

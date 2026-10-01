@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -12,7 +13,7 @@
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "progress.hpp"
-#include "rar_archive.hpp"
+#include "archive.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -95,17 +96,19 @@ void Transfer::fail(const std::string& message) {
   pipe_.abort();
 }
 
-std::string Transfer::describe_rar_error(int code, const std::string& what) const {
+std::string Transfer::describe_archive_error(const ArchiveError& error, const std::string& what) const {
   if (!missing_volume_.empty()) {
     return fmt::format("volume not found: {}", missing_volume_);
   }
-  if (rar_is_bad_password(code)) {
-    return fmt::format("{}: wrong password", what);
+  switch (error.kind()) {
+    case ArchiveError::Kind::BadPassword:
+      return fmt::format("{}: wrong password", what);
+    case ArchiveError::Kind::MissingPassword:
+      return fmt::format("{} is encrypted: pass --archive-password", what);
+    case ArchiveError::Kind::Other:
+      break;
   }
-  if (rar_is_missing_password(code)) {
-    return fmt::format("{} is encrypted: pass --rar-password", what);
-  }
-  return fmt::format("{}: {}", what, rar_error_message(code));
+  return fmt::format("{}: {}", what, error.what());
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +117,8 @@ std::string Transfer::describe_rar_error(int code, const std::string& what) cons
 void Transfer::run_extractor() {
   try {
     extract();
-  } catch (const RarError& error) {
-    fail(describe_rar_error(error.code(), "cannot read the archive"));
+  } catch (const ArchiveError& error) {
+    fail(describe_archive_error(error, "cannot read the archive"));
   } catch (const std::exception& error) {
     fail(fmt::format("cannot read the archive: {}", error.what()));
   }
@@ -129,7 +132,7 @@ void Transfer::run_extractor() {
 
 void Transfer::extract() {
   std::vector<uint8_t> block;
-  bool discard = false;  // Decompressing a skipped file of a solid archive.
+  bool discard = false;  // Decompressing a skipped file (solid archive).
 
   const auto flush = [&]() -> bool {
     if (block.empty()) {
@@ -144,7 +147,7 @@ void Transfer::extract() {
     return ok;
   };
 
-  RarCallbacks callbacks;
+  ArchiveCallbacks callbacks;
   callbacks.on_data = [&](const uint8_t* data, size_t size) -> bool {
     if (cancel_requested_ || pipe_.aborted()) {
       return false;
@@ -184,16 +187,17 @@ void Transfer::extract() {
 
   size_t index = 0;
   if (end_of_uploads > 0) {
-    RarArchive archive(plan_.archive_path, RarArchive::Mode::Extract, callbacks);
+    const std::unique_ptr<Archive> archive = open_archive(plan_.archive_path, Archive::Mode::Extract, callbacks);
     ArchiveEntry entry;
-    while (index < end_of_uploads && archive.next(entry)) {
+    while (index < end_of_uploads && archive->next(entry)) {
       if (cancel_requested_ || pipe_.aborted()) {
         return;
       }
       if (entry.split_before) {  // Continuation of a split file handled earlier.
-        const int code = archive.skip();
-        if (code != 0) {
-          fail(describe_rar_error(code, entry.name));
+        try {
+          archive->skip();
+        } catch (const ArchiveError& error) {
+          fail(describe_archive_error(error, entry.name));
           return;
         }
         continue;
@@ -205,28 +209,27 @@ void Transfer::extract() {
       const size_t current = index++;
       const PlannedEntry& planned = plan_.entries[current];
 
-      int code = 0;
-      switch (planned.action) {
-        case PlannedEntry::Action::MakeDir: {
-          PipeMessage message;
-          message.kind = PipeMessage::Kind::EnsureDir;
-          message.entry = current;
-          if (!pipe_.push(std::move(message))) {
-            return;
+      try {
+        switch (planned.action) {
+          case PlannedEntry::Action::MakeDir: {
+            PipeMessage message;
+            message.kind = PipeMessage::Kind::EnsureDir;
+            message.entry = current;
+            if (!pipe_.push(std::move(message))) {
+              return;
+            }
+            archive->skip();
+            break;
           }
-          code = archive.skip();
-          break;
-        }
-        case PlannedEntry::Action::Upload: {
-          progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
-          PipeMessage begin;
-          begin.kind = PipeMessage::Kind::FileBegin;
-          begin.entry = current;
-          if (!pipe_.push(std::move(begin))) {
-            return;
-          }
-          code = archive.test();
-          if (code == 0) {
+          case PlannedEntry::Action::Upload: {
+            progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
+            PipeMessage begin;
+            begin.kind = PipeMessage::Kind::FileBegin;
+            begin.entry = current;
+            if (!pipe_.push(std::move(begin))) {
+              return;
+            }
+            archive->test();
             if (!flush()) {
               return;
             }
@@ -236,31 +239,31 @@ void Transfer::extract() {
             if (!pipe_.push(std::move(end))) {
               return;
             }
+            break;
           }
-          break;
+          case PlannedEntry::Action::Skip:
+            if (plan_.skip_decompresses) {
+              // It has to be decompressed anyway. test() (instead of skip())
+              // keeps cancellation responsive.
+              progress_.set_activity(fmt::format(
+                  "Skipping {} (already on the server), decompressing it to reach the next files",
+                  planned.relative));
+              discard = true;
+              archive->test();
+              discard = false;
+            } else {
+              archive->skip();
+            }
+            break;
+          case PlannedEntry::Action::Ignore:
+            archive->skip();
+            break;
         }
-        case PlannedEntry::Action::Skip:
-          if (plan_.solid) {
-            // Solid archives have to decompress it anyway. test() (instead of
-            // skip()) keeps cancellation responsive.
-            progress_.set_activity(fmt::format(
-                "Skipping {} (already on the server), decompressing it: solid archive", planned.relative));
-            discard = true;
-            code = archive.test();
-            discard = false;
-          } else {
-            code = archive.skip();
-          }
-          break;
-        case PlannedEntry::Action::Ignore:
-          code = archive.skip();
-          break;
-      }
-      if (code != 0) {
-        if (archive.aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
+      } catch (const ArchiveError& error) {
+        if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
           return;  // Stopped on purpose.
         }
-        fail(describe_rar_error(code, planned.relative));
+        fail(describe_archive_error(error, planned.relative));
         return;
       }
     }
@@ -334,7 +337,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
 
   std::vector<uint8_t> block;
   size_t offset = 0;
-  bool complete = false;  // FileEnd seen: UnRAR verified the whole file.
+  bool complete = false;  // FileEnd seen: the whole file was verified.
 
   const FtpClient::ReadFn read = [&](char* buffer, size_t capacity) -> std::optional<size_t> {
     while (offset >= block.size()) {
@@ -383,7 +386,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
   }
 
   // libcurl stops reading once it has the announced size, so the end marker,
-  // which UnRAR's checksum verification gates, is usually still queued.
+  // which the archive's checksum verification gates, is usually still queued.
   if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= size)) {
     complete = await_file_end(planned);
     if (!complete) {

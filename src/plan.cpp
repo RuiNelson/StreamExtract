@@ -1,6 +1,7 @@
 #include "plan.hpp"
 
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -46,7 +47,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
   ArchiveListing listing;
   std::string missing_volume;
 
-  RarCallbacks callbacks;
+  ArchiveCallbacks callbacks;
   callbacks.on_password = [&] { return passwords.get(); };
   callbacks.on_volume = [&](const std::string& volume) {
     ++listing.volumes;
@@ -61,29 +62,36 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
   };
 
   try {
-    RarArchive archive(path, RarArchive::Mode::List, callbacks);
-    listing.flags = archive.flags();
+    const std::unique_ptr<Archive> archive = open_archive(path, Archive::Mode::List, callbacks);
+    listing.format = archive->format();
+    listing.flags = archive->flags();
     if (listing.flags.volume && !listing.flags.first_volume) {
       throw std::runtime_error(fmt::format(
           "{} is not the first volume of the set; pass the first one (e.g. .part1.rar or .rar)", path));
     }
-    ArchiveEntry entry;
-    while (archive.next(entry)) {
-      listing.entries.push_back(entry);
-      const int code = archive.skip();
-      if (code != 0) {
-        throw RarError(code, rar_error_message(code));
-      }
+    if (listing.flags.volume_count > 1) {
+      listing.volumes = listing.flags.volume_count;
     }
-  } catch (const RarError& error) {
+    if (!listing.flags.checksums) {
+      log.warn("{} archives have no checksum of the file contents: files are uploaded without verification",
+               format_name(listing.format));
+    }
+    ArchiveEntry entry;
+    while (archive->next(entry)) {
+      listing.entries.push_back(entry);
+      archive->skip();
+    }
+  } catch (const ArchiveError& error) {
     if (!missing_volume.empty()) {
       throw std::runtime_error(fmt::format("volume not found: {}", missing_volume));
     }
-    if (rar_is_bad_password(error.code())) {
-      throw ArchivePasswordError("wrong archive password");
-    }
-    if (rar_is_missing_password(error.code())) {
-      throw std::runtime_error("the archive is encrypted: pass --rar-password");
+    switch (error.kind()) {
+      case ArchiveError::Kind::BadPassword:
+        throw ArchivePasswordError("wrong archive password");
+      case ArchiveError::Kind::MissingPassword:
+        throw std::runtime_error("the archive is encrypted: pass --archive-password");
+      case ArchiveError::Kind::Other:
+        break;
     }
     throw std::runtime_error(fmt::format("cannot read {}: {}", path, error.what()));
   }
@@ -116,17 +124,19 @@ TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& l
   TransferPlan plan;
   plan.archive_path = archive_path;
   plan.remote_root = remote_root;
-  plan.solid = listing.flags.solid;
+  plan.skip_decompresses = listing.flags.skip_decompresses;
   plan.entries.reserve(listing.entries.size());
 
   std::unordered_set<std::string> files_seen;
   std::unordered_map<std::string, std::string> folded;  // Lower-cased path -> first spelling.
+  // UnRAR gives native separators; the others use '/', but some Windows tools write '\'.
+  const bool backslash_separators = kNativeWindowsPaths || listing.format != ArchiveFormat::Rar;
 
   for (const auto& entry : listing.entries) {
     PlannedEntry planned;
     planned.entry = entry;
 
-    const SanitizedPath safe = sanitize_archive_path(entry.name, kNativeWindowsPaths);
+    const SanitizedPath safe = sanitize_archive_path(entry.name, backslash_separators);
     if (safe.path.empty()) {
       planned.action = PlannedEntry::Action::Ignore;
       if (entry.kind != EntryKind::Directory) {  // A directory entry for the root itself is harmless.
@@ -163,6 +173,10 @@ TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& l
         planned.action = PlannedEntry::Action::Ignore;
         log.warn("skipping \"{}\": stored as a reference to an identical file (rar -oi), not supported yet",
                  planned.relative);
+        break;
+      case EntryKind::Special:
+        planned.action = PlannedEntry::Action::Ignore;
+        log.warn("skipping special file \"{}\" (device, FIFO or socket)", planned.relative);
         break;
     }
 

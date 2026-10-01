@@ -24,6 +24,29 @@ TEST_CASE("invalid UTF-8 becomes U+FFFD") {
   CHECK(from_utf8("ab\xe2\x82") == L"ab" + replacement + replacement);
 }
 
+TEST_CASE("UTF-8 validation") {
+  CHECK(is_valid_utf8(""));
+  CHECK(is_valid_utf8("plain ascii/dir/file.txt"));
+  CHECK(is_valid_utf8("ação – 日本語 😀"));
+  CHECK(is_valid_utf8("\xef\xbf\xbd"));  // U+FFFD itself.
+  CHECK_FALSE(is_valid_utf8("a\x87o"));     // CP437 'ç'.
+  CHECK_FALSE(is_valid_utf8("\xc0\xaf"));   // Overlong '/'.
+  CHECK_FALSE(is_valid_utf8("\xed\xa0\x80"));
+  CHECK_FALSE(is_valid_utf8("ab\xe2\x82"));
+}
+
+TEST_CASE("CP437 file names") {
+  CHECK(cp437_to_utf8("dir/file.txt") == "dir/file.txt");
+  CHECK(cp437_to_utf8("a\x87\x84o") == "açäo");
+  CHECK(cp437_to_utf8("\x80\x9e\xe1\xff") == "Ç₧ß\u00a0");
+}
+
+TEST_CASE("Latin-1 file names") {
+  CHECK(latin1_to_utf8("dir/file.txt") == "dir/file.txt");
+  CHECK(latin1_to_utf8("a\xe7\xe3o") == "ação");
+  CHECK(latin1_to_utf8("\xff") == "ÿ");
+}
+
 TEST_CASE("format_bytes") {
   CHECK(format_bytes(0) == "0 B");
   CHECK(format_bytes(1023) == "1023 B");

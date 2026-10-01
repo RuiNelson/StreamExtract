@@ -18,7 +18,7 @@ struct Options {
   std::optional<std::string> password;
   std::optional<std::string> directory;
   bool mkdir = false;
-  std::optional<std::string> rar_password;
+  std::optional<std::string> archive_password;
   bool no_tui = false;
   bool verbose = false;
   size_t buffer_mib = 64;

@@ -185,7 +185,7 @@ std::string Job::poll(uint64_t log_cursor) {
   json.key("prompt");
   if (prompt_pending_ && !answered_) {
     json.begin_object();
-    json.member("kind", "rar_password");
+    json.member("kind", "archive_password");
     json.member("archive", archive_name_);
     json.key("error");
     if (prompt_error_) {
@@ -202,6 +202,7 @@ std::string Job::poll(uint64_t log_cursor) {
   if (archive_) {
     json.begin_object();
     json.member("name", archive_name_);
+    json.member("format", format_name(archive_->format));
     json.member("files", archive_->files);
     json.member("bytes", archive_->bytes);
     json.member("bytes_text", format_bytes(archive_->bytes));
@@ -390,7 +391,7 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
     return answer;
   };
 
-  std::optional<std::string> initial = config_.rar_password;
+  std::optional<std::string> initial = config_.archive_password;
   ArchiveListing listing;
   while (true) {
     declined = false;
@@ -425,6 +426,7 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
 
   ArchiveInfo info;
   info.name = archive_name_;
+  info.format = listing.format;
   for (const auto& entry : listing.entries) {
     if (entry.kind == EntryKind::File) {
       ++info.files;
@@ -434,7 +436,7 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
   info.volumes = listing.volumes;
   info.solid = listing.flags.solid;
   info.encrypted = encrypted;
-  log_.info("Archive: {} file(s), {}{}{}{}", info.files, format_bytes(info.bytes),
+  log_.info("Archive: {}, {} file(s), {}{}{}{}", format_name(info.format), info.files, format_bytes(info.bytes),
             info.volumes > 1 ? fmt::format(", {} volumes", info.volumes) : std::string(),
             info.solid ? ", solid" : "", encrypted ? ", encrypted" : "");
   {

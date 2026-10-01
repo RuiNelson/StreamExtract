@@ -26,7 +26,7 @@
     dzSub: $("dz-sub"),
     btnChoose: $("btn-choose"),
     archiveHint: $("archive-hint"),
-    rarPassword: $("rar-password"),
+    archivePassword: $("archive-password"),
     host: $("host"),
     port: $("port"),
     portError: $("port-error"),
@@ -266,11 +266,12 @@
     setText(els.dzSub, path);
     setTitle(els.dzSub, path);
     els.btnChoose.textContent = "Change…";
-    const looksLikeRar = /\.rar$/i.test(name);
-    els.archiveHint.textContent = looksLikeRar
+    // .001: the first part of a split ZIP, 7z or tar archive.
+    const looksLikeArchive = /\.(rar|zip|7z|tar|001)$/i.test(name);
+    els.archiveHint.textContent = looksLikeArchive
       ? ""
-      : "This file does not have a .rar extension. rarftp will still try to read it.";
-    setHidden(els.archiveHint, looksLikeRar);
+      : "This file does not have a .rar, .zip, .7z or .tar extension. rarftp will still try to read it.";
+    setHidden(els.archiveHint, looksLikeArchive);
     updateSubmitState();
   }
 
@@ -279,7 +280,7 @@
       const selected = await tauri.dialog.open({
         multiple: false,
         directory: false,
-        filters: [{ name: "RAR archives", extensions: ["rar"] }],
+        filters: [{ name: "RAR, ZIP, 7z and tar archives", extensions: ["rar", "zip", "7z", "tar", "001"] }],
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       const value = path && typeof path === "object" ? path.path : path;
@@ -321,7 +322,7 @@
     const server = readServer();
     return {
       archive: state.archive,
-      rar_password: els.rarPassword.value === "" ? null : els.rarPassword.value,
+      archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
       host: server.host,
       port,
       mode: server.mode,
@@ -720,6 +721,7 @@
     els.chips.replaceChildren();
     if (!archive) return;
     const add = (text) => els.chips.append(el("li", null, text));
+    if (archive.format) add(archive.format);
     add(plural(archive.files, "file"));
     add(archive.bytes_text);
     add(plural(archive.volumes, "volume"));
@@ -824,7 +826,7 @@
     if (typeof log.next === "number") job.cursor = log.next;
   }
 
-  /* ------------------------------------------------- transfer: RAR password */
+  /* --------------------------------------------- transfer: archive password */
 
   function setPasswordError(message) {
     els.pwError.textContent = message || "";
@@ -835,7 +837,7 @@
 
   function renderPrompt(job, snap, seq) {
     const prompt = snap.prompt;
-    const wanted = prompt && prompt.kind === "rar_password";
+    const wanted = prompt && prompt.kind === "archive_password";
     if (!wanted) {
       if (els.dlgPassword.open && !job.answering) els.dlgPassword.close();
       return;

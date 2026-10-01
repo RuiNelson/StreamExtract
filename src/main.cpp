@@ -1,5 +1,5 @@
-// rarftp: uploads the contents of a RAR archive to an FTP server without
-// extracting it to disk.
+// rarftp: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server
+// without extracting it to disk.
 
 #include <algorithm>
 #include <clocale>
@@ -94,7 +94,7 @@ int run(const Options& options) {
   if (interactive) {
     prompt = [&] { return prompt_hidden(fmt::format("Password for {}: ", file_name_of(options.file))); };
   }
-  PasswordSource passwords(options.rar_password, std::move(prompt));
+  PasswordSource passwords(options.archive_password, std::move(prompt));
   ArchiveListing listing;
   try {
     log.info("Reading {}", options.file);
@@ -107,7 +107,7 @@ int run(const Options& options) {
       listing.flags.encrypted_headers || std::any_of(listing.entries.begin(), listing.entries.end(),
                                                      [](const ArchiveEntry& e) { return e.encrypted; });
   if (encrypted && !passwords.has_password() && !passwords.get()) {
-    log.error("the archive is encrypted: pass --rar-password");
+    log.error("the archive is encrypted: pass --archive-password");
     return kExitError;
   }
   passwords.disable_prompt();
@@ -120,7 +120,7 @@ int run(const Options& options) {
       bytes += entry.size;
     }
   }
-  log.info("Archive: {} file(s), {}{}{}{}", files, format_bytes(bytes),
+  log.info("Archive: {}, {} file(s), {}{}{}{}", format_name(listing.format), files, format_bytes(bytes),
            listing.volumes > 1 ? fmt::format(", {} volumes", listing.volumes) : std::string(),
            listing.flags.solid ? ", solid" : "", encrypted ? ", encrypted" : "");
 

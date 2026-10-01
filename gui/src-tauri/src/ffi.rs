@@ -19,7 +19,7 @@ pub struct RarftpJob {
 #[repr(C)]
 pub struct RarftpJobConfig {
     pub archive: *const c_char,
-    pub rar_password: *const c_char,
+    pub archive_password: *const c_char,
     pub host: *const c_char,
     pub port: c_int,
     pub active_mode: c_int,
@@ -42,7 +42,7 @@ extern "C" {
     pub fn rarftp_free(string: *mut c_char);
 }
 
-/// `"rarftp 2.0.0 (UnRAR 7.31, libcurl 8.22.0)"`.
+/// `"rarftp 2.0.0 (UnRAR 7.31, libarchive 3.8.9, libcurl 8.22.0)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
     unsafe { CStr::from_ptr(rarftp_version()) }
@@ -69,10 +69,10 @@ impl Job {
     /// Starts a job. The library copies the strings, so the `CString`s only live for this call.
     pub fn start(config: &TransferConfig) -> Result<Job, String> {
         let archive = c_string("The archive path", &config.archive)?;
-        let rar_password = config
-            .rar_password
+        let archive_password = config
+            .archive_password
             .as_deref()
-            .map(|password| c_string("The RAR password", password))
+            .map(|password| c_string("The archive password", password))
             .transpose()?;
         let host = c_string("The host", &config.host)?;
         let user = c_string("The user name", &config.user)?;
@@ -85,7 +85,7 @@ impl Job {
 
         let raw_config = RarftpJobConfig {
             archive: archive.as_ptr(),
-            rar_password: rar_password
+            archive_password: archive_password
                 .as_ref()
                 .map_or(ptr::null(), |password| password.as_ptr()),
             host: host.as_ptr(),
@@ -122,7 +122,7 @@ impl Job {
     /// Answers a pending archive password prompt; `None` declines it.
     pub fn answer_password(&self, password: Option<&str>) -> Result<(), String> {
         let password = password
-            .map(|password| c_string("The RAR password", password))
+            .map(|password| c_string("The archive password", password))
             .transpose()?;
         let password = password
             .as_ref()
@@ -153,7 +153,7 @@ mod tests {
     fn config() -> TransferConfig {
         TransferConfig {
             archive: "/nonexistent/rarftp-gui-test.rar".to_string(),
-            rar_password: None,
+            archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 21,
             mode: Mode::Passive,
@@ -177,7 +177,7 @@ mod tests {
         bad.host = "ftp\0.example.com".to_string();
         assert!(Job::start(&bad).is_err());
         let mut bad = config();
-        bad.rar_password = Some("pw\0".to_string());
+        bad.archive_password = Some("pw\0".to_string());
         assert!(Job::start(&bad).is_err());
     }
 

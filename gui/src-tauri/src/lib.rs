@@ -31,12 +31,13 @@ impl Mode {
 }
 
 /// Everything needed to start a transfer. `user` "" is anonymous, `directory` "" the login
-/// directory, `rar_password` `null` means "ask when needed". Deliberately not `Debug`: it holds passwords.
+/// directory, `archive_password` `null` means "ask when needed". Deliberately not `Debug`: it
+/// holds passwords.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TransferConfig {
     pub archive: String,
-    pub rar_password: Option<String>,
+    pub archive_password: Option<String>,
     pub host: String,
     pub port: u32,
     pub mode: Mode,
@@ -234,7 +235,7 @@ mod tests {
     fn missing_archive_config() -> TransferConfig {
         TransferConfig {
             archive: "/nonexistent/rarftp-gui-test.rar".to_string(),
-            rar_password: None,
+            archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 1,
             mode: Mode::Passive,

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "rar_archive.hpp"
+#include "archive.hpp"
 
 namespace rarftp {
 
@@ -40,6 +40,7 @@ class ArchivePasswordError : public std::runtime_error {
 };
 
 struct ArchiveListing {
+  ArchiveFormat format = ArchiveFormat::Rar;
   std::vector<ArchiveEntry> entries;  // Archive order; continuation headers excluded.
   ArchiveFlags flags;
   unsigned volumes = 1;
@@ -54,7 +55,7 @@ struct PlannedEntry {
     Upload,
     Skip,  // Already on the server with the same size.
     MakeDir,
-    Ignore,  // Links, file references, unusable names.
+    Ignore,  // Links, file references, special files, unusable names.
   };
 
   ArchiveEntry entry;
@@ -66,7 +67,7 @@ struct PlannedEntry {
 struct TransferPlan {
   std::string archive_path;
   std::string remote_root;
-  bool solid = false;
+  bool skip_decompresses = false;  // See ArchiveFlags.
   std::vector<PlannedEntry> entries;  // Same order as ArchiveListing::entries.
 
   uint64_t upload_files = 0;

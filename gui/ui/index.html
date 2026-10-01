@@ -17,7 +17,7 @@
         <header class="app-header">
           <h1>rarftp</h1>
           <span id="app-version" class="version muted"></span>
-          <p class="tagline muted">Stream a RAR archive to an FTP server without unpacking it to disk.</p>
+          <p class="tagline muted">Stream a RAR, ZIP, 7z or tar archive to an FTP server without unpacking it to disk.</p>
         </header>
 
         <!-- Archive -->
@@ -34,16 +34,16 @@
               <path d="M10 11h2M10 14h2M10 17h2"/>
             </svg>
             <div class="dz-text">
-              <div id="dz-title" class="dz-title selectable">Drop a RAR archive here</div>
-              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume.</div>
+              <div id="dz-title" class="dz-title selectable">Drop a RAR, ZIP, 7z or tar archive here</div>
+              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume (.part1.rar, .001).</div>
             </div>
             <button type="button" id="btn-choose" class="btn">Choose…</button>
           </div>
           <p id="archive-hint" class="hint warn-text" role="status" hidden></p>
 
           <div class="field">
-            <label for="rar-password">Archive password</label>
-            <input id="rar-password" type="password" autocomplete="new-password" autocapitalize="off"
+            <label for="archive-password">Archive password</label>
+            <input id="archive-password" type="password" autocomplete="new-password" autocapitalize="off"
                    spellcheck="false" placeholder="Only if the archive is encrypted">
           </div>
         </section>

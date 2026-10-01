@@ -21,7 +21,7 @@ namespace rarftp {
 
 struct JobConfig {
   std::string archive;
-  std::optional<std::string> rar_password;
+  std::optional<std::string> archive_password;
   std::string host;
   int port = 21;
   bool active_mode = false;
@@ -57,6 +57,7 @@ class Job {
 
   struct ArchiveInfo {
     std::string name;
+    ArchiveFormat format = ArchiveFormat::Rar;
     uint64_t files = 0;
     uint64_t bytes = 0;
     unsigned volumes = 1;
