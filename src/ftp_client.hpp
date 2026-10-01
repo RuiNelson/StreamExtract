@@ -21,6 +21,7 @@ struct FtpConfig {
   FtpMode mode = FtpMode::Passive;
   std::string user;  // Empty: anonymous login.
   std::string password;
+  bool mention_flags = true;  // Hints in error messages name command-line options ("--mode active").
 };
 
 class FtpError : public std::runtime_error {
@@ -60,6 +61,11 @@ class FtpClient {
   ~FtpClient();
   FtpClient(const FtpClient&) = delete;
   FtpClient& operator=(const FtpClient&) = delete;
+
+  // Polled about once a second while a request waits for the network (and at
+  // every progress update of an upload); returning true aborts the request.
+  // Not set by default, and not thread-safe: set it while no request runs.
+  void set_cancel_check(std::function<bool()> check);
 
   // Logs in and returns the login directory reported by PWD.
   std::string connect();

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>rarftp</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- ===================== Setup view ===================== -->
+    <form id="setup-view" class="view setup" autocomplete="off" novalidate>
+      <div class="scroll">
+        <header class="app-header">
+          <h1>rarftp</h1>
+          <span id="app-version" class="version muted"></span>
+          <p class="tagline muted">Stream a RAR archive to an FTP server without unpacking it to disk.</p>
+        </header>
+
+        <!-- Archive -->
+        <section class="card" aria-labelledby="archive-title">
+          <div class="card-head">
+            <h2 id="archive-title">Archive</h2>
+          </div>
+
+          <div id="dropzone" class="dropzone" data-state="empty">
+            <svg class="dz-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
+              <path d="M14 3v4h4"/>
+              <path d="M10 11h2M10 14h2M10 17h2"/>
+            </svg>
+            <div class="dz-text">
+              <div id="dz-title" class="dz-title selectable">Drop a RAR archive here</div>
+              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume.</div>
+            </div>
+            <button type="button" id="btn-choose" class="btn">Choose…</button>
+          </div>
+          <p id="archive-hint" class="hint warn-text" role="status" hidden></p>
+
+          <div class="field">
+            <label for="rar-password">Archive password</label>
+            <input id="rar-password" type="password" autocomplete="new-password" autocapitalize="off"
+                   spellcheck="false" placeholder="Only if the archive is encrypted">
+          </div>
+        </section>
+
+        <!-- Server -->
+        <section class="card" aria-labelledby="server-title">
+          <div class="card-head">
+            <h2 id="server-title">Server</h2>
+            <div class="card-actions" role="group" aria-label="Saved server settings">
+              <button type="button" id="btn-mem-save" class="btn btn-small">Memory Save</button>
+              <button type="button" id="btn-mem-recall" class="btn btn-small" disabled>Memory Recall</button>
+              <button type="button" id="btn-mem-clear" class="btn btn-small" disabled>Memory Clear</button>
+            </div>
+          </div>
+
+          <div class="grid host-row">
+            <div class="field">
+              <label for="host">Host</label>
+              <input id="host" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+                     spellcheck="false" placeholder="ftp.example.com">
+            </div>
+            <div class="field">
+              <label for="port">Port</label>
+              <input id="port" type="text" inputmode="numeric" autocomplete="off" value="21"
+                     aria-describedby="port-error">
+            </div>
+            <div class="field">
+              <span id="mode-label" class="label">Mode</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="mode-label">
+                <input type="radio" name="mode" id="mode-passive" value="passive" checked>
+                <label for="mode-passive">Passive</label>
+                <input type="radio" name="mode" id="mode-active" value="active">
+                <label for="mode-active">Active</label>
+              </div>
+            </div>
+            <p id="port-error" class="error-text host-row-error" role="alert" hidden></p>
+          </div>
+
+          <div class="grid two">
+            <div class="field">
+              <label for="user">User</label>
+              <input id="user" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+                     spellcheck="false" placeholder="anonymous">
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" type="password" autocomplete="new-password" autocapitalize="off"
+                     spellcheck="false">
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="directory">Directory</label>
+            <input id="directory" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+                   spellcheck="false" placeholder="login directory">
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="mkdir">
+            <span>Create directory if missing</span>
+          </label>
+        </section>
+
+        <!-- Advanced -->
+        <details id="advanced" class="advanced">
+          <summary>Advanced</summary>
+          <div class="advanced-body">
+            <div class="field narrow">
+              <label for="buffer">Buffer (MiB)</label>
+              <input id="buffer" type="text" inputmode="numeric" autocomplete="off" value="64"
+                     aria-describedby="buffer-hint buffer-error">
+            </div>
+            <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB).</p>
+            <p id="buffer-error" class="error-text" role="alert" hidden></p>
+            <label class="check">
+              <input type="checkbox" id="verbose">
+              <span>Verbose log (every FTP command)</span>
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <footer class="footer">
+        <span id="submit-hint" class="muted">Choose an archive and enter a host to continue.</span>
+        <button type="submit" id="btn-upload" class="btn btn-primary" disabled>Upload</button>
+      </footer>
+    </form>
+
+    <!-- ===================== Transfer view ===================== -->
+    <section id="transfer-view" class="view transfer" hidden>
+      <div class="t-head">
+        <h1 class="t-title" id="t-title">
+          <span id="t-archive" class="t-archive selectable"></span>
+          <span id="t-arrow" class="t-arrow" aria-hidden="true" hidden>→</span>
+          <span id="t-target" class="t-target selectable" hidden></span>
+        </h1>
+        <p id="t-sub" class="muted t-sub"></p>
+      </div>
+
+      <div class="phase">
+        <div class="phase-line">
+          <span id="phase-dot" class="dot" aria-hidden="true"></span>
+          <span id="phase-text" class="phase-text">Reading the archive…</span>
+        </div>
+        <ul id="chips" class="chips" aria-label="Archive details"></ul>
+      </div>
+
+      <div id="current-block" class="block">
+        <div class="block-head">
+          <span id="cur-label" class="block-label">File</span>
+          <span id="cur-name" class="block-name selectable">-</span>
+        </div>
+        <div id="cur-bar" class="bar" role="progressbar" aria-label="Current file" aria-valuemin="0"
+             aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        <div id="cur-stats" class="block-stats muted"></div>
+      </div>
+
+      <div id="total-block" class="block">
+        <div class="block-head">
+          <span class="block-label">Archive total</span>
+        </div>
+        <div id="total-bar" class="bar" role="progressbar" aria-label="Archive total" aria-valuemin="0"
+             aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        <div id="total-stats" class="block-stats muted"></div>
+        <div id="total-files" class="block-stats muted"></div>
+      </div>
+
+      <dl id="status-row" class="status-row">
+        <div class="stat" id="stat-upload">
+          <dt>Upload <span class="muted">(avg)</span></dt>
+          <dd id="stat-upload-value">-</dd>
+        </div>
+        <div class="stat">
+          <dt>Unpack</dt>
+          <dd id="stat-unpack-value">-</dd>
+        </div>
+        <div class="stat" id="stat-buffer"
+             title="Full: the network is the bottleneck. Empty: the CPU is.">
+          <dt>Buffer</dt>
+          <dd><span id="stat-buffer-value">-</span>
+            <span id="buffer-meter" class="meter" aria-hidden="true"><span></span></span>
+          </dd>
+        </div>
+        <div class="stat">
+          <dt>Elapsed</dt>
+          <dd id="stat-elapsed-value">00:00:00</dd>
+        </div>
+      </dl>
+
+      <section class="log-panel" aria-label="Log">
+        <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
+        <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
+      </section>
+
+      <div class="t-bottom">
+        <div id="t-actions" class="t-actions">
+          <button type="button" id="btn-cancel" class="btn">Cancel</button>
+        </div>
+
+        <div id="t-result" class="result" hidden>
+          <div id="result-banner" class="banner" data-status="">
+            <span id="result-icon" class="banner-icon" aria-hidden="true"></span>
+            <div class="banner-text">
+              <div id="result-title" class="banner-title"></div>
+              <div id="result-error" class="banner-error selectable" hidden></div>
+            </div>
+            <button type="button" id="btn-new" class="btn btn-primary">New transfer</button>
+          </div>
+          <div id="result-summary" class="summary selectable"></div>
+          <details id="result-problems" class="problems" hidden>
+            <summary id="problems-summary">Warnings and errors</summary>
+            <div id="problems-list" class="problems-list selectable"></div>
+            <p id="problems-dropped" class="hint muted" hidden></p>
+          </details>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Screen-reader announcements for phase changes and results -->
+  <div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
+  <!-- Toasts -->
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <!-- ===================== Dialogs ===================== -->
+  <dialog id="dlg-memory" class="dialog" aria-labelledby="dlg-memory-title">
+    <form method="dialog">
+      <h2 id="dlg-memory-title">Store the login unencrypted?</h2>
+      <p>The user name and password will be saved as plain text in <code id="dlg-memory-path" class="path"></code>.</p>
+      <div class="dialog-actions">
+        <button type="submit" value="store" class="btn">Store login</button>
+        <button type="submit" value="dont" class="btn btn-primary" autofocus>Don't store login</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-password" class="dialog" aria-labelledby="dlg-password-title">
+    <form id="pw-form" method="dialog">
+      <h2 id="dlg-password-title">Password required</h2>
+      <p id="pw-text"></p>
+      <div class="field">
+        <label for="pw-input">Archive password</label>
+        <input id="pw-input" type="password" autocomplete="new-password" autocapitalize="off"
+               spellcheck="false" aria-describedby="pw-error" autofocus>
+        <p id="pw-error" class="error-text" role="alert" hidden></p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="pw-cancel" class="btn">Cancel</button>
+        <button type="submit" id="pw-unlock" class="btn btn-primary">Unlock</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-quit" class="dialog" aria-labelledby="dlg-quit-title">
+    <form method="dialog">
+      <h2 id="dlg-quit-title">Cancel the upload and quit?</h2>
+      <p>The incomplete file on the server will be deleted.</p>
+      <div class="dialog-actions">
+        <button type="submit" value="quit" class="btn">Cancel and quit</button>
+        <button type="submit" value="keep" class="btn btn-primary" autofocus>Keep uploading</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

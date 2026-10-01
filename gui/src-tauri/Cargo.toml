@@ -1,0 +1,26 @@
+[package]
+name = "rarftp-gui"
+version = "2.0.0"
+description = "Desktop front-end for rarftp: uploads the contents of a RAR archive to an FTP server without extracting it to disk"
+authors = ["Rui Nelson"]
+license = "MIT"
+edition = "2021"
+publish = false
+
+[lib]
+name = "rarftp_gui_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

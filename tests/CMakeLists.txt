@@ -12,10 +12,27 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(rarftp_tests
   test_main.cpp
+  test_json.cpp
   test_pipe.cpp
+  test_plan.cpp
   test_progress.cpp
   test_remote_path.cpp
+  test_summary.cpp
   test_text.cpp)
 target_link_libraries(rarftp_tests PRIVATE rarftp_core doctest::doctest)
 
 add_test(NAME unit COMMAND rarftp_tests)
+
+if(TARGET rarftpcore)
+  # C-ABI smoke test: only the public header and the shared library, exactly
+  # what rarftp-gui sees.
+  add_executable(rarftpcore_tests test_capi.cpp)
+  target_include_directories(rarftpcore_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+  target_link_libraries(rarftpcore_tests PRIVATE rarftpcore doctest::doctest)
+  if(WIN32)
+    # No rpath on Windows: the DLL has to sit next to the executable.
+    add_custom_command(TARGET rarftpcore_tests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rarftpcore> $<TARGET_FILE_DIR:rarftpcore_tests>)
+  endif()
+  add_test(NAME capi COMMAND rarftpcore_tests)
+endif()

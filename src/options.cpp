@@ -2,20 +2,9 @@
 
 #include <cstdio>
 
-#include <fmt/format.h>
 #include <CLI/CLI.hpp>
 
-#include "rar_archive.hpp"
-
-#ifndef RARFTP_VERSION
-#define RARFTP_VERSION "0.0.0"
-#endif
-
 namespace rarftp {
-
-std::string version_string() {
-  return fmt::format("rarftp {} (UnRAR {}, libcurl {})", RARFTP_VERSION, unrar_version(), curl_version_string());
-}
 
 ParsedOptions parse_options(int argc, char** argv) {
   Options o;

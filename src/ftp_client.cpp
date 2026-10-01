@@ -84,6 +84,7 @@ struct FtpClient::Impl {
   // State of the request in progress, used by the callbacks.
   const ReadFn* read = nullptr;
   const ProgressFn* progress = nullptr;
+  std::function<bool()> cancel_check;
   std::string* listing = nullptr;
   bool source_aborted = false;
   uint64_t sent = 0;
@@ -144,6 +145,9 @@ struct FtpClient::Impl {
     if (self->progress != nullptr && !(*self->progress)(self->sent)) {
       return 1;  // CURLE_ABORTED_BY_CALLBACK.
     }
+    if (self->cancel_check && self->cancel_check()) {
+      return 1;
+    }
     return 0;
   }
 
@@ -195,6 +199,11 @@ struct FtpClient::Impl {
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &Impl::on_write);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
+    if (cancel_check) {
+      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &Impl::on_progress);
+      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
+    }
     if (verbose) {
       curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
       curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, &Impl::on_debug);
@@ -219,8 +228,9 @@ struct FtpClient::Impl {
       message += fmt::format(" (server said: {})", last_reply);
     }
     if (logged_in && is_data_connection_error(code)) {
-      message += config.mode == FtpMode::Passive ? " - the data connection failed; try --mode active"
-                                                 : " - the data connection failed; try --mode passive";
+      const char* other = config.mode == FtpMode::Passive ? "active" : "passive";
+      message += config.mention_flags ? fmt::format(" - the data connection failed; try --mode {}", other)
+                                      : fmt::format(" - the data connection failed; try {} mode", other);
     }
     return message;
   }
@@ -261,6 +271,8 @@ FtpClient::~FtpClient() {
     curl_easy_cleanup(impl_->curl);
   }
 }
+
+void FtpClient::set_cancel_check(std::function<bool()> check) { impl_->cancel_check = std::move(check); }
 
 std::string FtpClient::connect() {
   impl_->prepare(impl_->base_url + "/");

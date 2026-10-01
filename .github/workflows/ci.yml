@@ -108,15 +108,158 @@ jobs:
           path: dist
           if-no-files-found: error
 
+  gui:
+    name: GUI (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-22.04
+            configure: >-
+              -G Ninja
+              -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+            tauri: --bundles appimage
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+            configure: >-
+              -G Ninja
+              -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+            tauri: --bundles appimage
+          - name: macos-universal
+            os: macos-latest
+            configure: >-
+              -G Ninja
+              "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            tauri: --target universal-apple-darwin --bundles app
+          - name: windows-x64
+            os: windows-latest
+            # Static CRT everywhere: no VC++ redistributable needed. Portable
+            # build: rarftp-gui.exe next to rarftpcore.dll, no installer.
+            configure: >-
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+              -DCURL_STATIC_CRT=ON
+            rustflags: -C target-feature=+crt-static
+            tauri: --no-bundle
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAURI_CLI_VERSION: "2.12.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev file libfuse2
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache tauri-cli
+        id: tauri-cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri*
+          key: tauri-cli-${{ env.TAURI_CLI_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install tauri-cli
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "${TAURI_CLI_VERSION}" --locked
+
+      - name: Fetch UnRAR sources
+        run: |
+          curl -fsSLO "https://www.rarlab.com/rar/unrarsrc-${UNRAR_VERSION}.tar.gz"
+          actual="$(cmake -E sha256sum "unrarsrc-${UNRAR_VERSION}.tar.gz" | cut -d' ' -f1)"
+          test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
+          mkdir unrarsrc
+          tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+
+      - name: Configure the library
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DRARFTP_BUNDLED_CURL=ON
+          -DRARFTP_BUILD_LIBRARY=ON
+          ${{ matrix.configure }}
+
+      - name: Build the library
+        run: cmake --build build --config Release --target rarftpcore rarftpcore_tests
+
+      - name: Library tests
+        run: ctest --test-dir build --build-config Release --output-on-failure -R capi
+
+      - name: GUI tests
+        working-directory: gui/src-tauri
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo test --locked
+
+      - name: Build the GUI
+        working-directory: gui
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          # Lets linuxdeploy resolve the library while it builds the AppImage.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build
+        run: cargo tauri build ${{ matrix.tauri }}
+
+      - name: Stage files
+        run: |
+          mkdir dist
+          case "${{ matrix.name }}" in
+            linux-*)
+              cp gui/src-tauri/target/release/bundle/appimage/*.AppImage dist/rarftp-gui.AppImage
+              chmod +x dist/rarftp-gui.AppImage
+              # The library must be inside the AppImage and resolvable from the executable.
+              (cd dist && ./rarftp-gui.AppImage --appimage-extract >/dev/null)
+              ldd dist/squashfs-root/usr/bin/rarftp-gui | tee /dev/stderr | grep -q "rarftpcore.so => .*squashfs-root"
+              rm -rf dist/squashfs-root
+              ;;
+            macos-*)
+              app=gui/src-tauri/target/universal-apple-darwin/release/bundle/macos/rarftp-gui.app
+              otool -L "$app/Contents/MacOS/rarftp-gui" "$app/Contents/Frameworks/librarftpcore.dylib"
+              lipo -info "$app/Contents/MacOS/rarftp-gui" "$app/Contents/Frameworks/librarftpcore.dylib"
+              codesign --verify --deep --strict "$app"
+              cp -R "$app" dist/
+              ;;
+            windows-*)
+              cp gui/src-tauri/target/release/rarftp-gui.exe build/Release/rarftpcore.dll dist/
+              ;;
+          esac
+          cp LICENSE README.md THIRD_PARTY_NOTICES.md dist/
+          # A tarball keeps the executable bits and the .app layout through the artifact upload.
+          tar -cf gui.tar -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-${{ matrix.name }}
+          path: gui.tar
+          if-no-files-found: error
+
   package:
     name: Package .rar
-    needs: build
+    needs: [build, gui]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: bin-*
           path: bin
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gui-*
+          path: gui
 
       - name: Get the RAR archiver
         run: |
@@ -131,6 +274,9 @@ jobs:
           mkdir out
           for name in linux-x64 linux-arm64 macos-universal windows-x64; do
             (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-${name}.rar" .)
+            mkdir "gui/${name}"
+            tar -xf "gui/gui-${name}/gui.tar" -C "gui/${name}"
+            (cd "gui/${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-gui-${name}.rar" .)
           done
           ls -l out
 
@@ -153,4 +299,24 @@ jobs:
         with:
           name: rarftp-windows-x64
           path: out/rarftp-windows-x64.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-gui-linux-x64
+          path: out/rarftp-gui-linux-x64.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-gui-linux-arm64
+          path: out/rarftp-gui-linux-arm64.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-gui-macos-universal
+          path: out/rarftp-gui-macos-universal.rar
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rarftp-gui-windows-x64
+          path: out/rarftp-gui-windows-x64.rar
           if-no-files-found: error
