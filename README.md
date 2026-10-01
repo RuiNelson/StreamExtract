@@ -89,8 +89,10 @@ The builds are portable: there is no installer.
 ## Command line (rarftp)
 
 ```bash
-rarftp --file archive.rar --host ftp.example.com --port 21 --mode passive \
-       --user username --password "password" --directory "/destination/dir"
+rarftp --file archive.rar \
+       --host ftp.example.com --port 21 --mode passive \
+       --user username --password "password" \
+       --directory "/destination/dir" --mkdir
 ```
 
 Multi-volume and password-protected archives are supported:
