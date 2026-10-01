@@ -315,22 +315,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: rarftp-linux-x64
-          path: out/rarftp-linux-x64.rar
+          path: out/rarftp-cli-linux-x64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: rarftp-linux-arm64
-          path: out/rarftp-linux-arm64.rar
+          path: out/rarftp-cli-linux-arm64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: rarftp-macos-universal
-          path: out/rarftp-macos-universal.rar
+          path: out/rarftp-cli-macos-universal.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: rarftp-windows-x64
-          path: out/rarftp-windows-x64.rar
+          path: out/rarftp-cli-windows-x64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
