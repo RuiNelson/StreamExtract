@@ -659,6 +659,8 @@
     const fill = meter.firstElementChild;
     const width = `${(r * 100).toFixed(0)}%`;
     if (fill.style.width !== width) fill.style.width = width;
+    // Red when empty, through yellow at half capacity, to green when full.
+    fill.style.backgroundColor = `hsl(${r * 120}, 75%, 45%)`;
   }
 
   function phaseLabel(snap) {

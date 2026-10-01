@@ -768,8 +768,8 @@ input[type="checkbox"] {
   display: block;
   width: 0;
   height: 100%;
-  background: var(--accent);
-  transition: width 0.2s linear;
+  background: hsl(0, 75%, 45%);
+  transition: width 0.2s linear, background-color 0.2s linear;
 }
 
 .log-panel {
