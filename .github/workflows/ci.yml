@@ -305,7 +305,7 @@ jobs:
           chmod +x bin/bin-linux-x64/rarftp bin/bin-linux-arm64/rarftp bin/bin-macos-universal/rarftp
           mkdir out
           for name in linux-x64 linux-arm64 macos-universal windows-x64; do
-            (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-${name}.rar" .)
+            (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-cli-${name}.rar" .)
             mkdir "gui/${name}"
             tar -xf "gui/gui-${name}/gui.tar" -C "gui/${name}"
             (cd "gui/${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-gui-${name}.rar" .)
