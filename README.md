@@ -183,10 +183,16 @@ is linked statically.
 
 ## How it works
 
-```
- extractor thread                                   uploader thread
- UnRAR RAR_TEST / 7-Zip / libarchive ──(1 MiB blocks)──▶ [ bounded buffer ] ──▶ libcurl STOR
- (checks CRC/BLAKE2, CRC-32)                                                    (one control connection)
+```mermaid
+flowchart LR
+    subgraph extractor["extractor thread"]
+        dec["UnRAR RAR_TEST / 7-Zip / libarchive<br/>(checks CRC/BLAKE2, CRC-32)"]
+    end
+    buf[("bounded buffer<br/>(64 MiB by default)")]
+    subgraph uploader["uploader thread"]
+        stor["libcurl STOR<br/>(one control connection)"]
+    end
+    dec -->|"1 MiB blocks"| buf --> stor
 ```
 
 RAR archives are read with UnRAR's test mode, 7z archives with 7-Zip's own
