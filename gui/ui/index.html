@@ -151,6 +151,11 @@
         <ul id="chips" class="chips" aria-label="Archive details"></ul>
       </div>
 
+      <section class="log-panel" aria-label="Log">
+        <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
+        <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
+      </section>
+
       <div id="current-block" class="block">
         <div class="block-head">
           <span id="cur-label" class="block-label">File</span>
@@ -192,11 +197,6 @@
           <dd id="stat-elapsed-value">00:00:00</dd>
         </div>
       </dl>
-
-      <section class="log-panel" aria-label="Log">
-        <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
-        <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
-      </section>
 
       <div class="t-bottom">
         <div id="t-actions" class="t-actions">
