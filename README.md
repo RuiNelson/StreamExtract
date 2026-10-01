@@ -42,6 +42,9 @@ the decompressed data arrives in a callback and goes into the buffer, which the
 FTP upload drains. A file only counts as uploaded after UnRAR confirmed its
 checksum; on any error the incomplete remote file is deleted.
 
+The engine is also built as a shared library (`librarftpcore`, C API in
+`src/capi/rarftp.h`), which the [GUI](#gui-rarftp-gui) uses.
+
 ## Usage
 
 | Option | Description |
@@ -173,7 +176,104 @@ The binary is `build/rarftp`. UnRAR is always linked statically into it.
 Developed and tested on macOS. The GitHub Actions workflow
 (`.github/workflows/ci.yml`) builds and tests Linux (x64 and arm64), macOS (universal)
 and Windows (x64), always with libcurl built from source and linked
-statically (Windows does not ship it), and produces one `.rar` per platform.
+statically (Windows does not ship it), and produces one `.rar` per platform,
+for the command line and for the GUI.
+
+## GUI (rarftp-gui)
+
+`rarftp-gui` is a desktop app for Windows, macOS and Linux that does what
+`rarftp` does, from a window instead of a command line. It runs the same engine
+(through the `librarftpcore` shared library) and is built with
+[Tauri](https://tauri.app); the interface is plain HTML, CSS and JavaScript, with
+no JavaScript framework.
+
+Releases include portable builds, next to the command-line ones:
+
+| Platform | Asset | Contents |
+|---|---|---|
+| Windows 10/11 (x64) | `rarftp-gui-windows-x64.rar` | `rarftp-gui.exe` and `rarftpcore.dll` (keep them together; uses the WebView2 runtime that Windows ships) |
+| macOS 12+ (Intel and Apple Silicon) | `rarftp-gui-macos-universal.rar` | `rarftp-gui.app` |
+| Linux (x64, glibc 2.35+) | `rarftp-gui-linux-x64.rar` | `rarftp-gui.AppImage` (needs FUSE 2, e.g. `libfuse2`) |
+| Linux (arm64, glibc 2.35+) | `rarftp-gui-linux-arm64.rar` | `rarftp-gui.AppImage` |
+
+The window offers:
+
+- **Archive**: drop a `.rar` on the window (the first volume, for multi-volume
+  sets) or pick it with a file dialog. When the archive is encrypted and no
+  password was typed in, the app asks for it, and asks again if it was wrong.
+- **Server**: host, port, passive or active mode, user and password (anonymous
+  without a user), destination directory and *Create directory if missing*.
+  *Advanced* has the buffer size and the verbose log.
+- **Memory Save**, **Memory Recall** and **Memory Clear**: keep the server
+  settings between runs in `~/.config/rarftp-gui/memory.ini` (under the home
+  directory on every OS), a **plain text** file. The first time a login with a
+  user name is saved, the app asks whether the user name and password may be
+  stored unencrypted; if not, they are left out (Memory Clear also forgets the
+  answer). The archive password is never stored.
+- **Progress**: the current step, the current file and the whole archive with
+  their ETAs, the upload and decompression speeds, the buffer fill, a live log,
+  and the same final summary as the command line. **Cancel** stops the transfer
+  and removes the incomplete remote file; closing the window during a transfer
+  asks for confirmation first.
+
+### Building the GUI
+
+Besides what the command-line build needs, install Rust
+([rustup](https://rustup.rs)) and the Tauri CLI:
+
+```bash
+cargo install tauri-cli --version "^2" --locked
+```
+
+From the repository root, build the shared library, then the app:
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRARFTP_BUILD_LIBRARY=ON
+cmake --build build
+
+cd gui
+cargo tauri build     # macOS: src-tauri/target/release/bundle/macos/rarftp-gui.app
+cargo tauri dev       # or: run the app without bundling it
+```
+
+The library is `build/librarftpcore.dylib` (`.so` on Linux, `rarftpcore.dll` on
+Windows). UnRAR and {fmt} are linked statically into it, and it exports only the
+`rarftp_*` functions of `src/capi/rarftp.h`; the `rarftp` executable does not use
+it. Add `-DRARFTP_BUNDLED_CURL=ON` to link libcurl statically too, which makes
+the library self-contained instead of relying on the system's libcurl.
+
+The Rust build looks for the library in `build/` (and `build/Release`); set
+`RARFTP_LIB_DIR` to the directory that holds it to use another build directory.
+The bundling settings (`gui/src-tauri/tauri.<os>.conf.json`) also name the
+library under `../../build/`, so with another directory override that path too,
+with the Tauri CLI's `--config` (a JSON merge into its configuration, handed to
+the build script as well). On macOS:
+
+```bash
+RARFTP_LIB_DIR=/path/to/dir cargo tauri build \
+    --config '{"bundle":{"macOS":{"frameworks":["/path/to/dir/librarftpcore.dylib"]}}}'
+```
+
+Linux needs the WebKitGTK development packages that Tauri documents in its
+[prerequisites](https://v2.tauri.app/start/prerequisites/#linux); on
+Debian/Ubuntu, for example, `libwebkit2gtk-4.1-dev` and its companions:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
+                 libayatana-appindicator3-dev librsvg2-dev
+```
+
+On Linux `cargo tauri build` makes an AppImage, on Windows use
+`cargo tauri build --no-bundle` and keep `rarftpcore.dll` next to
+`src-tauri/target/release/rarftp-gui.exe` (the build copies it there). The CI
+builds all of them (see below).
+
+The macOS app is signed ad hoc, not notarized, so Gatekeeper blocks it once it
+has been downloaded to another Mac. Remove the quarantine attribute and open it:
+
+```bash
+xattr -dr com.apple.quarantine rarftp-gui.app
+```
 
 ## Testing
 
@@ -195,6 +295,20 @@ python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar
 `--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
 container address is reachable directly; Docker Desktop only publishes ports.
 
+With the library built (`-DRARFTP_BUILD_LIBRARY=ON`), `ctest` also runs a
+smoke test of its C API, and `--lib` adds tests that drive the library the way
+the GUI does (through its C API, with `ctypes`): uploads, re-runs, multi-volume
+and encrypted archives, the password prompt, errors and cancelling. They are
+named `lib_*`:
+
+```bash
+python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar \
+        --lib build/librarftpcore.dylib -k lib_
+```
+
+The Rust side has its own unit tests, which link the built library:
+`cargo test --manifest-path gui/src-tauri/Cargo.toml`.
+
 ## Libraries
 
 | Library | Use | License |
@@ -205,10 +319,12 @@ container address is reachable directly; Docker Desktop only publishes ports.
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |
 | [doctest](https://github.com/doctest/doctest) | Unit tests | MIT |
+| [Tauri](https://tauri.app) | Desktop app (GUI only), with its Rust dependencies | MIT or Apache-2.0 |
 
 ## License
 
 This project is licensed under the MIT license (see `LICENSE`). Binaries also
 contain UnRAR, whose license allows free use in any software handling RAR
 archives but forbids using its code to re-create the RAR compression
-algorithm; see `THIRD_PARTY_NOTICES.md`.
+algorithm; see `THIRD_PARTY_NOTICES.md`, which also covers what only the GUI
+contains (Tauri and its Rust dependencies).
