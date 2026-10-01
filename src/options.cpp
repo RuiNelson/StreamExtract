@@ -12,15 +12,17 @@ ParsedOptions parse_options(int argc, char** argv) {
   std::string user;
   std::string password;
   std::string directory;
-  std::string rar_password;
+  std::string archive_password;
 
-  CLI::App app{"Uploads the contents of a RAR archive straight to an FTP server, without extracting it to disk.",
-               "rarftp"};
+  CLI::App app{
+      "Uploads the contents of a RAR, ZIP, 7z or tar archive straight to an FTP server, without extracting it "
+      "to disk.",
+      "rarftp"};
   argv = app.ensure_utf8(argv);
   app.set_version_flag("--version", version_string());
   app.get_formatter()->column_width(28);
 
-  app.add_option("--file", o.file, "RAR archive (the first volume of a multi-volume set)")
+  app.add_option("--file", o.file, "RAR, ZIP, 7z or tar archive (the first volume of a multi-volume set)")
       ->required()
       ->check(CLI::ExistingFile.description(""))
       ->type_name("PATH");
@@ -43,9 +45,12 @@ ParsedOptions parse_options(int argc, char** argv) {
       app.add_option("--directory", directory, "Remote destination directory (default: the login directory)")
           ->type_name("DIR");
   app.add_flag("--mkdir", o.mkdir, "Create the destination directory if missing (one MKD, not recursive)");
-  CLI::Option* rar_password_option =
-      app.add_option("--rar-password", rar_password, "Password of an encrypted archive; asked for when needed")
+  CLI::Option* archive_password_option =
+      app.add_option("--archive-password", archive_password,
+                     "Password of an encrypted archive; asked for when needed")
           ->type_name("PASSWORD");
+  // Former name, kept as an alias (hidden from the help).
+  CLI::Option* rar_password_option = app.add_option("--rar-password", archive_password)->group("");
   app.add_flag("--no-tui", o.no_tui, "Plain log output instead of the full-screen interface");
   app.add_flag("--verbose", o.verbose, "Log every FTP command and reply");
   app.add_option("--buffer", o.buffer_mib, "Memory buffer between decompression and upload, in MiB")
@@ -81,8 +86,12 @@ ParsedOptions parse_options(int argc, char** argv) {
     }
     o.directory = directory;
   }
-  if (rar_password_option->count() > 0) {
-    o.rar_password = rar_password;
+  if (archive_password_option->count() > 0 && rar_password_option->count() > 0) {
+    std::fprintf(stderr, "--rar-password is another name for --archive-password: pass only one\n");
+    return {std::nullopt, 2};
+  }
+  if (archive_password_option->count() > 0 || rar_password_option->count() > 0) {
+    o.archive_password = archive_password;
   }
   return {o, 0};
 }

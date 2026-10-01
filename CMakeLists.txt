@@ -7,7 +7,7 @@ endif()
 
 project(rarftp
   VERSION 2.0.0
-  DESCRIPTION "Uploads the contents of a RAR archive to an FTP server without extracting it to disk"
+  DESCRIPTION "Uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
   LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -32,12 +32,15 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(UnRAR)
 include(Dependencies)
+include(LibArchive)
 
 # The engine: everything but the command line and its front-ends. It is linked
 # into the rarftp executable, the tests and the rarftpcore shared library.
 add_library(rarftp_core STATIC
   src/app_version.cpp
+  src/archive.cpp
   src/ftp_client.cpp
+  src/libarchive_reader.cpp
   src/logger.cpp
   src/plan.cpp
   src/progress.cpp
@@ -52,7 +55,10 @@ target_include_directories(rarftp_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rarftp_core PRIVATE RARFTP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(rarftp_core
   PUBLIC fmt::fmt
-  PRIVATE unrar::unrar CURL::libcurl Threads::Threads)
+  PRIVATE unrar::unrar rarftp::libarchive CURL::libcurl Threads::Threads)
+if(APPLE)
+  target_link_libraries(rarftp_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.
+endif()
 
 add_executable(rarftp
   src/main.cpp
@@ -64,8 +70,8 @@ target_link_libraries(rarftp PRIVATE rarftp_core CLI11::CLI11 ftxui::component f
 set(_rarftp_targets rarftp_core rarftp)
 
 if(RARFTP_BUILD_LIBRARY)
-  # C API for rarftp-gui. UnRAR, libcurl and fmt are linked statically into it
-  # and only the rarftp_* functions are exported.
+  # C API for rarftp-gui. UnRAR, libarchive, libcurl and fmt are linked
+  # statically into it and only the rarftp_* functions are exported.
   add_library(rarftpcore SHARED src/capi/capi.cpp src/capi/job.cpp)
   target_link_libraries(rarftpcore PRIVATE rarftp_core Threads::Threads)
   target_compile_definitions(rarftpcore PRIVATE RARFTP_BUILDING_LIBRARY)

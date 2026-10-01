@@ -55,8 +55,8 @@ rarftp_job* rarftp_job_start(const rarftp_job_config* config) {
 
     rarftp::JobConfig copy;
     copy.archive = copy_string(config->archive);
-    if (config->rar_password != nullptr) {
-      copy.rar_password = std::string(config->rar_password);
+    if (config->archive_password != nullptr) {
+      copy.archive_password = std::string(config->archive_password);
     }
     copy.host = copy_string(config->host);
     copy.port = config->port;

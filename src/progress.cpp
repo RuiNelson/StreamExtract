@@ -12,6 +12,24 @@ void Progress::set_totals(uint64_t files, uint64_t bytes, uint64_t skipped_files
   start_ = std::chrono::steady_clock::now();
 }
 
+void Progress::set_streamed() { totals_known_ = false; }
+
+void Progress::add_upload(uint64_t bytes) {
+  ++total_files_;
+  total_bytes_ += bytes;
+}
+
+void Progress::add_skipped(uint64_t bytes) {
+  ++files_skipped_;
+  skipped_bytes_ += bytes;
+}
+
+void Progress::set_totals_known() { totals_known_ = true; }
+
+void Progress::set_archive_size(uint64_t size) { archive_size_ = size; }
+
+void Progress::set_archive_read(uint64_t read) { archive_read_ = read; }
+
 void Progress::set_buffer_capacity(uint64_t capacity) { buffer_capacity_ = capacity; }
 
 void Progress::set_buffer_used(uint64_t used) { buffer_used_ = used; }
@@ -56,6 +74,9 @@ Progress::Snapshot Progress::snapshot() const {
   }
   s.total_files = total_files_;
   s.total_bytes = total_bytes_;
+  s.totals_known = totals_known_;
+  s.archive_read = archive_read_;
+  s.archive_size = archive_size_;
   s.unpacked_bytes = unpacked_bytes_;
   s.files_skipped = files_skipped_;
   s.skipped_bytes = skipped_bytes_;

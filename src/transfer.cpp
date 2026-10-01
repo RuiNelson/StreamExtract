@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -12,7 +13,7 @@
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "progress.hpp"
-#include "rar_archive.hpp"
+#include "archive.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -43,6 +44,9 @@ Transfer::~Transfer() {
 
 void Transfer::start() {
   progress_.set_totals(plan_.upload_files, plan_.upload_bytes, plan_.skip_files, plan_.skip_bytes);
+  if (plan_.streamed) {
+    progress_.set_streamed();
+  }
   started_ = std::chrono::steady_clock::now();
   running_ = 2;
   extractor_ = std::thread([this] { run_extractor(); });
@@ -70,6 +74,9 @@ TransferResult Transfer::wait() {
   result.files_uploaded = files_uploaded_;
   result.bytes_uploaded = bytes_uploaded_;
   result.seconds = std::chrono::duration<double>(stopped_ - started_).count();
+  result.skipped_files = plan_.streamed ? skipped_files_ : plan_.skip_files;
+  result.skipped_bytes = plan_.streamed ? skipped_bytes_ : plan_.skip_bytes;
+  result.ignored = plan_.streamed ? ignored_ : plan_.ignored;
   if (!error_.empty()) {
     result.status = TransferResult::Status::Failed;
     result.error = error_;
@@ -95,17 +102,19 @@ void Transfer::fail(const std::string& message) {
   pipe_.abort();
 }
 
-std::string Transfer::describe_rar_error(int code, const std::string& what) const {
+std::string Transfer::describe_archive_error(const ArchiveError& error, const std::string& what) const {
   if (!missing_volume_.empty()) {
     return fmt::format("volume not found: {}", missing_volume_);
   }
-  if (rar_is_bad_password(code)) {
-    return fmt::format("{}: wrong password", what);
+  switch (error.kind()) {
+    case ArchiveError::Kind::BadPassword:
+      return fmt::format("{}: wrong password", what);
+    case ArchiveError::Kind::MissingPassword:
+      return fmt::format("{} is encrypted: pass --archive-password", what);
+    case ArchiveError::Kind::Other:
+      break;
   }
-  if (rar_is_missing_password(code)) {
-    return fmt::format("{} is encrypted: pass --rar-password", what);
-  }
-  return fmt::format("{}: {}", what, rar_error_message(code));
+  return fmt::format("{}: {}", what, error.what());
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +123,8 @@ std::string Transfer::describe_rar_error(int code, const std::string& what) cons
 void Transfer::run_extractor() {
   try {
     extract();
-  } catch (const RarError& error) {
-    fail(describe_rar_error(error.code(), "cannot read the archive"));
+  } catch (const ArchiveError& error) {
+    fail(describe_archive_error(error, "cannot read the archive"));
   } catch (const std::exception& error) {
     fail(fmt::format("cannot read the archive: {}", error.what()));
   }
@@ -129,7 +138,7 @@ void Transfer::run_extractor() {
 
 void Transfer::extract() {
   std::vector<uint8_t> block;
-  bool discard = false;  // Decompressing a skipped file of a solid archive.
+  bool discard = false;  // Decompressing a skipped file (solid archive).
 
   const auto flush = [&]() -> bool {
     if (block.empty()) {
@@ -144,12 +153,15 @@ void Transfer::extract() {
     return ok;
   };
 
-  RarCallbacks callbacks;
+  ArchiveCallbacks callbacks;
   callbacks.on_data = [&](const uint8_t* data, size_t size) -> bool {
     if (cancel_requested_ || pipe_.aborted()) {
       return false;
     }
     progress_.add_unpacked(size);
+    if (reading_ != nullptr) {
+      progress_.set_archive_read(reading_->bytes_read());
+    }
     if (discard) {
       return true;
     }
@@ -172,6 +184,11 @@ void Transfer::extract() {
   callbacks.on_missing_volume = [&](const std::string& volume) { missing_volume_ = volume; };
   callbacks.on_large_dictionary = [](uint64_t, uint64_t) { return true; };  // Warned while listing.
 
+  if (plan_.streamed) {
+    extract_streamed(callbacks, flush);
+    return;
+  }
+
   // Nothing after the last file to upload needs decompressing: stop reading
   // there (skipped files of a solid archive would otherwise be unpacked for
   // nothing) and only create the remaining directories.
@@ -184,16 +201,17 @@ void Transfer::extract() {
 
   size_t index = 0;
   if (end_of_uploads > 0) {
-    RarArchive archive(plan_.archive_path, RarArchive::Mode::Extract, callbacks);
+    const std::unique_ptr<Archive> archive = open_archive(plan_.archive_path, Archive::Mode::Extract, callbacks);
     ArchiveEntry entry;
-    while (index < end_of_uploads && archive.next(entry)) {
+    while (index < end_of_uploads && archive->next(entry)) {
       if (cancel_requested_ || pipe_.aborted()) {
         return;
       }
       if (entry.split_before) {  // Continuation of a split file handled earlier.
-        const int code = archive.skip();
-        if (code != 0) {
-          fail(describe_rar_error(code, entry.name));
+        try {
+          archive->skip();
+        } catch (const ArchiveError& error) {
+          fail(describe_archive_error(error, entry.name));
           return;
         }
         continue;
@@ -205,28 +223,27 @@ void Transfer::extract() {
       const size_t current = index++;
       const PlannedEntry& planned = plan_.entries[current];
 
-      int code = 0;
-      switch (planned.action) {
-        case PlannedEntry::Action::MakeDir: {
-          PipeMessage message;
-          message.kind = PipeMessage::Kind::EnsureDir;
-          message.entry = current;
-          if (!pipe_.push(std::move(message))) {
-            return;
+      try {
+        switch (planned.action) {
+          case PlannedEntry::Action::MakeDir: {
+            PipeMessage message;
+            message.kind = PipeMessage::Kind::EnsureDir;
+            message.entry = current;
+            if (!pipe_.push(std::move(message))) {
+              return;
+            }
+            archive->skip();
+            break;
           }
-          code = archive.skip();
-          break;
-        }
-        case PlannedEntry::Action::Upload: {
-          progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
-          PipeMessage begin;
-          begin.kind = PipeMessage::Kind::FileBegin;
-          begin.entry = current;
-          if (!pipe_.push(std::move(begin))) {
-            return;
-          }
-          code = archive.test();
-          if (code == 0) {
+          case PlannedEntry::Action::Upload: {
+            progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
+            PipeMessage begin;
+            begin.kind = PipeMessage::Kind::FileBegin;
+            begin.entry = current;
+            if (!pipe_.push(std::move(begin))) {
+              return;
+            }
+            archive->test();
             if (!flush()) {
               return;
             }
@@ -236,31 +253,31 @@ void Transfer::extract() {
             if (!pipe_.push(std::move(end))) {
               return;
             }
+            break;
           }
-          break;
+          case PlannedEntry::Action::Skip:
+            if (plan_.skip_decompresses) {
+              // It has to be decompressed anyway. test() (instead of skip())
+              // keeps cancellation responsive.
+              progress_.set_activity(fmt::format(
+                  "Skipping {} (already on the server), decompressing it to reach the next files",
+                  planned.relative));
+              discard = true;
+              archive->test();
+              discard = false;
+            } else {
+              archive->skip();
+            }
+            break;
+          case PlannedEntry::Action::Ignore:
+            archive->skip();
+            break;
         }
-        case PlannedEntry::Action::Skip:
-          if (plan_.solid) {
-            // Solid archives have to decompress it anyway. test() (instead of
-            // skip()) keeps cancellation responsive.
-            progress_.set_activity(fmt::format(
-                "Skipping {} (already on the server), decompressing it: solid archive", planned.relative));
-            discard = true;
-            code = archive.test();
-            discard = false;
-          } else {
-            code = archive.skip();
-          }
-          break;
-        case PlannedEntry::Action::Ignore:
-          code = archive.skip();
-          break;
-      }
-      if (code != 0) {
-        if (archive.aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
+      } catch (const ArchiveError& error) {
+        if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
           return;  // Stopped on purpose.
         }
-        fail(describe_rar_error(code, planned.relative));
+        fail(describe_archive_error(error, planned.relative));
         return;
       }
     }
@@ -279,6 +296,94 @@ void Transfer::extract() {
         return;
       }
     }
+  }
+  PipeMessage end;
+  end.kind = PipeMessage::Kind::End;
+  pipe_.push(std::move(end));
+}
+
+const PlannedEntry& Transfer::entry(size_t index) {
+  if (!plan_.streamed) {
+    return plan_.entries[index];
+  }
+  std::lock_guard lock(entries_mutex_);
+  return streamed_[index];  // A deque: the reference survives later push_back()s.
+}
+
+void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function<bool()>& flush) {
+  const std::unique_ptr<Archive> archive = open_archive(plan_.archive_path, Archive::Mode::Extract, callbacks);
+  progress_.set_archive_size(archive->flags().size);
+  reading_ = archive.get();
+  struct Unset {
+    const Archive*& reading;
+    ~Unset() { reading = nullptr; }
+  } unset{reading_};
+
+  Planner planner(plan_.format, plan_.remote_root, log_);
+  ArchiveEntry header;
+  while (archive->next(header)) {
+    if (cancel_requested_ || pipe_.aborted()) {
+      return;
+    }
+    size_t index = 0;
+    {
+      std::lock_guard lock(entries_mutex_);
+      streamed_.push_back(planner.plan(header));
+      index = streamed_.size() - 1;
+    }
+    const PlannedEntry& planned = entry(index);
+    try {
+      switch (planned.action) {
+        case PlannedEntry::Action::MakeDir: {
+          PipeMessage message;
+          message.kind = PipeMessage::Kind::EnsureDir;
+          message.entry = index;
+          if (!pipe_.push(std::move(message))) {
+            return;
+          }
+          archive->skip();
+          break;
+        }
+        case PlannedEntry::Action::Upload: {
+          // The uploader checks the server first, and drops the data of a file
+          // that is already there: it has to be decompressed anyway.
+          progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
+          PipeMessage begin;
+          begin.kind = PipeMessage::Kind::FileBegin;
+          begin.entry = index;
+          if (!pipe_.push(std::move(begin))) {
+            return;
+          }
+          archive->test();
+          if (!flush()) {
+            return;
+          }
+          PipeMessage end;
+          end.kind = PipeMessage::Kind::FileEnd;
+          end.entry = index;
+          if (!pipe_.push(std::move(end))) {
+            return;
+          }
+          break;
+        }
+        case PlannedEntry::Action::Skip:  // Not decided here.
+        case PlannedEntry::Action::Ignore: {
+          {
+            std::lock_guard lock(mutex_);
+            ++ignored_;
+          }
+          archive->skip();
+          break;
+        }
+      }
+    } catch (const ArchiveError& error) {
+      if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
+        return;  // Stopped on purpose.
+      }
+      fail(describe_archive_error(error, planned.relative));
+      return;
+    }
+    progress_.set_archive_read(archive->bytes_read());
   }
   PipeMessage end;
   end.kind = PipeMessage::Kind::End;
@@ -311,14 +416,35 @@ void Transfer::upload_loop() {
     }
     switch (message->kind) {
       case PipeMessage::Kind::EnsureDir:
-        ftp_.ensure_directory(plan_.entries[message->entry].remote);
+        ftp_.ensure_directory(entry(message->entry).remote);
         break;
       case PipeMessage::Kind::FileBegin:
+        if (plan_.streamed) {
+          const PlannedEntry& planned = entry(message->entry);
+          if (!probe_) {
+            probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_);
+          }
+          if (probe_->same_size(planned)) {
+            progress_.add_skipped(planned.entry.size);
+            progress_.set_activity(fmt::format("Skipping {} (already on the server)", planned.relative));
+            {
+              std::lock_guard lock(mutex_);
+              ++skipped_files_;
+              skipped_bytes_ += planned.entry.size;
+            }
+            if (!discard_file()) {
+              return;
+            }
+            break;
+          }
+          progress_.add_upload(planned.entry.size);
+        }
         if (!upload_file(message->entry, ++number)) {
           return;
         }
         break;
       case PipeMessage::Kind::End:
+        progress_.set_totals_known();
         return;
       case PipeMessage::Kind::Data:
       case PipeMessage::Kind::FileEnd:
@@ -328,13 +454,13 @@ void Transfer::upload_loop() {
 }
 
 bool Transfer::upload_file(size_t index, uint64_t number) {
-  const PlannedEntry& planned = plan_.entries[index];
+  const PlannedEntry& planned = entry(index);
   const uint64_t size = planned.entry.size;
   progress_.begin_file(number, planned.relative, size);
 
   std::vector<uint8_t> block;
   size_t offset = 0;
-  bool complete = false;  // FileEnd seen: UnRAR verified the whole file.
+  bool complete = false;  // FileEnd seen: the whole file was verified.
 
   const FtpClient::ReadFn read = [&](char* buffer, size_t capacity) -> std::optional<size_t> {
     while (offset >= block.size()) {
@@ -383,7 +509,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
   }
 
   // libcurl stops reading once it has the announced size, so the end marker,
-  // which UnRAR's checksum verification gates, is usually still queued.
+  // which the archive's checksum verification gates, is usually still queued.
   if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= size)) {
     complete = await_file_end(planned);
     if (!complete) {
@@ -451,6 +577,26 @@ bool Transfer::await_file_end(const PlannedEntry& planned) {
         }
         fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
         return false;
+      default:
+        fail("internal error: missing end of file marker");
+        return false;
+    }
+  }
+}
+
+bool Transfer::discard_file() {
+  while (true) {
+    std::optional<PipeMessage> message = pipe_.pop();
+    progress_.set_buffer_used(pipe_.buffered());
+    if (!message) {
+      return false;  // The extractor failed or a cancellation.
+    }
+    switch (message->kind) {
+      case PipeMessage::Kind::Data:
+        pipe_.release_buffer(std::move(message->data));
+        break;
+      case PipeMessage::Kind::FileEnd:
+        return true;
       default:
         fail("internal error: missing end of file marker");
         return false;

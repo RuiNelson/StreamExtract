@@ -6,7 +6,7 @@
 
 namespace rarftp {
 
-std::vector<std::string> summary_lines(const TransferResult& result, const TransferPlan& plan) {
+std::vector<std::string> summary_lines(const TransferResult& result) {
   std::vector<std::string> lines;
   switch (result.status) {
     case TransferResult::Status::Success: {
@@ -27,13 +27,13 @@ std::vector<std::string> summary_lines(const TransferResult& result, const Trans
                                   format_bytes(result.bytes_uploaded)));
       break;
   }
-  if (plan.skip_files > 0) {
+  if (result.skipped_files > 0) {
     lines.push_back(fmt::format("Skipped {} file(s), {} already on the server with the same size.",
-                                plan.skip_files, format_bytes(plan.skip_bytes)));
+                                result.skipped_files, format_bytes(result.skipped_bytes)));
   }
-  if (plan.ignored > 0) {
+  if (result.ignored > 0) {
     lines.push_back(
-        fmt::format("Not uploaded: {} link(s) or unsupported entries (see the warnings).", plan.ignored));
+        fmt::format("Not uploaded: {} link(s) or unsupported entries (see the warnings).", result.ignored));
   }
   return lines;
 }

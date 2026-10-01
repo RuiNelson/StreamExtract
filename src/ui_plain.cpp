@@ -25,6 +25,7 @@ void run_plain(Transfer& transfer, Progress& progress) {
   constexpr auto kReportInterval = std::chrono::seconds(5);
 
   SpeedMeter meter;
+  SpeedMeter read_meter;
   auto last_report = Clock::now();
   while (!transfer.finished()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -33,20 +34,31 @@ void run_plain(Transfer& transfer, Progress& progress) {
     }
     const Progress::Snapshot s = progress.snapshot();
     meter.add_sample(s.elapsed, s.sent_bytes);
+    read_meter.add_sample(s.elapsed, s.archive_read);
     if (Clock::now() - last_report < kReportInterval || transfer.cancelling()) {
       continue;
     }
     last_report = Clock::now();
 
     const double rate = meter.rate();
-    const uint64_t left = s.total_bytes > s.sent_bytes ? s.total_bytes - s.sent_bytes : 0;
-    std::string line = fmt::format("Progress {:5.1f}%  {} of {}  {}  ETA {}", percent(s.sent_bytes, s.total_bytes),
-                                   format_bytes(s.sent_bytes), format_bytes(s.total_bytes), format_speed(rate),
-                                   format_duration(eta_seconds(left, rate)));
+    std::string line;
+    if (s.totals_known) {
+      const uint64_t left = s.total_bytes > s.sent_bytes ? s.total_bytes - s.sent_bytes : 0;
+      line = fmt::format("Progress {:5.1f}%  {} of {}  {}  ETA {}", percent(s.sent_bytes, s.total_bytes),
+                         format_bytes(s.sent_bytes), format_bytes(s.total_bytes), format_speed(rate),
+                         format_duration(eta_seconds(left, rate)));
+    } else {
+      // A streamed archive: no totals until its end, progress by position.
+      const uint64_t left = s.archive_size > s.archive_read ? s.archive_size - s.archive_read : 0;
+      line = fmt::format("Progress {:5.1f}% of the archive read  {} uploaded  {}  ETA {}",
+                         percent(s.archive_read, s.archive_size), format_bytes(s.sent_bytes), format_speed(rate),
+                         format_duration(eta_seconds(left, read_meter.rate())));
+    }
     if (!s.current_file.empty()) {
       const double file_percent = percent(s.current_sent, s.current_size);
-      line += fmt::format("  |  file {}/{} {:.0f}%: {}", s.current_number, s.total_files, file_percent,
-                          s.current_file);
+      const std::string number = s.totals_known ? fmt::format("{}/{}", s.current_number, s.total_files)
+                                                : std::to_string(s.current_number);
+      line += fmt::format("  |  file {} {:.0f}%: {}", number, file_percent, s.current_file);
     } else if (!s.activity.empty()) {
       line += "  |  " + s.activity;
     }

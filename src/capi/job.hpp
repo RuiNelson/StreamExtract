@@ -21,7 +21,7 @@ namespace rarftp {
 
 struct JobConfig {
   std::string archive;
-  std::optional<std::string> rar_password;
+  std::optional<std::string> archive_password;
   std::string host;
   int port = 21;
   bool active_mode = false;
@@ -57,8 +57,10 @@ class Job {
 
   struct ArchiveInfo {
     std::string name;
-    uint64_t files = 0;
-    uint64_t bytes = 0;
+    ArchiveFormat format = ArchiveFormat::Rar;
+    std::string compression;  // Compressed tar; empty otherwise.
+    std::optional<uint64_t> files;  // Unknown for a streamed archive.
+    std::optional<uint64_t> bytes;
     unsigned volumes = 1;
     bool solid = false;
     bool encrypted = false;
@@ -124,6 +126,7 @@ class Job {
   std::optional<Result> result_;
   SpeedMeter upload_meter_;
   SpeedMeter unpack_meter_;
+  SpeedMeter read_meter_;  // Position in a streamed archive.
 
   // The job's own copy of the log, numbered. Never held while calling into log_.
   std::mutex log_mutex_;

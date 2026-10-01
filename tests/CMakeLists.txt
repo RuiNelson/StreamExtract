@@ -12,6 +12,7 @@ FetchContent_MakeAvailable(doctest)
 
 add_executable(rarftp_tests
   test_main.cpp
+  test_archive.cpp
   test_json.cpp
   test_pipe.cpp
   test_plan.cpp

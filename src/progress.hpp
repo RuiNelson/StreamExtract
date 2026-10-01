@@ -14,8 +14,14 @@ namespace rarftp {
 class Progress {
  public:
   struct Snapshot {
-    uint64_t total_files = 0;  // Files that will be uploaded (skipped ones excluded).
+    // Files that will be uploaded (skipped ones excluded). Without
+    // totals_known, those met so far: the rest of the archive is still unread.
+    uint64_t total_files = 0;
     uint64_t total_bytes = 0;
+    bool totals_known = true;
+    // Streamed archives: how much of the archive file(s) was read, of how much.
+    uint64_t archive_read = 0;
+    uint64_t archive_size = 0;
     uint64_t sent_bytes = 0;  // Completed files plus the current file's progress.
     uint64_t unpacked_bytes = 0;
     uint64_t files_done = 0;
@@ -34,6 +40,15 @@ class Progress {
   Progress();
 
   void set_totals(uint64_t files, uint64_t bytes, uint64_t skipped_files, uint64_t skipped_bytes);
+  // Streamed archives: the totals start empty and grow with add_upload() and
+  // add_skipped() until set_totals_known(); progress is measured by the
+  // position in the archive.
+  void set_streamed();
+  void add_upload(uint64_t bytes);
+  void add_skipped(uint64_t bytes);
+  void set_totals_known();
+  void set_archive_size(uint64_t size);
+  void set_archive_read(uint64_t read);
   void set_buffer_capacity(uint64_t capacity);
   void set_buffer_used(uint64_t used);
 
@@ -53,6 +68,9 @@ class Progress {
 
   std::atomic<uint64_t> total_files_{0};
   std::atomic<uint64_t> total_bytes_{0};
+  std::atomic<bool> totals_known_{true};
+  std::atomic<uint64_t> archive_read_{0};
+  std::atomic<uint64_t> archive_size_{0};
   std::atomic<uint64_t> done_bytes_{0};
   std::atomic<uint64_t> unpacked_bytes_{0};
   std::atomic<uint64_t> files_done_{0};

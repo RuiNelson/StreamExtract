@@ -28,20 +28,21 @@ extern "C" {
 typedef struct rarftp_job rarftp_job;
 
 typedef struct rarftp_job_config {
-  const char* archive;      /* First volume of the RAR archive. */
-  const char* rar_password; /* NULL: asked through the job when needed. */
-  const char* host;         /* Host name or address, without ftp:// or a path. */
-  int port;                 /* 1-65535. */
-  int active_mode;          /* 0: passive, 1: active. */
-  const char* user;         /* NULL or "": anonymous login. */
-  const char* password;     /* NULL: empty. */
-  const char* directory;    /* NULL or "": the login directory. */
-  int mkdir;                /* Create the destination if missing (one MKD). */
-  int verbose;              /* Log every FTP command and reply. */
-  unsigned buffer_mib;      /* Buffer between decompression and upload; 0: 64. */
+  const char* archive;          /* RAR, ZIP, 7z or tar archive; the first volume of a set. */
+  const char* archive_password; /* NULL: asked through the job when needed. */
+  const char* host;             /* Host name or address, without ftp:// or a path. */
+  int port;                     /* 1-65535. */
+  int active_mode;              /* 0: passive, 1: active. */
+  const char* user;             /* NULL or "": anonymous login. */
+  const char* password;         /* NULL: empty. */
+  const char* directory;        /* NULL or "": the login directory. */
+  int mkdir;                    /* Create the destination if missing (one MKD). */
+  int verbose;                  /* Log every FTP command and reply. */
+  unsigned buffer_mib;          /* Buffer between decompression and upload; 0: 64. */
 } rarftp_job_config;
 
-/* "rarftp 2.0.0 (UnRAR 7.31, libcurl 8.22.0)". Static storage, never freed. */
+/* "rarftp 2.0.0 (UnRAR 7.31, libarchive 3.8.9, libcurl 8.22.0)". Static
+ * storage, never freed. */
 RARFTP_API const char* rarftp_version(void);
 
 /* Copies `config` and starts the job right away. Returns NULL only if

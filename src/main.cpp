@@ -1,5 +1,5 @@
-// rarftp: uploads the contents of a RAR archive to an FTP server without
-// extracting it to disk.
+// rarftp: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server
+// without extracting it to disk.
 
 #include <algorithm>
 #include <clocale>
@@ -41,9 +41,9 @@ void print_line(const LogLine& line) {
   std::fflush(stdout);
 }
 
-void print_summary(const TransferResult& result, const TransferPlan& plan, const Logger& log, bool show_problems) {
+void print_summary(const TransferResult& result, const Logger& log, bool show_problems) {
   std::string text;
-  for (const std::string& line : summary_lines(result, plan)) {
+  for (const std::string& line : summary_lines(result)) {
     text += line + "\n";
   }
 
@@ -94,7 +94,7 @@ int run(const Options& options) {
   if (interactive) {
     prompt = [&] { return prompt_hidden(fmt::format("Password for {}: ", file_name_of(options.file))); };
   }
-  PasswordSource passwords(options.rar_password, std::move(prompt));
+  PasswordSource passwords(options.archive_password, std::move(prompt));
   ArchiveListing listing;
   try {
     log.info("Reading {}", options.file);
@@ -107,22 +107,12 @@ int run(const Options& options) {
       listing.flags.encrypted_headers || std::any_of(listing.entries.begin(), listing.entries.end(),
                                                      [](const ArchiveEntry& e) { return e.encrypted; });
   if (encrypted && !passwords.has_password() && !passwords.get()) {
-    log.error("the archive is encrypted: pass --rar-password");
+    log.error("the archive is encrypted: pass --archive-password");
     return kExitError;
   }
   passwords.disable_prompt();
 
-  uint64_t files = 0;
-  uint64_t bytes = 0;
-  for (const auto& entry : listing.entries) {
-    if (entry.kind == EntryKind::File) {
-      ++files;
-      bytes += entry.size;
-    }
-  }
-  log.info("Archive: {} file(s), {}{}{}{}", files, format_bytes(bytes),
-           listing.volumes > 1 ? fmt::format(", {} volumes", listing.volumes) : std::string(),
-           listing.flags.solid ? ", solid" : "", encrypted ? ", encrypted" : "");
+  log.info("Archive: {}", describe_archive(listing, encrypted));
 
   // 2. FTP: log in and check the destination directory.
   FtpClient ftp(ftp_config, log, options.verbose);
@@ -156,9 +146,10 @@ int run(const Options& options) {
   }
   log.info("Destination: {}", ftp.url_for(target));
 
-  // 3. Plan: map entries to remote paths, skip what is already there.
+  // 3. Plan: map entries to remote paths, skip what is already there (for a
+  //    streamed archive, the transfer does it file by file).
   TransferPlan plan = build_plan(options.file, listing, target, log);
-  if (plan.upload_files > 0) {
+  if (!plan.streamed && plan.upload_files > 0) {
     const bool live = stdout_is_terminal();
     size_t last_shown = 0;
     try {
@@ -184,7 +175,9 @@ int run(const Options& options) {
     log.info("{} file(s), {} already on the server with the same size: skipping them", plan.skip_files,
              format_bytes(plan.skip_bytes));
   }
-  log.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes));
+  if (!plan.streamed) {
+    log.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes));
+  }
 
   // 4. Transfer.
   Progress progress;
@@ -207,7 +200,7 @@ int run(const Options& options) {
   const TransferResult result = transfer.wait();
   log.set_sink(print_line);
 
-  print_summary(result, plan, log, use_tui);
+  print_summary(result, log, use_tui);
   switch (result.status) {
     case TransferResult::Status::Success:
       return kExitOk;

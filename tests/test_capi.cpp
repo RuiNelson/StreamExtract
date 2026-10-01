@@ -22,6 +22,7 @@
 #endif
 
 #include "capi/rarftp.h"
+#include "archive_fixtures.hpp"
 
 namespace {
 
@@ -185,11 +186,74 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  CHECK(contains(json, "\"archive\":{\"name\":\"rarftpcore-tiny.rar\",\"files\":1,\"bytes\":6,"));
+  CHECK(contains(json, "\"archive\":{\"name\":\"rarftpcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
+  CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
   CHECK(contains(json, "\"bytes_text\":\"6 B\",\"volumes\":1,\"solid\":false,\"encrypted\":false}"));
   CHECK(contains(json, "\"target\":null"));
   CHECK(contains(json, "\"progress\":null"));
   CHECK(contains(json, "Connecting to 127.0.0.1:1 (passive mode)"));
+  rarftp_job_free(job);
+}
+
+TEST_CASE("ZIP, 7z and tar archives are read too") {
+  const TempFile zip("rarftpcore-tiny.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip));
+  const TempFile seven_zip("rarftpcore-tiny.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z));
+  const TempFile tar("rarftpcore-tiny.tar", fixtures::kTinyTar, sizeof(fixtures::kTinyTar));
+  struct Case {
+    std::string path;
+    std::string name;
+    std::string format;
+  };
+  for (const Case& c : {Case{zip.path(), "rarftpcore-tiny.zip", "ZIP"},
+                        Case{seven_zip.path(), "rarftpcore-tiny.7z", "7z"},
+                        Case{tar.path(), "rarftpcore-tiny.tar", "tar"}}) {
+    CAPTURE(c.name);
+    rarftp_job_config config = make_config(c.path, 1);
+    rarftp_job* job = rarftp_job_start(&config);
+    REQUIRE(job != nullptr);
+    const std::string json = wait_for(job, "\"phase\":\"finished\"");
+    CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the FTP login.
+    const std::string archive = "\"archive\":{\"name\":\"" + c.name + "\",\"format\":\"" + c.format + "\",";
+    CHECK(contains(json, archive.c_str()));
+    CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
+    rarftp_job_free(job);
+  }
+}
+
+TEST_CASE("a compressed tar archive is read as it is uploaded") {
+  const TempFile archive("rarftpcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
+  const std::string path = archive.path();
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* job = rarftp_job_start(&config);
+  REQUIRE(job != nullptr);
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
+  // Not listed first: its contents are only known once it has been read.
+  CHECK(contains(json, "\"format\":\"tar\",\"compression\":\"gzip\",\"files\":null,\"bytes\":null,"
+                       "\"bytes_text\":null,"));
+  CHECK(contains(json, "read as it is uploaded"));
+  rarftp_job_free(job);
+}
+
+TEST_CASE("a wrong ZIP password is noticed while reading the archive") {
+  const TempFile archive("rarftpcore-aes.zip", fixtures::kAesZip, sizeof(fixtures::kAesZip));
+  const std::string path = archive.path();
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* job = rarftp_job_start(&config);
+  REQUIRE(job != nullptr);
+
+  const char* first =
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-aes.zip\",\"error\":null}";
+  const char* again =
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-aes.zip\",\"error\":\"Wrong password\"}";
+  REQUIRE(contains(wait_for(job, first), first));
+  rarftp_job_answer_password(job, "wrong");
+  REQUIRE(contains(wait_for(job, again), again));
+  rarftp_job_answer_password(job, "secret");
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"format\":\"ZIP\""));
+  CHECK(contains(json, "\"encrypted\":true}"));
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
   rarftp_job_free(job);
 }
 
@@ -200,9 +264,10 @@ TEST_CASE("the password prompt is asked again until it is right") {
   rarftp_job* job = rarftp_job_start(&config);
   REQUIRE(job != nullptr);
 
-  const char* first = "\"prompt\":{\"kind\":\"rar_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":null}";
+  const char* first =
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":null}";
   const char* again =
-      "\"prompt\":{\"kind\":\"rar_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":\"Wrong password\"}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":\"Wrong password\"}";
   std::string json = wait_for(job, first);
   REQUIRE(contains(json, first));
   CHECK(contains(json, "\"phase\":\"reading\""));
@@ -228,7 +293,7 @@ TEST_CASE("declining the password prompt fails the job") {
   rarftp_job* job = rarftp_job_start(&config);
   REQUIRE(job != nullptr);
 
-  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"rar_password\""));
+  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
   rarftp_job_answer_password(job, nullptr);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
@@ -241,7 +306,7 @@ TEST_CASE("a configured password is used without asking") {
   const TempFile archive("rarftpcore-enc-given.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
   rarftp_job_config config = make_config(path, 1);
-  config.rar_password = "secret";
+  config.archive_password = "secret";
   rarftp_job* job = rarftp_job_start(&config);
   REQUIRE(job != nullptr);
 
@@ -259,7 +324,7 @@ TEST_CASE("cancelling while the password prompt is open") {
   rarftp_job* job = rarftp_job_start(&config);
   REQUIRE(job != nullptr);
 
-  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"rar_password\""));
+  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
   rarftp_job_cancel(job);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"cancelled\""));
@@ -273,7 +338,7 @@ TEST_CASE("freeing a job that waits for a password does not hang") {
   rarftp_job_config config = make_config(path, 1);
   rarftp_job* job = rarftp_job_start(&config);
   REQUIRE(job != nullptr);
-  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"rar_password\""));
+  REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
   rarftp_job_free(job);
 }
 

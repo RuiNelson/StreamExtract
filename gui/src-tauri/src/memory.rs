@@ -1,5 +1,5 @@
 //! "Memory": the server settings the user chose to keep, in a plain-text INI file at
-//! `<home>/.config/rarftp-gui/memory.ini` (on every OS). The RAR password is never stored.
+//! `<home>/.config/rarftp-gui/memory.ini` (on every OS). The archive password is never stored.
 //!
 //! Everything here takes the file path as an argument so it can be tested without touching
 //! the real home directory. Format (contract section B):

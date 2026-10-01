@@ -52,7 +52,7 @@ constexpr size_t kNameBufferSize = 32768;
 
 struct RarArchive::Impl {
   HANDLE handle = nullptr;
-  RarCallbacks callbacks;
+  ArchiveCallbacks callbacks;
   ArchiveFlags flags;
   RARHeaderDataEx header{};
   std::vector<wchar_t> name_buffer = std::vector<wchar_t>(kNameBufferSize);
@@ -137,8 +137,6 @@ int CALLBACK rar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM p2) {
   }
 }
 
-}  // namespace
-
 std::string rar_error_message(int code) {
   switch (code) {
     case ERAR_SUCCESS:
@@ -150,7 +148,7 @@ std::string rar_error_message(int code) {
     case ERAR_BAD_DATA:
       return "corrupt data (checksum mismatch)";
     case ERAR_BAD_ARCHIVE:
-      return "not a valid RAR archive";
+      return "not a RAR, ZIP, 7z or tar archive";
     case ERAR_UNKNOWN_FORMAT:
       return "unsupported archive format or compression method";
     case ERAR_EOPEN:
@@ -180,9 +178,18 @@ std::string rar_error_message(int code) {
   }
 }
 
-bool rar_is_bad_password(int code) { return code == ERAR_BAD_PASSWORD; }
+ArchiveError rar_error(int code) {
+  switch (code) {
+    case ERAR_BAD_PASSWORD:
+      return ArchiveError(ArchiveError::Kind::BadPassword, rar_error_message(code));
+    case ERAR_MISSING_PASSWORD:
+      return ArchiveError(ArchiveError::Kind::MissingPassword, rar_error_message(code));
+    default:
+      return ArchiveError(ArchiveError::Kind::Other, rar_error_message(code));
+  }
+}
 
-bool rar_is_missing_password(int code) { return code == ERAR_MISSING_PASSWORD; }
+}  // namespace
 
 std::string unrar_version() {
   std::string version = fmt::format("{}.{:02}", RARVER_MAJOR, RARVER_MINOR);
@@ -192,7 +199,7 @@ std::string unrar_version() {
   return version;
 }
 
-RarArchive::RarArchive(const std::string& path, Mode mode, RarCallbacks callbacks)
+RarArchive::RarArchive(const std::string& path, Mode mode, ArchiveCallbacks callbacks)
     : impl_(std::make_unique<Impl>()) {
   impl_->callbacks = std::move(callbacks);
 
@@ -217,14 +224,14 @@ RarArchive::RarArchive(const std::string& path, Mode mode, RarCallbacks callback
       impl_->handle = nullptr;
     }
     impl_->rethrow_callback_error();
-    const int code = data.OpenResult != ERAR_SUCCESS ? static_cast<int>(data.OpenResult) : ERAR_UNKNOWN;
-    throw RarError(code, rar_error_message(code));
+    throw rar_error(data.OpenResult != ERAR_SUCCESS ? static_cast<int>(data.OpenResult) : ERAR_UNKNOWN);
   }
 
   impl_->flags.volume = (data.Flags & ROADF_VOLUME) != 0;
   impl_->flags.first_volume = (data.Flags & ROADF_FIRSTVOLUME) != 0;
   impl_->flags.solid = (data.Flags & ROADF_SOLID) != 0;
   impl_->flags.encrypted_headers = (data.Flags & ROADF_ENCHEADERS) != 0;
+  impl_->flags.skip_decompresses = impl_->flags.solid;
 }
 
 RarArchive::~RarArchive() {
@@ -248,7 +255,7 @@ bool RarArchive::next(ArchiveEntry& entry) {
   }
   if (code != ERAR_SUCCESS) {
     impl_->rethrow_callback_error();
-    throw RarError(code, rar_error_message(code));
+    throw rar_error(code);
   }
 
   entry = ArchiveEntry{};
@@ -277,18 +284,22 @@ bool RarArchive::next(ArchiveEntry& entry) {
   return true;
 }
 
-int RarArchive::test() {
+void RarArchive::test() {
   impl_->aborted = false;
   const int code = RARProcessFileW(impl_->handle, RAR_TEST, nullptr, nullptr);
   impl_->rethrow_callback_error();
-  return code;
+  if (code != ERAR_SUCCESS) {
+    throw rar_error(code);
+  }
 }
 
-int RarArchive::skip() {
+void RarArchive::skip() {
   impl_->aborted = false;
   const int code = RARProcessFileW(impl_->handle, RAR_SKIP, nullptr, nullptr);
   impl_->rethrow_callback_error();
-  return code;
+  if (code != ERAR_SUCCESS) {
+    throw rar_error(code);
+  }
 }
 
 bool RarArchive::aborted_by_callback() const { return impl_->aborted; }

@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """End-to-end tests for rarftp.
 
-Creates archives with RARLAB's `rar`, uploads them with rarftp to vsftpd
-running in Docker (image delfer/alpine-ftp-server) and checks what arrives.
+Creates archives with RARLAB's `rar`, Python's zipfile and tarfile, 7-Zip
+(`7zz`) and Info-ZIP's `zip`, uploads them with rarftp to vsftpd running in Docker (image
+delfer/alpine-ftp-server) and checks what arrives.
 
-    python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar [--big] [--lib PATH]
+    python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar [--7z PATH] [--big] [--lib PATH]
 
 With --lib (librarftpcore.dylib / .so / rarftpcore.dll, built with
 -DRARFTP_BUILD_LIBRARY=ON) the `lib_*` tests also drive the shared library used
 by rarftp-gui through its C API, with ctypes. Select them with `-k lib_`.
 
-Needs Python 3.9+ (standard library only), Docker and `rar`.
+Needs Python 3.9+ (standard library only), Docker and `rar`. The tests that
+need 7-Zip or Info-ZIP's `zip` are skipped without them; the Zstandard ZIP test
+needs Python 3.14+.
 """
 
 import argparse
 import ctypes
 import hashlib
 import json
+import lzma
 import os
 import random
 import re
@@ -29,7 +33,9 @@ import tempfile
 import time
 import traceback
 import unicodedata
+import tarfile
 import uuid
+import zipfile
 from pathlib import Path
 
 IMAGE = "delfer/alpine-ftp-server"
@@ -38,6 +44,7 @@ PASSWORD = "secret"
 HOME = f"/ftp/{USER}"  # Login directory on the server (not chrooted).
 BASE_TIME = 1_700_000_000
 ARCHIVE_PASSWORD = "s3cr3t pässwörd"
+ZIP_AES_PASSWORD = "s3cr3t p4ssw0rd"  # 7-Zip refuses non-ASCII passwords for ZIP.
 
 
 # --------------------------------------------------------------------------
@@ -203,7 +210,33 @@ def write_tree(root, files, dirs=(), links=None):
         os.symlink(target, root / rel)
 
 
-def build_fixtures(work, rar, big):
+def zip_tree(path, parent, what="tree", compression=zipfile.ZIP_DEFLATED):
+    """Like `zip -r`: every file, directory (empty ones too) and symbolic link under parent/what ("*": all of
+    parent), named relative to parent."""
+    parent = Path(parent)
+    roots = sorted(parent.iterdir()) if what == "*" else [parent / what]
+    with zipfile.ZipFile(path, "w", compression) as z:
+        for root in roots:
+            for p in ([root, *sorted(root.rglob("*"))] if root.is_dir() and not root.is_symlink() else [root]):
+                name = p.relative_to(parent).as_posix()
+                if p.is_symlink():
+                    info = zipfile.ZipInfo(name, time.localtime(p.lstat().st_mtime)[:6])
+                    info.create_system = 3  # Unix: the mode below is meaningful.
+                    info.external_attr = 0o120777 << 16
+                    z.writestr(info, os.readlink(p))
+                else:
+                    z.write(p, name)
+
+
+def split_file(path, parts):
+    """Cuts `path` into `parts` numbered files (path.001, ...), as 7-Zip's -v switch does."""
+    data = Path(path).read_bytes()
+    size = -(-len(data) // parts)
+    for i in range(parts):
+        Path(f"{path}.{i + 1:03}").write_bytes(data[i * size:(i + 1) * size])
+
+
+def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     rnd = random.Random(20260929)
     trees = work / "trees"
     archives = work / "archives"
@@ -275,6 +308,60 @@ def build_fixtures(work, rar, big):
     rar_a("tiny.rar", trees / "tiny")
     rar_a("slow.rar", trees / "slow", "-m1")
 
+    # ZIP, with Python's zipfile: every compression method it writes.
+    zip_tree(archives / "basic.zip", main_parent)
+    zip_tree(archives / "store.zip", main_parent, compression=zipfile.ZIP_STORED)
+    zip_tree(archives / "bzip2.zip", main_parent, compression=zipfile.ZIP_BZIP2)
+    zip_tree(archives / "lzma.zip", main_parent, compression=zipfile.ZIP_LZMA)
+    if hasattr(zipfile, "ZIP_ZSTANDARD"):  # Python 3.14+.
+        zip_tree(archives / "zstd.zip", main_parent, compression=zipfile.ZIP_ZSTANDARD)
+    zip_tree(archives / "dirs.zip", dirs_tree, what="*")
+    zip_tree(archives / "links.zip", trees / "links")
+    zip_tree(archives / "tiny.zip", trees / "tiny")
+
+    # tar, with Python's tarfile: plain, compressed in every way it can (the old
+    # .lzma format and lz4 by hand), and split into parts.
+    with tarfile.open(archives / "basic.tar", "w") as tar:
+        tar.add(main_tree, arcname="tree")
+    for suffix, mode in (("gz", "w:gz"), ("bz2", "w:bz2"), ("xz", "w:xz"), ("zst", "w:zst")):
+        if mode == "w:zst" and sys.version_info < (3, 14):
+            continue
+        with tarfile.open(archives / f"basic.tar.{suffix}", mode) as tar:
+            tar.add(main_tree, arcname="tree")
+    (archives / "basic.tar.lzma").write_bytes(lzma.compress((archives / "basic.tar").read_bytes(),
+                                                            format=lzma.FORMAT_ALONE))
+    if lz4:
+        subprocess.run([lz4, "-q", "-f", str(archives / "basic.tar"), str(archives / "basic.tar.lz4")], check=True)
+    for name in ("split.tar", "split.tar.gz"):
+        shutil.copy(archives / name.replace("split", "basic"), archives / name)
+        split_file(archives / name, 3)
+        (archives / name).unlink()
+
+    # Info-ZIP's zip: Unicode names in its own extra field, traditional (ZipCrypto) encryption.
+    if infozip:
+        def zip_r(name, cwd, *switches):
+            subprocess.run([infozip, "-r", "-q", "-y", *switches, str(archives / name), "tree"], cwd=cwd, check=True)
+
+        zip_r("infozip.zip", main_parent)
+        zip_r("zipcrypto.zip", main_parent, "-P", ARCHIVE_PASSWORD)
+
+    # 7-Zip: 7z (solid by default) and the ZIP variants Python cannot write.
+    if sevenzip:
+        def sz_a(name, cwd, *switches, what="tree"):
+            subprocess.run([sevenzip, "a", "-bd", "-bso0", "-bsp0", "-y", *switches, str(archives / name), what],
+                           cwd=cwd, check=True)
+
+        sz_a("basic.7z", main_parent)
+        sz_a("multivolume.7z", main_parent, "-v2m")
+        sz_a("bzip2.7z", main_parent, "-m0=BZip2")
+        sz_a("ppmd.7z", main_parent, "-m0=PPMd")
+        sz_a("dirs.7z", dirs_tree, what="*")
+        sz_a("encrypted.7z", main_parent, f"-p{ARCHIVE_PASSWORD}")
+        sz_a("encrypted-headers.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-mhe=on")
+        sz_a("aes.zip", main_parent, "-tzip", "-mem=AES256", f"-p{ZIP_AES_PASSWORD}")
+        sz_a("split.zip", main_parent, "-tzip", "-v2m")
+        sz_a("deflate64.zip", main_parent, "-tzip", "-mm=Deflate64")
+
     big_tree = None
     if big:
         big_tree = trees / "big" / "tree"
@@ -286,6 +373,7 @@ def build_fixtures(work, rar, big):
             for i in range(4608):
                 f.write(block if i % 16 == 0 else bytes(1 << 20))
         rar_a("big.rar", trees / "big", "-m1")
+        zip_tree(archives / "big.zip", trees / "big")  # Zip64: a file over 4 GiB.
 
     return {"main": main_tree, "dirs": dirs_tree, "links": links_tree, "tiny": tiny_tree,
             "slow": slow_tree, "big": big_tree, "archives": archives}
@@ -300,7 +388,7 @@ class RarftpJobConfig(ctypes.Structure):
 
     _fields_ = [
         ("archive", ctypes.c_char_p),
-        ("rar_password", ctypes.c_char_p),
+        ("archive_password", ctypes.c_char_p),
         ("host", ctypes.c_char_p),
         ("port", ctypes.c_int),
         ("active_mode", ctypes.c_int),
@@ -345,17 +433,19 @@ LIB_STATE_KEYS = {"phase", "cancelling", "prompt", "archive", "target", "mode", 
                   "log", "result"}
 LIB_PHASES = ["reading", "connecting", "checking", "transferring", "finished"]
 LIB_LEVELS = ["debug", "info", "warn", "error"]
-LIB_ARCHIVE_KEYS = {"name", "files", "bytes", "bytes_text", "volumes", "solid", "encrypted"}
-LIB_PROGRESS_INTS = ["total_files", "total_bytes", "sent_bytes", "unpacked_bytes", "files_done", "files_skipped",
+LIB_ARCHIVE_KEYS = {"name", "format", "compression", "files", "bytes", "bytes_text", "volumes", "solid",
+                    "encrypted"}
+LIB_PROGRESS_INTS = ["total_files", "total_bytes", "archive_read", "archive_size", "sent_bytes", "unpacked_bytes",
+                     "files_done", "files_skipped",
                      "skipped_bytes", "buffer_used", "buffer_capacity", "current_number", "current_size",
                      "current_sent"]
 LIB_PROGRESS_NUMBERS = ["elapsed", "upload_rate", "average_rate", "unpack_rate", "eta_file", "eta_total"]
-LIB_PROGRESS_TEXTS = ["total_bytes", "sent_bytes", "skipped_bytes", "current_size", "current_sent",
-                      "buffer_capacity", "upload_rate", "average_rate", "unpack_rate", "eta_file", "eta_total",
-                      "elapsed"]
+LIB_PROGRESS_TEXTS = ["total_bytes", "archive_read", "archive_size", "sent_bytes", "skipped_bytes", "current_size",
+                      "current_sent", "buffer_capacity", "upload_rate", "average_rate", "unpack_rate", "eta_file",
+                      "eta_total", "elapsed"]
 LIB_RESULT_INTS = ["files_uploaded", "bytes_uploaded", "skipped_files", "skipped_bytes", "ignored",
                    "problems_dropped"]
-LIB_CONFIG_DEFAULTS = {"archive": None, "rar_password": None, "host": None, "port": 21, "active_mode": 0,
+LIB_CONFIG_DEFAULTS = {"archive": None, "archive_password": None, "host": None, "port": 21, "active_mode": 0,
                        "user": None, "password": None, "directory": None, "mkdir": 0, "verbose": 0,
                        "buffer_mib": 0}
 
@@ -463,16 +553,25 @@ class LibJob:
         if prompt is not None:
             ok(not finished, "a prompt is pending in the finished state")
             ok(set(prompt) == {"kind", "archive", "error"}, f"prompt keys differ: {sorted(prompt)}")
-            ok(prompt["kind"] == "rar_password", f"unknown prompt kind {prompt['kind']!r}")
+            ok(prompt["kind"] == "archive_password", f"unknown prompt kind {prompt['kind']!r}")
             ok(isinstance(prompt["archive"], str), "prompt.archive is not a string")
             ok(prompt["error"] is None or isinstance(prompt["error"], str), "prompt.error is not null or a string")
 
         archive = state["archive"]
         if archive is not None:
             ok(set(archive) == LIB_ARCHIVE_KEYS, f"archive keys differ: {sorted(set(archive) ^ LIB_ARCHIVE_KEYS)}")
-            ok(isinstance(archive["name"], str) and isinstance(archive["bytes_text"], str), "archive text fields")
-            ok(all(is_int(archive[key]) and archive[key] >= 0 for key in ("files", "bytes", "volumes")),
-               "archive counters are not non-negative integers")
+            ok(isinstance(archive["name"], str), "archive.name is not a string")
+            ok(archive["format"] in ("RAR", "ZIP", "7z", "tar"), f"unknown archive format {archive['format']!r}")
+            ok(archive["compression"] in (None, "gzip", "bzip2", "xz", "lzma", "zstd", "lz4"),
+               f"unknown compression {archive['compression']!r}")
+            # A compressed tar is not listed first: its contents are unknown.
+            unknown = archive["compression"] is not None
+            ok(all((archive[key] is None) if unknown else (is_int(archive[key]) and archive[key] >= 0)
+                   for key in ("files", "bytes")), "archive.files/bytes must be integers, or null exactly when "
+                                                   "the archive is compressed")
+            ok((archive["bytes_text"] is None) if unknown else isinstance(archive["bytes_text"], str),
+               "archive.bytes_text")
+            ok(is_int(archive["volumes"]) and archive["volumes"] >= 1, "archive.volumes is not a positive integer")
             ok(isinstance(archive["solid"], bool) and isinstance(archive["encrypted"], bool),
                "archive flags are not booleans")
         ok(state["target"] is None or isinstance(state["target"], str), "target is not null or a string")
@@ -490,7 +589,8 @@ class LibJob:
         else:
             self._had_progress = True
             ok(phase >= LIB_PHASES.index("transferring"), f"progress while {state['phase']}")
-            expected = set(LIB_PROGRESS_INTS + LIB_PROGRESS_NUMBERS + ["current_file", "activity", "text"])
+            expected = set(LIB_PROGRESS_INTS + LIB_PROGRESS_NUMBERS + ["current_file", "activity", "text",
+                                                                        "totals_known"])
             ok(set(progress) == expected, f"progress keys differ: {sorted(set(progress) ^ expected)}")
             ok(all(is_int(progress[key]) and progress[key] >= 0 for key in LIB_PROGRESS_INTS),
                "progress counters are not non-negative integers")
@@ -498,6 +598,11 @@ class LibJob:
                "progress rates/ETAs are not numbers")
             ok(isinstance(progress["current_file"], str) and isinstance(progress["activity"], str),
                "current_file/activity are not strings")
+            ok(isinstance(progress["totals_known"], bool), "totals_known is not a boolean")
+            ok(progress["totals_known"] or (archive is not None and archive["compression"] is not None),
+               "totals unknown for an archive that was listed")
+            ok(progress["archive_read"] <= progress["archive_size"] or progress["archive_size"] == 0,
+               "archive_read exceeds archive_size")
             ok(progress["sent_bytes"] <= progress["total_bytes"], "sent_bytes exceeds total_bytes")
             ok(progress["files_done"] <= progress["total_files"], "files_done exceeds total_files")
             text = progress["text"]
@@ -591,11 +696,14 @@ def lib_log_text(job):
 class Env:
     def __init__(self, args, work):
         self.rarftp = str(Path(args.rarftp).resolve())
+        self.sevenzip = shutil.which(args.sevenzip) if args.sevenzip else (shutil.which("7zz") or shutil.which("7z"))
+        self.infozip = shutil.which("zip")
+        self.lz4 = shutil.which("lz4")
         self.lib = Library(Path(args.lib).resolve()) if args.lib else None  # Fails fast on a bad library.
         self.work = work
         self.server = Server(work / "ftp")  # First: fails fast without Docker.
         try:
-            self.fixtures = build_fixtures(work, args.rar, args.big)
+            self.fixtures = build_fixtures(work, args.rar, args.big, self.sevenzip, self.infozip, self.lz4)
         except BaseException:
             self.server.close()
             raise
@@ -606,6 +714,11 @@ class Env:
     def volumes(self, stem):
         # rar numbers volumes part1.. or part01.. depending on their count.
         return sorted(p.name for p in self.fixtures["archives"].glob(f"{stem}.part*.rar"))
+
+    def require(self, archive):
+        """Skips the test when the archive could not be made (no 7-Zip, no zip, an old Python)."""
+        if not Path(self.archive(archive)).exists():
+            raise Skipped(f"{archive} was not created (needs 7-Zip, Info-ZIP's zip or a newer Python)")
 
     def remote(self, *parts):
         """Local view of a path in the FTP user's home directory."""
@@ -744,19 +857,22 @@ def test_rar4_format(env):
 
 def test_encrypted_files(env):
     out = env.run("encrypted.rar", "--directory", "enc", "--mkdir", expect=1)
-    check("--rar-password" in out, "no hint about --rar-password", out)
-    out = env.run("encrypted.rar", "--directory", "enc", "--mkdir", "--rar-password", ARCHIVE_PASSWORD)
+    check("--archive-password" in out, "no hint about --archive-password", out)
+    out = env.run("encrypted.rar", "--directory", "enc", "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
     compare_trees(env.fixtures["main"], env.remote("enc", "tree"), out)
 
 
 def test_encrypted_headers(env):
     out = env.run("encrypted-headers.rar", expect=1)
-    check("--rar-password" in out, "no hint about --rar-password", out)
-    out = env.run("encrypted-headers.rar", "--rar-password", "wrong", expect=1)
+    check("--archive-password" in out, "no hint about --archive-password", out)
+    out = env.run("encrypted-headers.rar", "--archive-password", "wrong", expect=1)
     check("wrong" in out.lower(), "wrong password not reported", out)
+    # --rar-password is still accepted, as another name for --archive-password.
     out = env.run("encrypted-headers.rar", "--directory", "enc-headers", "--mkdir", "--rar-password",
                   ARCHIVE_PASSWORD)
     compare_trees(env.fixtures["main"], env.remote("enc-headers", "tree"), out)
+    out = env.run("tiny.rar", "--rar-password", "a", "--archive-password", "b", expect=2)
+    check("pass only one" in out, "both password options accepted", out)
 
 
 def test_anonymous_login_is_attempted(env):
@@ -910,6 +1026,190 @@ def test_ipv6(env):
     check("ftp://[::1]:" in out, "IPv6 URL not bracketed", out)
 
 
+def test_zip_basic(env):
+    out = env.run("basic.zip", "--directory", "zip", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("zip", "tree"), out)
+    compare_mtimes(env.fixtures["main"], env.remote("zip", "tree"), out)
+    check("Archive: ZIP, 8 file(s)" in out, "format not reported", out)
+    out = env.run("basic.zip", "--directory", "zip")
+    check("To upload: 0 file(s)" in out and "Skipped 8 file(s)" in out, "files were uploaded again", out)
+
+
+def test_zip_compression_methods(env):
+    for name in ("store.zip", "bzip2.zip", "lzma.zip", "zstd.zip", "infozip.zip"):
+        if not Path(env.archive(name)).exists():
+            print(f"    {name} skipped: not created")
+            continue
+        directory = name.replace(".", "-")
+        out = env.run(name, "--directory", directory, "--mkdir")
+        compare_trees(env.fixtures["main"], env.remote(directory, "tree"), out)
+
+
+def test_zip_many_directories(env):
+    out = env.run("dirs.zip", "--directory", "dirs-zip", "--mkdir")
+    compare_trees(env.fixtures["dirs"], env.remote("dirs-zip"), out)
+    compare_mtimes(env.fixtures["dirs"], env.remote("dirs-zip"), out)
+
+
+def test_zip_links(env):
+    out = env.run("links.zip", "--directory", "links-zip", "--mkdir")
+    check("skipping symbolic link" in out, "symlink warning missing", out)
+    compare_trees(env.fixtures["links"], env.remote("links-zip", "tree"), out)
+    check(not env.remote("links-zip", "tree", "link-to-plain").exists(), "the link was uploaded", out)
+
+
+def test_zip_corrupted(env):
+    data = bytearray(Path(env.archive("store.zip")).read_bytes())
+    source = (env.fixtures["main"] / "random-5M.bin").read_bytes()
+    offset = data.find(source[3 << 20:(3 << 20) + 64])
+    check(offset > 0, "could not locate file data in store.zip")
+    data[offset] ^= 0xFF
+    (env.fixtures["archives"] / "corrupted.zip").write_bytes(bytes(data))
+    out = env.run("corrupted.zip", "--directory", "corrupted-zip", "--mkdir", expect=1)
+    check("checksum" in out, "checksum error not reported", out)
+    check(not env.remote("corrupted-zip", "tree", "random-5M.bin").exists(), "corrupt file left on the server", out)
+
+
+def test_zip_traditional_encryption(env):
+    env.require("zipcrypto.zip")
+    out = env.run("zipcrypto.zip", "--directory", "zipcrypto", "--mkdir", expect=1)
+    check("--archive-password" in out, "no hint about --archive-password", out)
+    out = env.run("zipcrypto.zip", "--directory", "zipcrypto", "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
+    compare_trees(env.fixtures["main"], env.remote("zipcrypto", "tree"), out)
+
+
+def test_zip_aes_encryption(env):
+    env.require("aes.zip")
+    # A wrong password is found while reading the archive, before anything is sent.
+    out = env.run("aes.zip", "--directory", "aes-zip", "--mkdir", "--archive-password", "wrong", expect=1)
+    check("wrong archive password" in out, "wrong password not reported", out)
+    check("Connecting" not in out and not env.remote("aes-zip").exists(), "went on after a wrong password", out)
+    out = env.run("aes.zip", "--directory", "aes-zip", "--mkdir", "--archive-password", ZIP_AES_PASSWORD)
+    check(", encrypted" in out, "encryption not reported", out)
+    compare_trees(env.fixtures["main"], env.remote("aes-zip", "tree"), out)
+
+
+def test_zip_split(env):
+    env.require("split.zip.001")
+    parts = sorted(p.name for p in env.fixtures["archives"].glob("split.zip.0*"))
+    check(len(parts) >= 3, f"expected several parts, got {parts}")
+    out = env.run(parts[0], "--directory", "split-zip", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("split-zip", "tree"), out)
+    check(f"{len(parts)} volumes" in out, "volume count not reported", out)
+    out = env.run(parts[1], expect=1)
+    check(f"is not the first part of a split archive; pass {parts[0]}" in out, "later part accepted", out)
+    partial = env.fixtures["archives"] / "partial-zip"
+    partial.mkdir()
+    for name in parts:
+        if name != parts[1]:
+            shutil.copy(env.archive(name), partial / name)
+    out = env.run(f"partial-zip/{parts[0]}", expect=1)
+    check(f"volume not found: {partial / parts[1]}" in out, "missing part not reported", out)
+
+
+def test_zip_deflate64_is_reported(env):
+    env.require("deflate64.zip")
+    out = env.run("deflate64.zip", "--directory", "deflate64", "--mkdir", expect=1)
+    check("Unsupported ZIP compression method" in out, "Deflate64 not reported", out)
+    leftovers = [p for p in env.remote("deflate64").rglob("*") if p.is_file()]
+    check(not leftovers, f"files left on the server: {leftovers}", out)
+
+
+def test_7z_basic(env):
+    env.require("basic.7z")
+    out = env.run("basic.7z", "--directory", "sevenzip", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("sevenzip", "tree"), out)
+    compare_mtimes(env.fixtures["main"], env.remote("sevenzip", "tree"), out)
+    check("Archive: 7z, 8 file(s)" in out, "format not reported", out)
+
+
+def test_7z_rerun_and_repair(env):
+    env.require("basic.7z")
+    env.run("basic.7z", "--directory", "sevenzip-repair", "--mkdir")
+    # Files before and after the damaged ones are skipped, decompressing what the solid block needs.
+    env.remote("sevenzip-repair", "tree", "sub", "dir", "deep.bin").unlink()
+    with open(env.remote("sevenzip-repair", "tree", "small.txt"), "r+b") as f:
+        f.truncate(1)
+    time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
+    out = env.run("basic.7z", "--directory", "sevenzip-repair")
+    check("To upload: 2 file(s)" in out, "expected exactly the two damaged files", out)
+    compare_trees(env.fixtures["main"], env.remote("sevenzip-repair", "tree"), out)
+
+
+def test_7z_methods_and_directories(env):
+    for name, tree, directory in (("bzip2.7z", "main", "bzip2-7z"), ("ppmd.7z", "main", "ppmd-7z"),
+                                  ("dirs.7z", "dirs", "dirs-7z")):
+        env.require(name)
+        out = env.run(name, "--directory", directory, "--mkdir")
+        actual = env.remote(directory, "tree") if tree == "main" else env.remote(directory)
+        compare_trees(env.fixtures[tree], actual, out)
+
+
+def test_7z_multivolume(env):
+    env.require("multivolume.7z.001")
+    parts = sorted(p.name for p in env.fixtures["archives"].glob("multivolume.7z.0*"))
+    check(len(parts) >= 3, f"expected several parts, got {parts}")
+    out = env.run(parts[0], "--directory", "multi-7z", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("multi-7z", "tree"), out)
+    check(f"{len(parts)} volumes" in out, "volume count not reported", out)
+
+
+def test_7z_encrypted_is_reported(env):
+    for name in ("encrypted.7z", "encrypted-headers.7z"):
+        env.require(name)
+        out = env.run(name, "--directory", "enc-7z", "--mkdir", "--archive-password", ARCHIVE_PASSWORD, expect=1)
+        check("7z archives with a password are not supported" in out, f"{name}: not reported", out)
+        check(not env.remote("enc-7z").exists(), f"{name}: went on after reading the archive", out)
+
+
+def test_tar_basic(env):
+    out = env.run("basic.tar", "--directory", "tar", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("tar", "tree"), out)
+    compare_mtimes(env.fixtures["main"], env.remote("tar", "tree"), out)
+    check("Archive: tar, 8 file(s)" in out, "format not reported", out)
+    check("tar archives have no checksum of the file contents" in out, "no warning about verification", out)
+    out = env.run("basic.tar", "--directory", "tar")
+    check("To upload: 0 file(s)" in out and "Skipped 8 file(s)" in out, "files were uploaded again", out)
+
+
+def test_tar_split(env):
+    out = env.run("split.tar.001", "--directory", "split-tar", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("split-tar", "tree"), out)
+    check("3 volumes" in out, "volume count not reported", out)
+
+
+def test_tar_gz_is_read_as_it_is_uploaded(env):
+    out = env.run("basic.tar.gz", "--directory", "tgz", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("tgz", "tree"), out)
+    compare_mtimes(env.fixtures["main"], env.remote("tgz", "tree"), out)
+    check("Archive: tar (gzip), read as it is uploaded" in out, "streamed reading not reported", out)
+    check("Checking the files already on the server" not in out and "To upload:" not in out,
+          "the archive was listed first", out)
+    check("Done: 8 file(s)" in out, "wrong count", out)
+    # Again: everything is on the server, checked file by file.
+    out = env.run("basic.tar.gz", "--directory", "tgz")
+    check("Done: 0 file(s)" in out and "Skipped 8 file(s)" in out, "files were uploaded again", out)
+    # Damaged: only those two are sent.
+    env.remote("tgz", "tree", "sub", "dir", "deep.bin").unlink()
+    with open(env.remote("tgz", "tree", "small.txt"), "r+b") as f:
+        f.truncate(1)
+    time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
+    out = env.run("basic.tar.gz", "--directory", "tgz")
+    check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "expected exactly the two damaged files", out)
+    compare_trees(env.fixtures["main"], env.remote("tgz", "tree"), out)
+
+
+def test_tar_compressions(env):
+    for suffix in ("bz2", "xz", "lzma", "zst", "lz4"):
+        name = f"basic.tar.{suffix}"
+        if not Path(env.archive(name)).exists():
+            print(f"    {name} skipped: not created (Python 3.14+ for zst, the lz4 command for lz4)")
+            continue
+        out = env.run(name, "--directory", f"tar-{suffix}", "--mkdir")
+        compare_trees(env.fixtures["main"], env.remote(f"tar-{suffix}", "tree"), out)
+    out = env.run("split.tar.gz.001", "--directory", "split-tgz", "--mkdir")
+    compare_trees(env.fixtures["main"], env.remote("split-tgz", "tree"), out)
+
 def require_lib(env):
     if env.lib is None:
         raise Skipped("pass --lib")
@@ -940,7 +1240,7 @@ def test_lib_version(env):
     require_lib(env)
     version = env.lib.version()
     check(version.startswith("rarftp "), f"unexpected version string {version!r}")
-    check(re.fullmatch(r"rarftp \d+\.\d+\.\d+\S* \(UnRAR .+, libcurl .+\)", version),
+    check(re.fullmatch(r"rarftp \d+\.\d+\.\d+\S* \(UnRAR .+, libarchive .+, libcurl .+\)", version),
           f"unexpected version string {version!r}")
     cli = subprocess.run([env.rarftp, "--version"], capture_output=True, text=True, timeout=60)
     check(cli.stdout.split()[:2] == version.split()[:2],
@@ -1008,8 +1308,8 @@ def test_lib_encrypted_headers(env):
     job = env.lib_run("encrypted-headers.rar", directory="lib-enc-headers", mkdir=1,
                       on_prompt=answer_with("wrong", ARCHIVE_PASSWORD))
     out = job.describe()
-    check(job.prompts == [{"kind": "rar_password", "archive": "encrypted-headers.rar", "error": None},
-                          {"kind": "rar_password", "archive": "encrypted-headers.rar", "error": "Wrong password"}],
+    check(job.prompts == [{"kind": "archive_password", "archive": "encrypted-headers.rar", "error": None},
+                          {"kind": "archive_password", "archive": "encrypted-headers.rar", "error": "Wrong password"}],
           f"wrong prompts {job.prompts}", out)
     check(job.state["archive"]["encrypted"] is True, "archive not reported as encrypted", out)
     compare_trees(env.fixtures["main"], env.remote("lib-enc-headers", "tree"), out)
@@ -1017,7 +1317,7 @@ def test_lib_encrypted_headers(env):
 
 def test_lib_encrypted_files(env):
     require_lib(env)
-    job = env.lib_run("encrypted.rar", directory="lib-enc", mkdir=1, rar_password=ARCHIVE_PASSWORD)
+    job = env.lib_run("encrypted.rar", directory="lib-enc", mkdir=1, archive_password=ARCHIVE_PASSWORD)
     out = job.describe()
     check(not job.prompts, "the job asked for a password that was in the config", out)
     check(job.state["archive"]["encrypted"] is True, "archive not reported as encrypted", out)
@@ -1029,7 +1329,7 @@ def test_lib_encrypted_files_asks_for_the_password(env):
     job = env.lib_run("encrypted.rar", directory="lib-enc-prompt", mkdir=1,
                       on_prompt=answer_with(ARCHIVE_PASSWORD))
     out = job.describe()
-    check(job.prompts == [{"kind": "rar_password", "archive": "encrypted.rar", "error": None}],
+    check(job.prompts == [{"kind": "archive_password", "archive": "encrypted.rar", "error": None}],
           f"wrong prompts {job.prompts}", out)
     compare_trees(env.fixtures["main"], env.remote("lib-enc-prompt", "tree"), out)
 
@@ -1090,21 +1390,79 @@ def test_lib_cancel_removes_partial_file(env):
     check(not env.remote("lib-cancel", "tree", "zeros.bin").exists(), "partial file left on the server", out)
 
 
+def test_lib_zip_7z_and_tar(env):
+    require_lib(env)
+    env.require("basic.7z")
+    files, size = tree_totals(env.fixtures["main"])
+    for name, fmt, directory in (("basic.zip", "ZIP", "lib-zip"), ("basic.7z", "7z", "lib-7z"),
+                                 ("basic.tar", "tar", "lib-tar")):
+        job = env.lib_run(name, directory=directory, mkdir=1)
+        out = job.describe()
+        compare_trees(env.fixtures["main"], env.remote(directory, "tree"), out)
+        check(has_fields(job.state["archive"], name=name, format=fmt, files=files, bytes=size, volumes=1,
+                         encrypted=False), f"wrong archive info {job.state['archive']}", out)
+        if fmt == "tar":
+            check(any(line["level"] == "warn" and "no checksum" in line["text"] for line in job.result["problems"]),
+                  "no warning about verification", out)
+
+
+def test_lib_zip_password_prompt(env):
+    require_lib(env)
+    env.require("aes.zip")
+    job = env.lib_run("aes.zip", directory="lib-aes-zip", mkdir=1, on_prompt=answer_with("wrong", ZIP_AES_PASSWORD))
+    out = job.describe()
+    check(job.prompts == [{"kind": "archive_password", "archive": "aes.zip", "error": None},
+                          {"kind": "archive_password", "archive": "aes.zip", "error": "Wrong password"}],
+          f"wrong prompts {job.prompts}", out)
+    check(has_fields(job.state["archive"], format="ZIP", encrypted=True), "archive not reported as encrypted", out)
+    compare_trees(env.fixtures["main"], env.remote("lib-aes-zip", "tree"), out)
+
+
+def test_lib_7z_multivolume(env):
+    require_lib(env)
+    env.require("multivolume.7z.001")
+    parts = sorted(p.name for p in env.fixtures["archives"].glob("multivolume.7z.0*"))
+    job = env.lib_run(parts[0], directory="lib-multi-7z", mkdir=1)
+    out = job.describe()
+    compare_trees(env.fixtures["main"], env.remote("lib-multi-7z", "tree"), out)
+    check(job.state["archive"]["volumes"] == len(parts), f"expected {len(parts)} volumes", out)
+
+
+def test_lib_streamed_tar(env):
+    require_lib(env)
+    files, size = tree_totals(env.fixtures["main"])
+    job = env.lib_run("basic.tar.xz", directory="lib-txz", mkdir=1)
+    out = job.describe()
+    compare_trees(env.fixtures["main"], env.remote("lib-txz", "tree"), out)
+    check(has_fields(job.state["archive"], format="tar", compression="xz", files=None, bytes=None),
+          f"wrong archive info {job.state['archive']}", out)
+    check(job.state["probe"] is None, "a separate check of the server ran", out)
+    check(has_fields(job.state["progress"], totals_known=True, total_files=files, total_bytes=size,
+                     files_done=files), f"wrong final progress {job.state['progress']}", out)
+    check(job.state["progress"]["archive_read"] == job.state["progress"]["archive_size"] > 0,
+          "the archive was not read to its end", out)
+    check(has_fields(job.result, files_uploaded=files, skipped_files=0), f"wrong counters {job.result}", out)
+    job = env.lib_run("basic.tar.xz", directory="lib-txz")
+    check(has_fields(job.result, files_uploaded=0, skipped_files=files, skipped_bytes=size),
+          f"wrong counters on the second run {job.result}", job.describe())
+
+
 def test_big_file(env):
     if env.fixtures["big"] is None:
         raise Skipped("pass --big")
     time_cmd = ["/usr/bin/time", "-l"] if sys.platform == "darwin" else ["/usr/bin/time", "-v"]
-    cmd = time_cmd + env.command("big.rar", "--directory", "big", "--mkdir")
-    proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
-    out = proc.stdout + proc.stderr
-    check(proc.returncode == 0, f"exit code {proc.returncode}", out)
-    compare_trees(env.fixtures["big"], env.remote("big", "tree"), out)
-    match = (re.search(r"(\d+)\s+maximum resident set size", out) or
-             re.search(r"Maximum resident set size \(kbytes\): (\d+)", out))
-    if match:
-        rss = int(match.group(1)) * (1 if sys.platform == "darwin" else 1024)
-        print(f"    max RSS {rss / (1 << 20):.0f} MiB for a 4.5 GiB file")
-        check(rss < 512 << 20, f"memory use too high: {rss} bytes", out)
+    for archive, directory in (("big.rar", "big"), ("big.zip", "big-zip")):
+        cmd = time_cmd + env.command(archive, "--directory", directory, "--mkdir")
+        proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600)
+        out = proc.stdout + proc.stderr
+        check(proc.returncode == 0, f"{archive}: exit code {proc.returncode}", out)
+        compare_trees(env.fixtures["big"], env.remote(directory, "tree"), out)
+        match = (re.search(r"(\d+)\s+maximum resident set size", out) or
+                 re.search(r"Maximum resident set size \(kbytes\): (\d+)", out))
+        if match:
+            rss = int(match.group(1)) * (1 if sys.platform == "darwin" else 1024)
+            print(f"    {archive}: max RSS {rss / (1 << 20):.0f} MiB for a 4.5 GiB file")
+            check(rss < 512 << 20, f"{archive}: memory use too high: {rss} bytes", out)
 
 
 TESTS = [
@@ -1135,6 +1493,24 @@ TESTS = [
     test_cancel_removes_partial_file,
     test_tui_renders_and_quits_with_q,
     test_ipv6,
+    test_zip_basic,
+    test_zip_compression_methods,
+    test_zip_many_directories,
+    test_zip_links,
+    test_zip_corrupted,
+    test_zip_traditional_encryption,
+    test_zip_aes_encryption,
+    test_zip_split,
+    test_zip_deflate64_is_reported,
+    test_7z_basic,
+    test_7z_rerun_and_repair,
+    test_7z_methods_and_directories,
+    test_7z_multivolume,
+    test_7z_encrypted_is_reported,
+    test_tar_basic,
+    test_tar_split,
+    test_tar_gz_is_read_as_it_is_uploaded,
+    test_tar_compressions,
     test_lib_version,
     test_lib_basic_upload,
     test_lib_rerun_skips_identical_files,
@@ -1145,6 +1521,10 @@ TESTS = [
     test_lib_declined_password_prompt,
     test_lib_missing_directory_is_an_error,
     test_lib_cancel_removes_partial_file,
+    test_lib_zip_7z_and_tar,
+    test_lib_zip_password_prompt,
+    test_lib_7z_multivolume,
+    test_lib_streamed_tar,
     test_big_file,
 ]
 
@@ -1153,6 +1533,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rarftp", required=True, help="path to the rarftp binary")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
+    parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")
     parser.add_argument("--big", action="store_true", help="also test a 4.5 GiB file")
     parser.add_argument("--lib", help="path to librarftpcore (.dylib/.so/.dll): also test its C API (lib_* tests)")
     parser.add_argument("--keep", action="store_true", help="keep the work directory")

@@ -17,7 +17,7 @@
         <header class="app-header">
           <h1>rarftp</h1>
           <span id="app-version" class="version muted"></span>
-          <p class="tagline muted">Stream a RAR archive to an FTP server without unpacking it to disk.</p>
+          <p class="tagline muted">Stream an archive to an FTP server without unpacking it to disk.</p>
         </header>
 
         <!-- Archive -->
@@ -34,16 +34,16 @@
               <path d="M10 11h2M10 14h2M10 17h2"/>
             </svg>
             <div class="dz-text">
-              <div id="dz-title" class="dz-title selectable">Drop a RAR archive here</div>
-              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume.</div>
+              <div id="dz-title" class="dz-title selectable">Drop an archive here</div>
+              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume (.part1.rar, zip.001, etc.).</div>
             </div>
             <button type="button" id="btn-choose" class="btn">Choose…</button>
           </div>
           <p id="archive-hint" class="hint warn-text" role="status" hidden></p>
 
           <div class="field">
-            <label for="rar-password">Archive password</label>
-            <input id="rar-password" type="password" autocomplete="new-password" autocapitalize="off"
+            <label for="archive-password">Archive password</label>
+            <input id="archive-password" type="password" autocomplete="new-password" autocapitalize="off"
                    spellcheck="false" placeholder="Only if the archive is encrypted">
           </div>
         </section>
@@ -84,7 +84,7 @@
 
           <div class="grid two">
             <div class="field">
-              <label for="user">User</label>
+              <label for="user">Username</label>
               <input id="user" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
                      spellcheck="false" placeholder="anonymous">
             </div>
@@ -97,8 +97,7 @@
 
           <div class="field">
             <label for="directory">Directory</label>
-            <input id="directory" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
-                   spellcheck="false" placeholder="login directory">
+            <input id="directory" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
           </div>
 
           <label class="check">
@@ -151,6 +150,11 @@
         <ul id="chips" class="chips" aria-label="Archive details"></ul>
       </div>
 
+      <section class="log-panel" aria-label="Log">
+        <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
+        <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
+      </section>
+
       <div id="current-block" class="block">
         <div class="block-head">
           <span id="cur-label" class="block-label">File</span>
@@ -193,11 +197,6 @@
         </div>
       </dl>
 
-      <section class="log-panel" aria-label="Log">
-        <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
-        <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
-      </section>
-
       <div class="t-bottom">
         <div id="t-actions" class="t-actions">
           <button type="button" id="btn-cancel" class="btn">Cancel</button>
@@ -233,7 +232,7 @@
   <dialog id="dlg-memory" class="dialog" aria-labelledby="dlg-memory-title">
     <form method="dialog">
       <h2 id="dlg-memory-title">Store the login unencrypted?</h2>
-      <p>The user name and password will be saved as plain text in <code id="dlg-memory-path" class="path"></code>.</p>
+      <p>The username and password will be saved as plain text in <code id="dlg-memory-path" class="path"></code>.</p>
       <div class="dialog-actions">
         <button type="submit" value="store" class="btn">Store login</button>
         <button type="submit" value="dont" class="btn btn-primary" autofocus>Don't store login</button>
