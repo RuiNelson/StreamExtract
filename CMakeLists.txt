@@ -6,7 +6,7 @@ if(POLICY CMP0135)
 endif()
 
 project(rarftp
-  VERSION 2.1.0
+  VERSION 2.2.0
   DESCRIPTION "Uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
   LANGUAGES C CXX)
 
@@ -31,6 +31,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(UnRAR)
+include(LzmaSdk)
 include(Dependencies)
 include(LibArchive)
 
@@ -45,6 +46,8 @@ add_library(rarftp_core STATIC
   src/plan.cpp
   src/progress.cpp
   src/rar_archive.cpp
+  src/sevenzip_archive.cpp
+  src/sevenzip_methods.cpp
   src/summary.cpp
   src/transfer.cpp
   src/util/json.cpp
@@ -55,7 +58,7 @@ target_include_directories(rarftp_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rarftp_core PRIVATE RARFTP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(rarftp_core
   PUBLIC fmt::fmt
-  PRIVATE unrar::unrar rarftp::libarchive CURL::libcurl Threads::Threads)
+  PRIVATE unrar::unrar rarftp::lzmasdk rarftp::libarchive CURL::libcurl Threads::Threads)
 if(APPLE)
   target_link_libraries(rarftp_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.
 endif()

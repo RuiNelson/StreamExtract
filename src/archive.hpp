@@ -39,7 +39,7 @@ struct ArchiveFlags {
   bool first_volume = false;
   bool solid = false;
   bool encrypted_headers = false;
-  // Skipping an entry still decompresses it (solid RAR, 7z).
+  // Skipping an entry still decompresses it (solid RAR and 7z).
   bool skip_decompresses = false;
   // Entries carry a checksum of their data, verified by test(). False for
   // tar, which only checksums its headers.

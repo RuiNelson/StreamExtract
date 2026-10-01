@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -113,6 +114,29 @@ std::string error_text(const std::string& path) {
   return "no error";
 }
 
+// Tests only the `wanted` entries, skipping the others, like a re-run does.
+std::map<std::string, std::string> extract_only(const std::string& path, const std::set<std::string>& wanted) {
+  std::map<std::string, std::string> contents;
+  std::string current;
+  ArchiveCallbacks callbacks;
+  callbacks.on_data = [&](const uint8_t* data, size_t size) {
+    current.append(reinterpret_cast<const char*>(data), size);
+    return true;
+  };
+  const std::unique_ptr<Archive> archive = open_archive(path, Archive::Mode::Extract, callbacks);
+  ArchiveEntry entry;
+  while (archive->next(entry)) {
+    if (wanted.count(entry.name) == 0) {
+      archive->skip();
+      continue;
+    }
+    current.clear();
+    archive->test();
+    contents[entry.name] = current;
+  }
+  return contents;
+}
+
 }  // namespace
 
 TEST_CASE("formats are recognized by their content, not their name") {
@@ -167,11 +191,130 @@ TEST_CASE("a 7z archive") {
   const TempDir dir;
   const Read read = read_all(dir.write("tiny.7z", fixtures::kTiny7z));
   CHECK(read.format == ArchiveFormat::SevenZip);
-  CHECK(read.flags.skip_decompresses);
+  CHECK_FALSE(read.flags.solid);
+  CHECK_FALSE(read.flags.skip_decompresses);
   REQUIRE(read.entries.size() == 1);
   CHECK(read.entries[0].name == "hello.txt");
   CHECK(read.entries[0].size == 6);
+  CHECK(read.entries[0].mtime > 1767000000);  // 2026.
+  CHECK_FALSE(read.entries[0].encrypted);
   CHECK(read.contents == std::vector<std::string>{"hello\n"});
+}
+
+TEST_CASE("solid and non-solid 7z archives") {
+  const TempDir dir;
+  const std::string solid = dir.write("solid.7z", fixtures::kSolid7z);
+  const Read read = read_all(solid);
+  CHECK(read.flags.solid);
+  CHECK(read.flags.skip_decompresses);
+  REQUIRE(read.entries.size() == 5);
+  CHECK(read.entries[0].name == "dir");
+  CHECK(read.entries[0].kind == EntryKind::Directory);
+  CHECK(read.entries[1].name == "empty.txt");
+  CHECK(read.entries[1].kind == EntryKind::File);
+  CHECK(read.entries[1].size == 0);
+  CHECK(read.entries[4].name == "dir/c.txt");
+  CHECK(read.contents == std::vector<std::string>{"", "", "first\n", "second\n", "third\n"});
+  // Files skipped before the wanted ones are decompressed on the way.
+  CHECK(extract_only(solid, {"b.txt", "dir/c.txt"}) ==
+        std::map<std::string, std::string>{{"b.txt", "second\n"}, {"dir/c.txt", "third\n"}});
+  CHECK(extract_only(solid, {"dir/c.txt"}) == std::map<std::string, std::string>{{"dir/c.txt", "third\n"}});
+
+  const std::string blocks = dir.write("nonsolid.7z", fixtures::kNonSolid7z);
+  const Read nonsolid = read_all(blocks);
+  CHECK_FALSE(nonsolid.flags.solid);
+  CHECK_FALSE(nonsolid.flags.skip_decompresses);
+  CHECK(nonsolid.contents == std::vector<std::string>{"first\n", "second\n"});
+  CHECK(extract_only(blocks, {"b.txt"}) == std::map<std::string, std::string>{{"b.txt", "second\n"}});
+}
+
+TEST_CASE("7z compression methods and filters") {
+  const TempDir dir;
+  struct Case {
+    const char* name;
+    const unsigned char* data;
+    size_t size;
+    const char* password;
+  };
+  // BZip2, Deflate and Zstandard are not in 7-Zip's SDK: rarftp's own decoders.
+  for (const Case& c : {Case{"ppmd.7z", fixtures::kPpmd7z, sizeof(fixtures::kPpmd7z), nullptr},
+                        Case{"delta.7z", fixtures::kDelta7z, sizeof(fixtures::kDelta7z), nullptr},
+                        Case{"arm64.7z", fixtures::kArm647z, sizeof(fixtures::kArm647z), nullptr},
+                        Case{"copy.7z", fixtures::kCopy7z, sizeof(fixtures::kCopy7z), nullptr},
+                        Case{"bzip2.7z", fixtures::kBzip27z, sizeof(fixtures::kBzip27z), nullptr},
+                        Case{"deflate.7z", fixtures::kDeflate7z, sizeof(fixtures::kDeflate7z), nullptr},
+                        Case{"zstd.7z", fixtures::kZstd7z, sizeof(fixtures::kZstd7z), nullptr},
+                        Case{"aes-bzip2.7z", fixtures::kAesBzip27z, sizeof(fixtures::kAesBzip27z), "secret"},
+                        Case{"aes-deflate.7z", fixtures::kAesDeflate7z, sizeof(fixtures::kAesDeflate7z), "secret"}}) {
+    CAPTURE(c.name);
+    const std::optional<std::string> password =
+        c.password != nullptr ? std::optional<std::string>(c.password) : std::nullopt;
+    const Read read = read_all(dir.write(c.name, c.data, c.size), password);
+    CHECK(read.format == ArchiveFormat::SevenZip);
+    REQUIRE(read.entries.size() == 1);
+    CHECK(read.entries[0].name == "hello.txt");
+    CHECK(read.contents == std::vector<std::string>{"hello\n"});
+  }
+
+  const std::string zstd = dir.write("zstd-solid.7z", fixtures::kZstdSolid7z);
+  const Read solid = read_all(zstd);
+  CHECK(solid.flags.solid);
+  CHECK(solid.contents == std::vector<std::string>{"first\n", "second\n", "third\n"});
+  CHECK(extract_only(zstd, {"dir/c.txt"}) == std::map<std::string, std::string>{{"dir/c.txt", "third\n"}});
+
+  // Found while reading the archive, before anything is uploaded.
+  CHECK(error_text(dir.write("deflate64.7z", fixtures::kDeflate647z)) ==
+        "unsupported 7z compression method: Deflate64");
+}
+
+TEST_CASE("encrypted 7z archives") {
+  const TempDir dir;
+  struct Case {
+    const char* name;
+    const unsigned char* data;
+    size_t size;
+    bool encrypted_headers;
+  };
+  for (const Case& c : {Case{"aes.7z", fixtures::kAes7z, sizeof(fixtures::kAes7z), false},
+                        Case{"aes-headers.7z", fixtures::kAesHeaders7z, sizeof(fixtures::kAesHeaders7z), true}}) {
+    CAPTURE(c.name);
+    const std::string path = dir.write(c.name, c.data, c.size);
+
+    int prompts = 0;
+    const Read read = read_all(path, "secret", &prompts);
+    CHECK(read.flags.encrypted_headers == c.encrypted_headers);
+    REQUIRE(read.entries.size() == 1);
+    CHECK(read.entries[0].name == "hello.txt");
+    CHECK(read.entries[0].encrypted);
+    CHECK(read.contents == std::vector<std::string>{"hello\n"});
+    CHECK(prompts == 2);  // Once per archive object: listing, then extracting.
+
+    // A wrong password shows up while listing: decrypting the names, or the
+    // start of the first encrypted file.
+    prompts = 0;
+    ArchiveCallbacks callbacks;
+    callbacks.on_password = [&]() -> std::optional<std::string> {
+      ++prompts;
+      return std::string("wrong");
+    };
+    try {
+      const std::unique_ptr<Archive> archive = open_archive(path, Archive::Mode::List, callbacks);
+      ArchiveEntry entry;
+      while (archive->next(entry)) {
+        archive->skip();
+      }
+      FAIL("a wrong password was accepted");
+    } catch (const ArchiveError& error) {
+      CHECK(error.kind() == ArchiveError::Kind::BadPassword);
+    }
+    CHECK(prompts == 1);
+
+    CHECK(error_kind(path) == ArchiveError::Kind::MissingPassword);
+  }
+
+  // A block per file: every block has its own decoder.
+  const std::string blocks = dir.write("aes-nonsolid.7z", fixtures::kAesNonSolid7z);
+  CHECK(read_all(blocks, "secret").contents == std::vector<std::string>{"first\n", "second\n"});
 }
 
 TEST_CASE("7z names are UTF-8 whatever the locale") {

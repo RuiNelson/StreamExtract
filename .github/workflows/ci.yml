@@ -10,6 +10,8 @@ on:
 env:
   UNRAR_VERSION: "7.3.1"
   UNRAR_SHA256: 634900842a3737d9cc15bbcc71d4c74cc713437e0bca296a573424fe5f2660ab
+  LZMASDK_URL: https://github.com/ip7z/7zip/releases/download/26.03/lzma2603.7z
+  LZMASDK_SHA256: 86c213f752520ab5325c310f50bef63ec344b56dd1c80b0246d06dc6cec953b2
   # Only used to create the .rar artifacts (evaluation copy of the RAR archiver).
   RAR_ARCHIVE: rarlinux-x64-723.tar.gz
   RAR_SHA256: 759b4b6aa0d9f77131882162951193f3a0e54bf60e1d8dc4255aa308accab588
@@ -58,7 +60,7 @@ jobs:
 
       - name: Install Ninja (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build p7zip-full
 
       - name: Install Ninja (macOS)
         if: runner.os == 'macOS'
@@ -72,6 +74,21 @@ jobs:
           test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
           mkdir unrarsrc
           tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+
+      # 7-Zip's LZMA SDK is not part of the repository either (see README). It is a
+      # .7z: bsdtar extracts it on macOS, 7-Zip elsewhere.
+      - name: Fetch the LZMA SDK
+        run: |
+          curl -fsSLO "${LZMASDK_URL}"
+          archive="${LZMASDK_URL##*/}"
+          actual="$(cmake -E sha256sum "${archive}" | cut -d' ' -f1)"
+          test "$actual" = "$LZMASDK_SHA256" || { echo "LZMA SDK checksum mismatch: $actual"; exit 1; }
+          mkdir lzmasdk
+          if [ "$RUNNER_OS" = macOS ]; then
+            tar -xf "${archive}" -C lzmasdk
+          else
+            7z x -bso0 -bsp0 -olzmasdk "${archive}"
+          fi
 
       # libcurl is always built from source and linked statically (FTP only, no
       # TLS), so the binary depends on nothing that Windows does not ship.
@@ -156,7 +173,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev file libfuse2
+          sudo apt-get install -y ninja-build p7zip-full libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev file libfuse2
 
       - name: Install Ninja (macOS)
         if: runner.os == 'macOS'
@@ -184,6 +201,21 @@ jobs:
           test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
           mkdir unrarsrc
           tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+
+      # 7-Zip's LZMA SDK is not part of the repository either (see README). It is a
+      # .7z: bsdtar extracts it on macOS, 7-Zip elsewhere.
+      - name: Fetch the LZMA SDK
+        run: |
+          curl -fsSLO "${LZMASDK_URL}"
+          archive="${LZMASDK_URL##*/}"
+          actual="$(cmake -E sha256sum "${archive}" | cut -d' ' -f1)"
+          test "$actual" = "$LZMASDK_SHA256" || { echo "LZMA SDK checksum mismatch: $actual"; exit 1; }
+          mkdir lzmasdk
+          if [ "$RUNNER_OS" = macOS ]; then
+            tar -xf "${archive}" -C lzmasdk
+          else
+            7z x -bso0 -bsp0 -olzmasdk "${archive}"
+          fi
 
       - name: Configure the library
         run: >

@@ -11,6 +11,11 @@ namespace rarftp {
 std::string to_utf8(std::wstring_view wide);
 std::wstring from_utf8(std::string_view utf8);
 
+// UTF-8 <-> UTF-16 (7z names and passwords). Invalid input sequences, unpaired
+// surrogates included, are replaced by U+FFFD.
+std::string utf16_to_utf8(std::u16string_view utf16);
+std::u16string utf8_to_utf16(std::string_view utf8);
+
 // True if `text` is well-formed UTF-8 (no overlong forms or surrogates).
 bool is_valid_utf8(std::string_view text);
 

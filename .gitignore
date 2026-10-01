@@ -55,6 +55,10 @@ dkms.conf
 /unrarsrc/
 unrarsrc-*.tar*
 
+# LZMA SDK (7-Zip's 7z code, fetched manually, see README)
+/lzmasdk/
+lzma[0-9]*.7z
+
 # Build trees and tooling
 /build*/
 /out/

@@ -263,9 +263,6 @@ struct LibArchiveReader::Impl {
     if (contains(message, "Passphrase required")) {
       return ArchiveError(ArchiveError::Kind::MissingPassword, "password required");
     }
-    if (format == ArchiveFormat::SevenZip && (contains(message, "encrypted") || entry_encrypted)) {
-      return ArchiveError(ArchiveError::Kind::Other, "7z archives with a password are not supported");
-    }
     if (contains(message, "bad CRC") || contains(message, "bad Authentication code")) {
       return ArchiveError(ArchiveError::Kind::Other, "corrupt data (checksum mismatch)");
     }
@@ -319,7 +316,6 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
   m.flags.volume = parts.size() > 1;
   m.flags.first_volume = true;
   m.flags.volume_count = static_cast<unsigned>(parts.size());
-  m.flags.skip_decompresses = format == ArchiveFormat::SevenZip;  // Usually solid; libarchive cannot tell.
   m.flags.checksums = format != ArchiveFormat::Tar;
 
   m.handle = archive_read_new();
@@ -334,15 +330,13 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
         supported = archive_read_set_format_option(m.handle, "zip", "compat-2x", "1");
       }
       break;
-    case ArchiveFormat::SevenZip:
-      supported = archive_read_support_format_7zip(m.handle);
-      break;
     case ArchiveFormat::Tar:
       supported = support_tar(m.handle);
       if (supported == ARCHIVE_OK) {
         supported = archive_read_set_format_option(m.handle, "tar", "compat-2x", "1");
       }
       break;
+    case ArchiveFormat::SevenZip:  // SevenZipArchive.
     case ArchiveFormat::Rar:
       break;
   }
@@ -403,9 +397,6 @@ bool LibArchiveReader::next(ArchiveEntry& entry) {
   entry.mtime = archive_entry_mtime_is_set(header) ? static_cast<int64_t>(archive_entry_mtime(header)) : 0;
   entry.encrypted = archive_entry_is_encrypted(header) != 0;
   m.entry_encrypted = entry.encrypted;
-  if (m.format == ArchiveFormat::SevenZip && entry.encrypted) {
-    throw ArchiveError(ArchiveError::Kind::Other, "7z archives with a password are not supported");
-  }
   return true;
 }
 
