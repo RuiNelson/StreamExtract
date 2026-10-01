@@ -17,9 +17,7 @@
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
 #endif
-#ifndef _WIN32
 #include <locale.h>
-#endif
 
 namespace rarftp {
 
@@ -27,10 +25,10 @@ namespace {
 
 constexpr size_t kReadBlockSize = 1 << 20;
 
-#ifndef _WIN32
 // libarchive converts names to the charset of the current locale (7z stores
 // them as UTF-16), and a GUI app often runs with the "C" locale. Every call
 // into libarchive therefore runs with a UTF-8 LC_CTYPE on the calling thread.
+#ifndef _WIN32
 class Utf8Locale {
  public:
   Utf8Locale() {
@@ -63,10 +61,28 @@ class Utf8Locale {
   locale_t previous_ = locale_t(nullptr);
 };
 #else
-// Windows: names are read as UTF-16, whatever the locale. (User-provided
-// constructor: no "unused variable" warnings.)
-struct Utf8Locale {
-  Utf8Locale() {}
+// Windows: the C runtime's locale, made per-thread (libarchive reads the code
+// page from it; ".UTF8" needs Windows 10 1803 or later).
+class Utf8Locale {
+ public:
+  Utf8Locale() : mode_(_configthreadlocale(_ENABLE_PER_THREAD_LOCALE)) {
+    if (const char* current = setlocale(LC_CTYPE, nullptr)) {
+      previous_ = current;
+    }
+    setlocale(LC_CTYPE, ".UTF8");
+  }
+  ~Utf8Locale() {
+    if (!previous_.empty()) {
+      setlocale(LC_CTYPE, previous_.c_str());
+    }
+    _configthreadlocale(mode_);
+  }
+  Utf8Locale(const Utf8Locale&) = delete;
+  Utf8Locale& operator=(const Utf8Locale&) = delete;
+
+ private:
+  int mode_;
+  std::string previous_;
 };
 #endif
 
@@ -102,16 +118,10 @@ std::string to_nfc(const std::string& utf8) {
 #endif
 
 std::string entry_name(archive_entry* entry, ArchiveFormat format) {
-#ifdef _WIN32
-  // ZIP names without the UTF-8 flag are decoded with the OEM code page, like
-  // Windows itself does; tar names as UTF-8 (hdrcharset, set when opening).
-  (void)format;
-  const wchar_t* wide = archive_entry_pathname_w(entry);
-  return wide != nullptr ? to_utf8(wide) : std::string();
-#else
-  // ZIP names without the UTF-8 flag and tar names without a pax header arrive
-  // as the raw bytes: UTF-8 (what macOS and today's systems write) or else the
-  // format's traditional charset, CP437 for ZIP and Latin-1 for tar.
+  // With the UTF-8 locale, names in a known charset (7z, flagged ZIP, pax)
+  // come as UTF-8. The others arrive as the raw bytes (compat-2x, set when
+  // opening, on every system): UTF-8 (what macOS and today's systems write) or
+  // else the format's traditional charset, CP437 for ZIP and Latin-1 for tar.
   const char* raw = archive_entry_pathname(entry);
   if (raw == nullptr) {
     return {};
@@ -123,7 +133,6 @@ std::string entry_name(archive_entry* entry, ArchiveFormat format) {
   return to_nfc(raw);
 #else
   return raw;
-#endif
 #endif
 }
 
@@ -321,18 +330,18 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
   switch (format) {
     case ArchiveFormat::Zip:  // The seekable reader trusts the central directory, like other tools.
       supported = archive_read_support_format_zip_seekable(m.handle);
+      if (supported == ARCHIVE_OK) {
+        supported = archive_read_set_format_option(m.handle, "zip", "compat-2x", "1");
+      }
       break;
     case ArchiveFormat::SevenZip:
       supported = archive_read_support_format_7zip(m.handle);
       break;
     case ArchiveFormat::Tar:
       supported = support_tar(m.handle);
-#ifdef _WIN32
-      // Names without a pax header are bytes in no stated charset: UTF-8 today.
       if (supported == ARCHIVE_OK) {
-        supported = archive_read_set_format_option(m.handle, "tar", "hdrcharset", "UTF-8");
+        supported = archive_read_set_format_option(m.handle, "tar", "compat-2x", "1");
       }
-#endif
       break;
     case ArchiveFormat::Rar:
       break;

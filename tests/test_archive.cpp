@@ -184,17 +184,15 @@ TEST_CASE("7z names are UTF-8 whatever the locale") {
 
 TEST_CASE("ZIP names without the UTF-8 flag") {
   const TempDir dir;
-  // Code page 437, the format's default (and the OEM code page of US Windows).
+  // Code page 437, the format's default.
   const Read cp437 = read_all(dir.write("cp437.zip", fixtures::kCp437Zip));
   REQUIRE(cp437.entries.size() == 1);
   CHECK(cp437.entries[0].name == "aço.txt");
   CHECK(cp437.contents == std::vector<std::string>{"hi\n"});
-#ifndef _WIN32
-  // UTF-8 without the flag, as macOS writes them (Windows decodes them with the OEM code page).
+  // UTF-8 without the flag, as macOS writes them.
   const Read utf8 = read_all(dir.write("utf8.zip", fixtures::kUnflaggedUtf8Zip));
   REQUIRE(utf8.entries.size() == 1);
   CHECK(utf8.entries[0].name == "aço.txt");
-#endif
 }
 
 TEST_CASE("an AES-encrypted ZIP archive") {
