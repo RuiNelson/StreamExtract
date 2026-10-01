@@ -134,10 +134,10 @@ Exit codes: `0` success, `1` error, `2` invalid command line, `130` cancelled.
 
 | Platform | Asset |
 |---|---|
-| Windows (x64) | `rarftp-windows-x64.rar` |
-| macOS (Intel and Apple Silicon) | `rarftp-macos-universal.rar` |
-| Linux (x64, glibc 2.35+) | `rarftp-linux-x64.rar` |
-| Linux (arm64, glibc 2.35+) | `rarftp-linux-arm64.rar` |
+| Windows (x64) | `rarftp-cli-windows-x64.rar` |
+| macOS (Intel and Apple Silicon) | `rarftp-cli-macos-universal.rar` |
+| Linux (x64, glibc 2.35+) | `rarftp-cli-linux-x64.rar` |
+| Linux (arm64, glibc 2.35+) | `rarftp-cli-linux-arm64.rar` |
 
 Each archive holds the `rarftp` executable, `LICENSE`, `README.md` and
 `THIRD_PARTY_NOTICES.md`. The executables are statically linked and need no
@@ -145,7 +145,7 @@ other installation.
 
 #### Windows
 
-1. Extract `rarftp-windows-x64.rar` into `C:\rarftp`, so that the
+1. Extract `rarftp-cli-windows-x64.rar` into `C:\rarftp`, so that the
    result is `C:\rarftp\rarftp.exe`.
 
 2. Run it from a terminal:
@@ -171,7 +171,7 @@ rarftp --version
 #### Linux
 
 ```bash
-unrar x rarftp-linux-x64.rar rarftp/        # or: 7z x -orarftp rarftp-linux-x64.rar
+unrar x rarftp-cli-linux-x64.rar rarftp/        # or: 7z x -orarftp rarftp-linux-x64.rar
 sudo install -m 755 rarftp/rarftp /usr/local/bin/rarftp
 rarftp --version
 ```
