@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Units {
-    Si,
     #[default]
+    Si,
     Binary,
 }
 
@@ -27,7 +27,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            units: Units::Binary,
+            units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
         }
     }
@@ -40,8 +40,8 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
     let ini = crate::ini::Ini::parse(&text);
     let preferences = Preferences {
         units: match ini.get("display", "units").map(str::trim) {
-            Some(value) if value.eq_ignore_ascii_case("si") => Units::Si,
-            _ => Units::Binary,
+            Some(value) if value.eq_ignore_ascii_case("binary") => Units::Binary,
+            _ => Units::Si,
         },
         buffer_mib: ini
             .get("transfer", "buffer_mib")
@@ -87,29 +87,32 @@ mod tests {
         ));
         let path = dir.join("preferences.ini");
         assert_eq!(load(&path).unwrap(), Preferences::default());
+        assert_eq!(Preferences::default().units, Units::Si);
         save(
             &path,
             Preferences {
-                units: Units::Si,
+                units: Units::Binary,
                 buffer_mib: 128,
             },
         )
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
-        assert_eq!(load(&path).unwrap().units, Units::Si);
+        assert_eq!(load(&path).unwrap().units, Units::Binary);
         let memory = dir.join("memory.ini");
         fs::write(&memory, "server settings").unwrap();
         save(&path, Preferences::default()).unwrap();
-        assert_eq!(load(&path).unwrap().units, Units::Binary);
+        assert_eq!(load(&path).unwrap().units, Units::Si);
         assert_eq!(fs::read_to_string(&memory).unwrap(), "server settings");
         crate::memory::clear(&memory).unwrap();
-        assert_eq!(load(&path).unwrap().units, Units::Binary);
+        assert_eq!(load(&path).unwrap().units, Units::Si);
         fs::write(
             &path,
-            "\u{feff}; comment\n[other]\nunits=si\n[display]\nunits=invalid\n",
+            "\u{feff}; comment\n[other]\nunits=binary\n[display]\nunits=invalid\n",
         )
         .unwrap();
         assert_eq!(load(&path).unwrap(), Preferences::default());
+        fs::write(&path, "[ DISPLAY ]\nunits = BINARY\nunknown=yes\n").unwrap();
+        assert_eq!(load(&path).unwrap().units, Units::Binary);
         fs::write(&path, "[ DISPLAY ]\nunits = SI\nunknown=yes\n").unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
         for value in ["0", "4097", "-1", "invalid"] {
@@ -131,7 +134,7 @@ mod tests {
             assert!(save(
                 &path,
                 Preferences {
-                    units: Units::Binary,
+                    units: Units::Si,
                     buffer_mib: value
                 }
             )

@@ -108,7 +108,7 @@
     info: null, // app_info()
     memory: { saved: false, store_credentials: null },
     memoryBusy: false,
-    units: "binary",
+    units: "si",
     bufferMib: 64,
     preferencesBusy: true,
     starting: false,

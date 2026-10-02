@@ -51,7 +51,7 @@ The app offers:
   (anonymous without a username), destination directory and *Create directory
   if missing*.
   *Advanced* has the buffer size, the verbose log and **Display units**: SI
-  (1000 MB = 1 GB) or binary (1024 MiB = 1 GiB, the default). The choice applies
+  (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
   to sizes, speeds, log messages and the final summary. The units and buffer size are saved
   automatically in `~/.config/rarftp-gui/preferences.ini`, separately from
   server memory (buffer default: 64 MiB; range: 1–4096 MiB).
