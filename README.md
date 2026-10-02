@@ -286,6 +286,9 @@ Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 
 ## Building
 
+To update the project version everywhere (including the GUI and API examples),
+run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
+
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
 used when present; otherwise, or with `-DRARFTP_BUNDLED_CURL=ON`, an FTP-only
 libcurl is built from source). UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
