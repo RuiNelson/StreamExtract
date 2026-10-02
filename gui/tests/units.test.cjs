@@ -3,8 +3,8 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function frontend(invoke = async () => ({ units: "binary", buffer_mib: 64 }), windowApi = {}) {
-  const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "binary" }));
+function frontend(invoke = async () => ({ units: "si", buffer_mib: 64 }), windowApi = {}) {
+  const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "si" }));
   const nodes = new Map();
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {
@@ -148,9 +148,10 @@ test("loading and changing units persists automatically through the backend", as
 
 test("a failed save restores the previous selection", async () => {
   const app = frontend(async () => { throw new Error("read-only directory"); });
-  await app.saveUnits({ target: { value: "si" } });
-  assert.equal(app.state.units, "binary");
-  assert.equal(app.inputs[1].checked, true);
+  await app.saveUnits({ target: { value: "binary" } });
+  assert.equal(app.state.units, "si");
+  assert.equal(app.inputs[0].checked, true);
+  assert.equal(app.inputs[1].checked, false);
   assert.equal(app.inputs[0].disabled, false);
 });
 
@@ -195,7 +196,7 @@ test("the selected units are sent to the engine when a transfer starts", () => {
   const app = frontend();
   app.node("port").value = "21";
   app.state.archive = "/tmp/archive.zip";
-  assert.equal(app.buildConfig().units, "binary");
-  app.state.units = "si";
   assert.equal(app.buildConfig().units, "si");
+  app.state.units = "binary";
+  assert.equal(app.buildConfig().units, "binary");
 });
