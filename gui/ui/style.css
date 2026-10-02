@@ -102,6 +102,7 @@ body {
 
 body {
   font: 13px/1.45 var(--font);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
@@ -697,6 +698,11 @@ input[type="checkbox"] {
   transition: width 0.2s linear;
 }
 
+/* The file bar updates several times per second: no animation, only the archive total animates. */
+#cur-bar > span {
+  transition: none;
+}
+
 .block[data-state="success"] .bar > span {
   background: var(--success);
 }
@@ -753,6 +759,13 @@ input[type="checkbox"] {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Fixed width for the widest value ("100%") so the meter never shifts. */
+#stat-buffer-value {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
 }
 
 .meter {
