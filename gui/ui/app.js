@@ -573,6 +573,7 @@
       await invoke("start_transfer", { config });
     } catch (e) {
       toastError("Could not start the upload", e);
+      requestAttention("failed");
       return;
     } finally {
       state.starting = false;
@@ -580,6 +581,8 @@
     }
     const job = newJob(config);
     state.job = job;
+    requestAttention(null);
+    updateWindowProgress({ phase: "reading" });
     resetTransferView(job, config);
     showView("transfer");
     pollLoop(job);
@@ -747,6 +750,7 @@
     renderLog(job, snap.log);
     renderPrompt(job, snap, seq);
     renderCancel(job, snap);
+    if (!job.finished && snap.phase !== "finished") updateWindowProgress(snap);
     if (snap.phase === "finished" && !job.finished) finishJob(job, snap.result, snap);
   }
 
@@ -970,8 +974,52 @@
 
   const RESULT_TITLES = { success: "Done", failed: "Failed", cancelled: "Cancelled" };
 
+  let windowProgressKey = "";
+  let windowProgressQueue = Promise.resolve();
+
+  function updateWindowProgress(snap) {
+    const statuses = tauri.window.ProgressBarStatus;
+    const p = snap.progress;
+    let status = statuses.Indeterminate;
+    let progress = 0;
+    if (snap.phase === "finished") {
+      status = statuses.None;
+    } else if (snap.phase === "transferring" && p) {
+      const total = p.totals_known ? p.total_bytes : p.archive_size;
+      const done = p.totals_known ? p.sent_bytes : p.archive_read;
+      if (total > 0) {
+        status = statuses.Normal;
+        progress = Math.floor(ratio(done, total) * 100);
+      }
+    }
+    const key = `${status}|${progress}`;
+    if (key === windowProgressKey) return;
+    windowProgressKey = key;
+    // Serialize native updates so a slow call cannot restore progress after completion.
+    windowProgressQueue = windowProgressQueue.then(() =>
+      tauri.window.getCurrentWindow().setProgressBar({ status, progress })
+    ).catch(() => {
+      if (windowProgressKey === key) windowProgressKey = "";
+    });
+  }
+
+  function requestAttention(status) {
+    if (status !== null && status !== "success" && status !== "failed") return;
+    try {
+      const win = tauri.window.getCurrentWindow();
+      const type = {
+        success: tauri.window.UserAttentionType.Informational,
+        failed: tauri.window.UserAttentionType.Critical,
+      };
+      Promise.resolve(win.requestUserAttention(status === null ? null : type[status])).catch(() => {});
+    } catch (e) {
+      return;
+    }
+  }
+
   function finishJob(job, result, snap) {
     job.finished = true;
+    updateWindowProgress({ phase: "finished" });
     const res = result || {
       status: "failed",
       error: "The transfer ended without a result.",
@@ -1024,6 +1072,7 @@
     setHidden(els.tActions, true);
     setHidden(els.result, false);
     announce(status === "failed" && res.error ? `Failed: ${res.error}` : RESULT_TITLES[status]);
+    requestAttention(status);
     if (!anyDialogOpen() && !state.quitting) els.btnNew.focus({ preventScroll: true });
   }
 
@@ -1095,6 +1144,9 @@
         } finally {
           asking = false;
         }
+      });
+      await win.onFocusChanged(({ payload: focused }) => {
+        if (focused) requestAttention(null);
       });
     } catch (e) {
       toastError("Could not watch for window close", e);

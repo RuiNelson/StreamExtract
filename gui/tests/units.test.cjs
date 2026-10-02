@@ -3,18 +3,18 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function frontend(invoke = async () => ({ units: "binary", buffer_mib: 64 })) {
+function frontend(invoke = async () => ({ units: "binary", buffer_mib: 64 }), windowApi = {}) {
   const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "binary" }));
   const nodes = new Map();
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {
       value: "", textContent: "", title: "", style: {}, dataset: {}, children: [], firstElementChild: { style: {} },
-      setAttribute() {}, removeAttribute() {}, append() {}, replaceChildren() {}, remove() {},
+      setAttribute() {}, removeAttribute() {}, append() {}, replaceChildren() {}, remove() {}, focus() {},
     });
     return nodes.get(id);
   }
   const context = vm.createContext({
-    window: { __TAURI__: { core: { invoke } } },
+    window: { __TAURI__: { core: { invoke }, window: windowApi } },
     document: {
       getElementById: node,
       querySelectorAll: (selector) => selector.includes('"units"') ? inputs : [],
@@ -28,7 +28,7 @@ function frontend(invoke = async () => ({ units: "binary", buffer_mib: 64 })) {
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, renderCurrent, renderTotal, renderStatus };"
+    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -63,6 +63,68 @@ test("progress uses the engine text for ordinary and streamed archives", () => {
   progress.totals_known = false;
   app.renderTotal({}, snap);
   assert.match(app.node("total-stats").textContent, /50.0% of the archive read · 1.00 MB uploaded/);
+});
+
+test("native progress follows the whole archive and clears after every terminal outcome", async () => {
+  const calls = [];
+  const app = frontend(undefined, {
+    ProgressBarStatus: { Normal: "normal", Indeterminate: "indeterminate", None: "none" },
+    getCurrentWindow: () => ({ setProgressBar: async (value) => calls.push({ ...value }) }),
+  });
+  app.updateWindowProgress({ phase: "reading" });
+  const snap = { phase: "transferring", progress: {
+    totals_known: true, sent_bytes: 25, total_bytes: 100,
+    current_sent: 9, current_size: 10, archive_read: 750, archive_size: 1000,
+  } };
+  app.updateWindowProgress(snap);
+  app.updateWindowProgress(snap); // unchanged polls do not repeat native calls
+  snap.progress.totals_known = false;
+  app.updateWindowProgress(snap);
+  for (const status of ["success", "failed", "cancelled"]) {
+    app.updateWindowProgress({ phase: "finished", result: { status } });
+    await app.flushWindowProgress();
+    assert.equal(calls.at(-1).status, "none");
+    app.updateWindowProgress({ phase: "reading" });
+  }
+  await app.flushWindowProgress();
+  assert.deepEqual(calls.slice(0, 4), [
+    { status: "indeterminate", progress: 0 },
+    { status: "normal", progress: 25 },
+    { status: "normal", progress: 75 },
+    { status: "none", progress: 0 },
+  ]);
+});
+
+test("attention distinguishes fatal errors and success without notifying cancellation", () => {
+  const calls = [];
+  const app = frontend(undefined, {
+    UserAttentionType: { Critical: 1, Informational: 2 },
+    getCurrentWindow: () => ({ requestUserAttention: (type) => { calls.push(type); return Promise.resolve(); } }),
+  });
+  for (const status of ["failed", "success", "cancelled", null]) app.requestAttention(status);
+  assert.deepEqual(calls, [1, 2, null]);
+});
+
+test("the final extra poll notifies only once, including failures before uploading", async () => {
+  for (const status of ["success", "failed", "cancelled"]) {
+    const attention = [];
+    const progress = [];
+    const app = frontend(undefined, {
+      ProgressBarStatus: { None: "none" },
+      UserAttentionType: { Critical: 1, Informational: 2 },
+      getCurrentWindow: () => ({
+        setProgressBar: async (value) => progress.push({ ...value }),
+        requestUserAttention: async (type) => attention.push(type),
+      }),
+    });
+    const job = { finished: false };
+    const snap = { phase: "finished", result: { status }, progress: null };
+    app.render(job, snap, 1);
+    app.render(job, snap, 2);
+    await app.flushWindowProgress();
+    assert.deepEqual(attention, status === "cancelled" ? [] : [status === "failed" ? 1 : 2]);
+    assert.deepEqual(progress, [{ status: "none", progress: 0 }]);
+  }
 });
 
 test("loading and changing units persists automatically through the backend", async () => {
