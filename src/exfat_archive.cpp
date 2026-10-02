@@ -179,10 +179,10 @@ int64_t modification_time(const uint8_t* metadata) {
   return time == -1 ? 0 : time - offset * 15 * 60;
 }
 
-struct OpenFile {
+struct OpenFatfsFile {
   FIL file{};
   bool opened = false;
-  ~OpenFile() {
+  ~OpenFatfsFile() {
     if (opened) {
       std::lock_guard lock(fatfs_mutex);
       f_close(&file);
@@ -352,7 +352,7 @@ bool ExfatArchive::next(ArchiveEntry& entry) {
 void ExfatArchive::test() {
   Impl& m = *impl_;
   if (!m.has_current || m.current.kind != EntryKind::File) return;
-  OpenFile opened;
+  OpenFatfsFile opened;
   uint64_t valid = 0;
   {
     std::lock_guard lock(fatfs_mutex);

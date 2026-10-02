@@ -10,6 +10,10 @@
 
 #include <doctest/doctest.h>
 
+#ifdef _WIN32
+#include <locale.h>
+#endif
+
 #include "archive.hpp"
 #include "archive_fixtures.hpp"
 
@@ -141,10 +145,44 @@ std::map<std::string, std::string> extract_only(const std::string& path, const s
 
 TEST_CASE("formats are recognized by their content, not their name") {
   const TempDir dir;
+  CHECK(read_all(dir.write("rar.zip", fixtures::kTinyRar)).format == ArchiveFormat::Rar);
   CHECK(read_all(dir.write("zip.rar", fixtures::kTinyZip)).format == ArchiveFormat::Zip);
   CHECK(read_all(dir.write("7z.zip", fixtures::kTiny7z)).format == ArchiveFormat::SevenZip);
   CHECK(read_all(dir.write("tar.7z", fixtures::kTinyTar)).format == ArchiveFormat::Tar);
 }
+
+#ifdef _WIN32
+TEST_CASE("opening archives preserves a Windows locale with a non-ASCII name") {
+  // Restore with the wide API even if an assertion fails. The narrow API
+  // interprets the saved name using whichever code page is active later.
+  struct RestoreLocale {
+    int mode = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+    std::wstring name = _wsetlocale(LC_CTYPE, nullptr);
+    ~RestoreLocale() {
+      _wsetlocale(LC_CTYPE, name.c_str());
+      _configthreadlocale(mode);
+    }
+  } restore;
+
+  REQUIRE(_wsetlocale(LC_CTYPE, L"Norwegian Bokm\u00e5l_Norway.1252") != nullptr);
+  const std::wstring expected = _wsetlocale(LC_CTYPE, nullptr);
+  REQUIRE(expected.find(L'\u00e5') != std::wstring::npos);
+
+  const TempDir dir;
+  for (const std::string& path : {dir.write("tiny.rar", fixtures::kTinyRar),
+                                  dir.write("tiny.7z", fixtures::kTiny7z),
+                                  dir.write("tiny.zip", fixtures::kTinyZip),
+                                  dir.write("tiny.tar", fixtures::kTinyTar)}) {
+    CAPTURE(path);
+    const Read read = read_all(path);
+    REQUIRE(read.entries.size() == 1);
+    CHECK(read.entries[0].name == "hello.txt");
+    CHECK(read.contents == std::vector<std::string>{"hello\n"});
+    CHECK(std::wstring(_wsetlocale(LC_CTYPE, nullptr)) == expected);
+    CHECK(_configthreadlocale(0) == _ENABLE_PER_THREAD_LOCALE);
+  }
+}
+#endif
 
 TEST_CASE("the parts of a split archive") {
   std::set<std::string> files;
