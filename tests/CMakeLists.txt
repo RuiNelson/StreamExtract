@@ -10,9 +10,16 @@ set(DOCTEST_WITH_MAIN_IN_STATIC_LIB OFF CACHE BOOL "" FORCE)
 set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(doctest)
 
+# Real exFAT volume formatted with hdiutil; compressed only for repository size.
+# CMake's archive reader works on all platforms without a test-time formatter.
+set(_test_fixtures "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip")
+file(ARCHIVE_EXTRACT INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip" DESTINATION "${_test_fixtures}")
+
 add_executable(rarftp_tests
   test_main.cpp
   test_archive.cpp
+  test_exfat.cpp
   test_json.cpp
   test_pipe.cpp
   test_plan.cpp
@@ -21,6 +28,7 @@ add_executable(rarftp_tests
   test_summary.cpp
   test_text.cpp)
 target_link_libraries(rarftp_tests PRIVATE rarftp_core doctest::doctest)
+target_compile_definitions(rarftp_tests PRIVATE RARFTP_TEST_FIXTURES="${_test_fixtures}")
 
 add_test(NAME unit COMMAND rarftp_tests)
 
@@ -30,6 +38,7 @@ if(TARGET rarftpcore)
   add_executable(rarftpcore_tests test_capi.cpp)
   target_include_directories(rarftpcore_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
   target_link_libraries(rarftpcore_tests PRIVATE rarftpcore doctest::doctest)
+  target_compile_definitions(rarftpcore_tests PRIVATE RARFTP_TEST_FIXTURES="${_test_fixtures}")
   if(WIN32)
     # No rpath on Windows: the DLL has to sit next to the executable.
     add_custom_command(TARGET rarftpcore_tests POST_BUILD

@@ -28,12 +28,7 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// A RAR5 archive holding one stored file, "hello.txt" ("hello\n").
-constexpr unsigned char kTinyRar[] = {0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00, 0xc5, 0x1a, 0x33, 0x32,
-                                      0x03, 0x01, 0x00, 0x00, 0xd2, 0xf7, 0x70, 0x6c, 0x17, 0x02, 0x02, 0x06,
-                                      0x04, 0x06, 0xa4, 0x03, 0x20, 0x30, 0x3a, 0x36, 0x00, 0x01, 0x09, 0x68,
-                                      0x65, 0x6c, 0x6c, 0x6f, 0x2e, 0x74, 0x78, 0x74, 0x68, 0x65, 0x6c, 0x6c,
-                                      0x6f, 0x0a, 0x19, 0xb2, 0x3a, 0x35, 0x03, 0x05, 0x00, 0x00};
+using fixtures::kTinyRar;
 
 // The same file in a RAR5 archive whose headers are encrypted (password "secret").
 constexpr unsigned char kEncryptedRar[] = {
@@ -218,6 +213,20 @@ TEST_CASE("ZIP, 7z and tar archives are read too") {
     CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
     rarftp_job_free(job);
   }
+}
+
+TEST_CASE("a real exFAT image is reported through the GUI's JSON contract") {
+  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* job = rarftp_job_start(&config);
+  REQUIRE(job != nullptr);
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
+  CHECK(contains(json, "\"archive\":{\"name\":\"volume.exfat\",\"format\":\"exFAT\",\"compression\":null,"));
+  CHECK(contains(json, "\"volumes\":1,\"solid\":false,\"encrypted\":false"));
+  CHECK(contains(json, "no checksum of the file contents"));
+  CHECK(contains(json, "\"prompt\":null"));
+  rarftp_job_free(job);
 }
 
 TEST_CASE("a compressed tar archive is read as it is uploaded") {

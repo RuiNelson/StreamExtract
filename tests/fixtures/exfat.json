@@ -1,0 +1,84 @@
+{
+  "directories": [
+    "empty-dir",
+    "sub"
+  ],
+  "files": {
+    "._empty-dir": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._empty.txt": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._fragmented.bin": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._hello.txt": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._large.bin": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._sub": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._uninitialized.bin": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "._": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "empty.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    },
+    "fragmented.bin": {
+      "sha256": "35f2605b1af40427aec7d554e140164ce1602fb0cd7999322820aef43b4ca4e4",
+      "size": 5242894
+    },
+    "hello.txt": {
+      "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+      "size": 6
+    },
+    "large.bin": {
+      "sha256": "5acf7100e3de7b04a3d893b857cd202803815ac2e6618e070f1f277b32264b39",
+      "size": 1179651
+    },
+    "sub/._ação 日本 😀.txt": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "sub/._é.txt": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "sub/._日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日.txt": {
+      "sha256": "e813b3f3e09d3c51306c5edc45896572e1489a06beef7b11410522ba4e763207",
+      "size": 4096
+    },
+    "sub/ação 日本 😀.txt": {
+      "sha256": "ebc45fabefbabdd06424b3c476b11e93fec784069ff10844e7383d59f491f8cb",
+      "size": 8
+    },
+    "sub/é.txt": {
+      "sha256": "3f982049886e92fac98906daaace338ac16d933be1a74d28d3cb0b667232750e",
+      "size": 10
+    },
+    "sub/日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日.txt": {
+      "sha256": "1272a49868c41260330ce643f91dffd1114abc24bf149dfb4ebfb8833bbe5670",
+      "size": 10
+    },
+    "uninitialized.bin": {
+      "sha256": "2dab0a8d0a0690b8dee108c498219b4bf2c28a6a9ec975ea1694d13fe8059935",
+      "size": 17000
+    }
+  }
+}

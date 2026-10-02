@@ -2,9 +2,9 @@
 
 `rarftp` itself is MIT licensed. Its binaries include or link the components
 below, under their own licenses. There are two programs: the command-line
-`rarftp` (UnRAR, the LZMA SDK, libarchive and its compression libraries,
+`rarftp` (UnRAR, the LZMA SDK, FatFs, libarchive and its compression libraries,
 libcurl, FTXUI, CLI11 and {fmt}) and the desktop app `rarftp-gui` (UnRAR, the
-LZMA SDK, libarchive and its compression libraries, libcurl and {fmt}, inside
+LZMA SDK, FatFs, libarchive and its compression libraries, libcurl and {fmt}, inside
 its `librarftpcore` shared library, plus Tauri and the Rust crates below). FTXUI
 and CLI11 are not in the GUI, and Tauri and the Rust crates are not in the
 `rarftp` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
@@ -46,6 +46,30 @@ Some code in LZMA SDK is based on public domain code from another developers:
 Anyone is free to copy, modify, publish, use, compile, sell, or distribute the
 original LZMA SDK code, either in source code form or as a compiled binary, for
 any purpose, commercial or non-commercial, and by any means.
+```
+
+## FatFs
+
+By ChaN. Source: <https://elm-chan.org/fsw/ff/>. FatFs R0.16 reads exFAT
+volume images in both the CLI and shared library, configured read-only. The
+sources are supplied manually in `fatfs/` and are not distributed in this
+repository. The official patches 1 (2025-09-13) and 2 (2026-07-10) are applied
+in the build directory. License from `fatfs/source/ff.c`:
+
+```
+Copyright (C) 2025, ChaN, all right reserved.
+
+FatFs module is an open source software. Redistribution and use of FatFs in
+source and binary forms, with or without modification, are permitted provided
+that the following condition is met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this condition and the following disclaimer.
+
+This software is provided by the copyright holder and contributors "AS IS"
+and any warranties related to this software are DISCLAIMED.
+The copyright owner or contributors be NOT LIABLE for any damages caused
+by use of this software.
 ```
 
 ## libcurl

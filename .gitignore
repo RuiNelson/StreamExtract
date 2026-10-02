@@ -59,6 +59,10 @@ unrarsrc-*.tar*
 /lzmasdk/
 lzma[0-9]*.7z
 
+# FatFs (exFAT reader, fetched manually from elm-chan.org, see README)
+/fatfs/
+ff[0-9]*.zip
+
 # Build trees and tooling
 /build*/
 /out/
@@ -72,3 +76,4 @@ __pycache__/
 # rarftp-gui (Tauri) build output and generated files
 /gui/src-tauri/target/
 /gui/src-tauri/gen/
+*.sh

@@ -236,11 +236,30 @@ def split_file(path, parts):
         Path(f"{path}.{i + 1:03}").write_bytes(data[i * size:(i + 1) * size])
 
 
+def exfat_fixtures(archives):
+    """Use volumes produced by hdiutil; never construct filesystem structures in tests."""
+    with zipfile.ZipFile(Path(__file__).resolve().parents[1] / "fixtures" / "exfat.zip") as fixture:
+        for source, destination in (("volume.exfat", "basic.exfat"), ("partitioned.exfat", "disk.exfat")):
+            with fixture.open(source) as src, (archives / destination).open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
+def check_exfat_tree(root, output):
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "exfat.json").read_text())
+    expected = {name: (info["size"], info["sha256"]) for name, info in manifest["files"].items()}
+    expected.update({name: "dir" for name in manifest["directories"]})
+    actual = tree_snapshot(root)
+    check(actual == expected, "exFAT directory structure, file sizes or hashes differ", output)
+    for name in ("hello.txt", "large.bin", "fragmented.bin", "uninitialized.bin"):
+        check(abs((Path(root) / name).stat().st_mtime - BASE_TIME) < 2, f"wrong mtime for {name}", output)
+
+
 def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     rnd = random.Random(20260929)
     trees = work / "trees"
     archives = work / "archives"
     archives.mkdir(parents=True)
+    exfat_fixtures(archives)
 
     main_tree = trees / "main" / "tree"
     write_tree(main_tree, {
@@ -568,7 +587,7 @@ class LibJob:
         if archive is not None:
             ok(set(archive) == LIB_ARCHIVE_KEYS, f"archive keys differ: {sorted(set(archive) ^ LIB_ARCHIVE_KEYS)}")
             ok(isinstance(archive["name"], str), "archive.name is not a string")
-            ok(archive["format"] in ("RAR", "ZIP", "7z", "tar"), f"unknown archive format {archive['format']!r}")
+            ok(archive["format"] in ("RAR", "ZIP", "7z", "tar", "exFAT"), f"unknown archive format {archive['format']!r}")
             ok(archive["compression"] in (None, "gzip", "bzip2", "xz", "lzma", "zstd", "lz4"),
                f"unknown compression {archive['compression']!r}")
             # A compressed tar is not listed first: its contents are unknown.
@@ -1219,6 +1238,25 @@ def test_7z_deflate64_is_reported(env):
     check(not env.remote("deflate64-7z").exists(), "went on after reading the archive", out)
 
 
+def test_exfat_basic(env):
+    out = env.run("basic.exfat", "--directory", "exfat", "--mkdir")
+    check_exfat_tree(env.remote("exfat"), out)
+    check("Archive: exFAT, 19 file(s)" in out, "format or file count not reported", out)
+    check("exFAT images have no checksum of the file contents" in out, "no verification warning", out)
+    out = env.run("basic.exfat", "--directory", "exfat")
+    check("To upload: 0 file(s)" in out and "Skipped 19 file(s)" in out, "files were uploaded again", out)
+    (env.remote("exfat") / "fragmented.bin").write_bytes(b"incomplete")
+    out = env.run("basic.exfat", "--directory", "exfat")
+    check("To upload: 1 file(s)" in out, "changed-size file was not repaired", out)
+    check_exfat_tree(env.remote("exfat"), out)
+
+
+def test_exfat_partitioned_is_rejected(env):
+    out = env.run("disk.exfat", "--directory", "exfat-rejected", "--mkdir", expect=1)
+    check("expected a single raw exFAT volume" in out, "partitioned disk was not rejected", out)
+    check(not env.remote("exfat-rejected").exists(), "connected to FTP after rejecting the image", out)
+
+
 def test_tar_basic(env):
     out = env.run("basic.tar", "--directory", "tar", "--mkdir")
     compare_trees(env.fixtures["main"], env.remote("tar", "tree"), out)
@@ -1463,6 +1501,23 @@ def test_lib_zip_7z_and_tar(env):
                   "no warning about verification", out)
 
 
+def test_lib_exfat(env):
+    require_lib(env)
+    job = env.lib_run("basic.exfat", directory="lib-exfat", mkdir=1)
+    out = job.describe()
+    check_exfat_tree(env.remote("lib-exfat"), out)
+    check(has_fields(job.state["archive"], format="exFAT", compression=None, files=19, bytes=6484635,
+                     volumes=1, solid=False, encrypted=False), f"wrong archive info {job.state['archive']}", out)
+    check(has_fields(job.result, files_uploaded=19, skipped_files=0), "wrong transfer counts", out)
+    check(not job.prompts, "exFAT asked for an archive password", out)
+    job = env.lib_run("basic.exfat", directory="lib-exfat")
+    check(has_fields(job.result, files_uploaded=0, skipped_files=19, skipped_bytes=6484635),
+          "wrong counters on re-run", job.describe())
+    job = env.lib_run("disk.exfat", expect="failed", directory="lib-exfat-rejected", mkdir=1)
+    check(job.state["archive"] is None and job.state["progress"] is None, "invalid image was accepted", job.describe())
+    check(not env.remote("lib-exfat-rejected").exists(), "created a destination for an invalid image", job.describe())
+
+
 def test_lib_zip_password_prompt(env):
     require_lib(env)
     env.require("aes.zip")
@@ -1582,6 +1637,8 @@ TESTS = [
     test_7z_encrypted_multivolume,
     test_7z_encrypted_methods,
     test_7z_deflate64_is_reported,
+    test_exfat_basic,
+    test_exfat_partitioned_is_rejected,
     test_tar_basic,
     test_tar_split,
     test_tar_gz_is_read_as_it_is_uploaded,
@@ -1597,6 +1654,7 @@ TESTS = [
     test_lib_missing_directory_is_an_error,
     test_lib_cancel_removes_partial_file,
     test_lib_zip_7z_and_tar,
+    test_lib_exfat,
     test_lib_zip_password_prompt,
     test_lib_7z_password_prompt,
     test_lib_7z_multivolume,

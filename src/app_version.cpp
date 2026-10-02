@@ -14,7 +14,7 @@
 namespace rarftp {
 
 std::string version_string() {
-  return fmt::format("rarftp {} (UnRAR {}, LZMA SDK {}, libarchive {}, libcurl {})", RARFTP_VERSION,
+  return fmt::format("rarftp {} (UnRAR {}, LZMA SDK {}, FatFs R0.16, libarchive {}, libcurl {})", RARFTP_VERSION,
                      unrar_version(), lzma_sdk_version(), libarchive_version(), curl_version_string());
 }
 

@@ -63,17 +63,20 @@ class Utf8Locale {
 #else
 // Windows: the C runtime's locale, made per-thread (libarchive reads the code
 // page from it; ".UTF8" needs Windows 10 1803 or later).
+// Keep the locale name wide: a saved narrow name can contain bytes from the
+// old code page (e.g. Norwegian Bokmål), invalid after switching
+// to UTF-8. Passing those bytes back to setlocale can abort the Windows CRT.
 class Utf8Locale {
  public:
   Utf8Locale() : mode_(_configthreadlocale(_ENABLE_PER_THREAD_LOCALE)) {
-    if (const char* current = setlocale(LC_CTYPE, nullptr)) {
+    if (const wchar_t* current = _wsetlocale(LC_CTYPE, nullptr)) {
       previous_ = current;
     }
-    setlocale(LC_CTYPE, ".UTF8");
+    _wsetlocale(LC_CTYPE, L".UTF8");
   }
   ~Utf8Locale() {
     if (!previous_.empty()) {
-      setlocale(LC_CTYPE, previous_.c_str());
+      _wsetlocale(LC_CTYPE, previous_.c_str());
     }
     _configthreadlocale(mode_);
   }
@@ -82,7 +85,7 @@ class Utf8Locale {
 
  private:
   int mode_;
-  std::string previous_;
+  std::wstring previous_;
 };
 #endif
 
@@ -337,6 +340,7 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
       }
       break;
     case ArchiveFormat::SevenZip:  // SevenZipArchive.
+    case ArchiveFormat::Exfat:     // ExfatArchive.
     case ArchiveFormat::Rar:
       break;
   }

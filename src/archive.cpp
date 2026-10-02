@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 
+#include "exfat_archive.hpp"
 #include "libarchive_reader.hpp"
 #include "rar_archive.hpp"
 #include "sevenzip_archive.hpp"
@@ -45,6 +46,8 @@ const char* format_name(ArchiveFormat format) {
       return "7z";
     case ArchiveFormat::Tar:
       return "tar";
+    case ArchiveFormat::Exfat:
+      return "exFAT";
   }
   return "RAR";
 }
@@ -85,6 +88,14 @@ std::vector<std::string> split_archive_parts(const std::string& path,
 std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mode, ArchiveCallbacks callbacks) {
   std::vector<std::string> parts = split_archive_parts(path, file_exists);
 
+  if (ExfatArchive::recognizes(parts.front())) {
+    if (parts.size() != 1) {
+      throw ArchiveError(ArchiveError::Kind::Other,
+                         "split exFAT images are not supported; use a single volume image");
+    }
+    return std::make_unique<ExfatArchive>(path, std::move(callbacks));
+  }
+
   // The formats libarchive reads are recognized by libarchive itself. Anything
   // else goes to UnRAR, which also finds RAR archives inside self-extracting
   // executables, and reports the file as unreadable or not an archive.
@@ -100,6 +111,15 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
                        fmt::format("{} is a numbered part of a split archive; only split ZIP, 7z and tar archives "
                                    "are supported",
                                    file_name_of(path)));
+  }
+  if (path.size() >= 6) {
+    std::string extension = path.substr(path.size() - 6);
+    for (char& c : extension) {
+      if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+    }
+    if (extension == ".exfat") {
+      return std::make_unique<ExfatArchive>(path, std::move(callbacks));
+    }
   }
   return std::make_unique<RarArchive>(path, mode, std::move(callbacks));
 }

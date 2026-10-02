@@ -7,7 +7,7 @@ endif()
 
 project(rarftp
   VERSION 2.2.0
-  DESCRIPTION "Uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
+  DESCRIPTION "Uploads archives and exFAT volume images to an FTP server without extracting them to disk"
   LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -32,6 +32,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(UnRAR)
 include(LzmaSdk)
+include(FatFs)
 include(Dependencies)
 include(LibArchive)
 
@@ -40,6 +41,7 @@ include(LibArchive)
 add_library(rarftp_core STATIC
   src/app_version.cpp
   src/archive.cpp
+  src/exfat_archive.cpp
   src/ftp_client.cpp
   src/libarchive_reader.cpp
   src/logger.cpp
@@ -58,7 +60,7 @@ target_include_directories(rarftp_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(rarftp_core PRIVATE RARFTP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(rarftp_core
   PUBLIC fmt::fmt
-  PRIVATE unrar::unrar rarftp::lzmasdk rarftp::libarchive CURL::libcurl Threads::Threads)
+  PRIVATE unrar::unrar rarftp::lzmasdk rarftp::fatfs rarftp::libarchive CURL::libcurl Threads::Threads)
 if(APPLE)
   target_link_libraries(rarftp_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.
 endif()
