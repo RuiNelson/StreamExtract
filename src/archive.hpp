@@ -11,9 +11,9 @@
 
 namespace rarftp {
 
-enum class ArchiveFormat { Rar, Zip, SevenZip, Tar };
+enum class ArchiveFormat { Rar, Zip, SevenZip, Tar, Exfat };
 
-// "RAR", "ZIP", "7z", "tar".
+// "RAR", "ZIP", "7z", "tar", "exFAT".
 const char* format_name(ArchiveFormat format);
 
 enum class EntryKind {
@@ -42,7 +42,7 @@ struct ArchiveFlags {
   // Skipping an entry still decompresses it (solid RAR and 7z).
   bool skip_decompresses = false;
   // Entries carry a checksum of their data, verified by test(). False for
-  // tar, which only checksums its headers.
+  // tar (header checksums only) and exFAT (metadata checksums only).
   bool checksums = true;
   // Compressed tar: "gzip", "bzip2", "xz", "lzma", "zstd" or "lz4"; empty otherwise.
   std::string compression;
@@ -110,7 +110,8 @@ class Archive {
   virtual uint64_t bytes_read() const { return 0; }
 };
 
-// Opens a RAR, ZIP, 7z or tar archive (also compressed: .tar.gz...), recognized
+// Opens a RAR, ZIP, 7z or tar archive (also compressed: .tar.gz...) or a single
+// exFAT volume image, recognized
 // by its content. A split ZIP, 7z or tar archive (name.zip.001, name.zip.002,
 // ...) is opened through its first part. Throws ArchiveError.
 std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mode, ArchiveCallbacks callbacks);

@@ -12,6 +12,8 @@ env:
   UNRAR_SHA256: 634900842a3737d9cc15bbcc71d4c74cc713437e0bca296a573424fe5f2660ab
   LZMASDK_URL: https://github.com/ip7z/7zip/releases/download/26.03/lzma2603.7z
   LZMASDK_SHA256: 86c213f752520ab5325c310f50bef63ec344b56dd1c80b0246d06dc6cec953b2
+  FATFS_URL: https://elm-chan.org/fsw/ff/arc/ff16.zip
+  FATFS_SHA256: 99f7dc1f7e095356e4a9e3dbe29959090d8b948afe2bbc5441e52fdf4b85449e
   # Only used to create the .rar artifacts (evaluation copy of the RAR archiver).
   RAR_ARCHIVE: rarlinux-x64-723.tar.gz
   RAR_SHA256: 759b4b6aa0d9f77131882162951193f3a0e54bf60e1d8dc4255aa308accab588
@@ -92,6 +94,20 @@ jobs:
 
       # libcurl is always built from source and linked statically (FTP only, no
       # TLS), so the binary depends on nothing that Windows does not ship.
+      # FatFs is fetched manually for local builds; CI verifies the same zip.
+      # CMake applies the official patches to a private build copy.
+      - name: Fetch FatFs
+        run: |
+          curl -fsSL "${FATFS_URL}" -o ff16.zip
+          actual="$(cmake -E sha256sum ff16.zip | cut -d' ' -f1)"
+          test "$actual" = "$FATFS_SHA256" || { echo "FatFs checksum mismatch: $actual"; exit 1; }
+          mkdir fatfs
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z x -bso0 -bsp0 -ofatfs ff16.zip
+          else
+            unzip -q ff16.zip -d fatfs
+          fi
+
       - name: Configure
         run: >
           cmake -S . -B build
@@ -215,6 +231,20 @@ jobs:
             tar -xf "${archive}" -C lzmasdk
           else
             7z x -bso0 -bsp0 -olzmasdk "${archive}"
+          fi
+
+      # FatFs is fetched manually for local builds; CI verifies the same zip.
+      # CMake applies the official patches to a private build copy.
+      - name: Fetch FatFs
+        run: |
+          curl -fsSL "${FATFS_URL}" -o ff16.zip
+          actual="$(cmake -E sha256sum ff16.zip | cut -d' ' -f1)"
+          test "$actual" = "$FATFS_SHA256" || { echo "FatFs checksum mismatch: $actual"; exit 1; }
+          mkdir fatfs
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z x -bso0 -bsp0 -ofatfs ff16.zip
+          else
+            unzip -q ff16.zip -d fatfs
           fi
 
       - name: Configure the library

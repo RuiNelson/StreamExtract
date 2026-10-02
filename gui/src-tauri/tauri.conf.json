@@ -26,8 +26,8 @@
   "bundle": {
     "active": true,
     "category": "Utility",
-    "shortDescription": "Upload a RAR, ZIP, 7z or tar archive to an FTP server without extracting it",
-    "longDescription": "rarftp-gui streams the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting anything to disk. Files are decompressed and verified on the fly while they are uploaded.",
+    "shortDescription": "Upload archives and exFAT volume images to an FTP server without extracting them",
+    "longDescription": "rarftp-gui streams the contents of RAR, ZIP, 7z and tar archives, and exFAT volume images, to an FTP server without extracting anything to disk.",
     "copyright": "Rui Nelson",
     "publisher": "Rui Nelson",
     "license": "MIT",

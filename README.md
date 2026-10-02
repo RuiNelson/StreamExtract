@@ -1,6 +1,7 @@
 # rarftp
 
-Uploads the contents of a RAR, ZIP, 7z or tar archive straight to an FTP
+Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume
+image, straight to an FTP
 server, **without extracting it to disk first**.
 
 The usual way to publish a huge archive is to extract it (needing as much free
@@ -41,8 +42,9 @@ Keka, `unrar`, ...).
 The app offers:
 
 - **Archive**: drop a RAR, ZIP, 7z or tar archive (also compressed: `.tar.gz`,
-  `.tgz`, `.tar.xz`...) on the window, or pick it with a file dialog; for
-  multi-volume sets, the first volume (`.part1.rar`, `.zip.001`, `.7z.001`...).
+  `.tgz`, `.tar.xz`...), or an exFAT volume image (`.exfat`), on the window,
+  or pick it with a file dialog. For multi-volume sets, use the first volume
+  (`.part1.rar`, `.zip.001`, `.7z.001`...).
   When the archive is encrypted and no password was typed in, the app asks for
   it, and asks again if it was wrong.
 - **Server**: host, port, passive or active mode, username and password
@@ -98,8 +100,9 @@ rarftp --file archive.rar \
        --directory "/destination/dir" --mkdir
 ```
 
-The archive can be RAR, ZIP, 7z or tar (also compressed, such as
-`backup.tar.zst`); it is recognized by its content. Multi-volume and
+The input can be a RAR, ZIP, 7z or tar archive (also compressed, such as
+`backup.tar.zst`), or a single exFAT volume image (`.exfat`); it is recognized
+by its content. Multi-volume and
 password-protected archives are supported:
 
 ```bash
@@ -108,7 +111,7 @@ password-protected archives are supported:
 
 | Option | Description |
 |---|---|
-| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
+| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT volume image (`.exfat`), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
 | `--host HOST` | FTP server name or address (IPv4 or IPv6). |
 | `--port PORT` | Default `21`. |
 | `--mode passive\|active` | Data connection mode. Default `passive`. |
@@ -196,10 +199,10 @@ flowchart LR
 ```
 
 RAR archives are read with UnRAR's test mode, 7z archives with 7-Zip's own
-code (its LZMA SDK), ZIP and tar archives with libarchive: all of them
-decompress and verify every file in memory, without creating it, and the
-decompressed data goes into the buffer, which the FTP upload drains.
-A file only counts as uploaded after its checksum was confirmed (tar has none,
+code (its LZMA SDK), ZIP and tar archives with libarchive, and exFAT volume
+images with [FatFs](https://elm-chan.org/fsw/ff/). Contents are read in memory,
+without creating local files, and go into the buffer, which the FTP upload drains.
+A file only counts as uploaded after its checksum was confirmed (tar and exFAT have none,
 see below); on any error the incomplete remote file is deleted.
 
 The command line links this engine statically. The app uses it through a
@@ -245,9 +248,22 @@ Behaviour, in both:
   decompressed and dropped). There are no totals until the end: the progress
   and the ETA of the whole archive come from how much of the archive file has
   been read.
+- **exFAT**: a single raw volume image (`.exfat`), such as one formatted with
+  `mkfs.exfat`, or created with `hdiutil` using `-layout NONE -format UDRW`.
+  The volume starts at byte zero; disk images with a partition table (even a
+  single partition), split images, compressed and encrypted containers are
+  rejected. No OS mount or administrator permissions are needed to read it.
+  FatFs reads contiguous and fragmented files, Unicode names and file sizes
+  over 4 GiB. Directory structure, empty directories and re-run behaviour are
+  the same as for archives: contents go directly into the chosen FTP directory.
+  Boot and directory metadata checksums are checked, but exFAT has **no checksum
+  of the file contents**, so uploads carry the same warning as tar. Uninitialized
+  file data is returned as zeroes. FatFs supports one FAT, a contiguous allocation
+  bitmap in the first root-directory cluster, at least 256 data clusters, and at
+  most 32768 sectors per cluster; volumes outside these limits are rejected.
 - The **format** is recognized by the content of the file, not by its extension.
 - **Names** of ZIP and tar archives are uploaded as Unicode NFC, the same
-  whatever system runs rarftp; RAR and 7z names are uploaded as the archive
+  whatever system runs rarftp; RAR, 7z and exFAT names are uploaded as the archive
   stores them.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
@@ -272,7 +288,8 @@ Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
 used when present; otherwise, or with `-DRARFTP_BUNDLED_CURL=ON`, an FTP-only
-libcurl is built from source). The other libraries are fetched by CMake.
+libcurl is built from source). UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
+the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
 LZ4 and, on Linux, mbed TLS) are built from source as static libraries during the
 first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
@@ -295,6 +312,20 @@ curl -LO https://github.com/ip7z/7zip/releases/download/26.03/lzma2603.7z
 mkdir lzmasdk && tar -xf lzma2603.7z -C lzmasdk    # or: 7z x -olzmasdk lzma2603.7z
 ```
 
+[FatFs R0.16](https://elm-chan.org/fsw/ff/), the exFAT reader, is also supplied
+manually, from its author's website (there is no official GitHub repository):
+
+```bash
+curl -LO https://elm-chan.org/fsw/ff/arc/ff16.zip
+mkdir fatfs && unzip ff16.zip -d fatfs    # or: 7z x -ofatfs ff16.zip
+```
+
+The zip's SHA-256 is
+`99f7dc1f7e095356e4a9e3dbe29959090d8b948afe2bbc5441e52fdf4b85449e`.
+CMake builds a private copy with a read-only exFAT configuration, UTF-8 names
+and the official R0.16 patches 1 and 2. The downloaded sources are unchanged,
+and CMake does not download FatFs.
+
 ### Command line
 
 ```bash
@@ -302,7 +333,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The binary is `build/rarftp`. UnRAR, the LZMA SDK and libarchive are always
+The binary is `build/rarftp`. UnRAR, the LZMA SDK, FatFs and libarchive are always
 linked statically into it.
 
 ### Desktop app
@@ -314,7 +345,7 @@ CLI:
 cargo install tauri-cli --version "^2" --locked
 ```
 
-From the repository root, build the shared library, then the app:
+To build manually, run these commands from the repository root:
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRARFTP_BUILD_LIBRARY=ON
@@ -326,7 +357,7 @@ cargo tauri dev       # or: run the app without bundling it
 ```
 
 The library is `build/librarftpcore.dylib` (`.so` on Linux, `rarftpcore.dll` on
-Windows). UnRAR, the LZMA SDK, libarchive and {fmt} are linked statically into it, and it exports only the
+Windows). UnRAR, the LZMA SDK, FatFs, libarchive and {fmt} are linked statically into it, and it exports only the
 `rarftp_*` functions of `src/capi/rarftp.h`; the `rarftp` executable does not use
 it. Add `-DRARFTP_BUNDLED_CURL=ON` to link libcurl statically too, which makes
 the library self-contained instead of relying on the system's libcurl.
@@ -416,6 +447,7 @@ The Rust side has its own unit tests, which link the built library:
 |---|---|---|
 | [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
 | [LZMA SDK](https://www.7-zip.org/sdk.html) | 7z reading (7-Zip's own code) | Public domain |
+| [FatFs](https://elm-chan.org/fsw/ff/) | exFAT volume image reading | FatFs license (BSD-style) |
 | [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive (and BZip2, Deflate and Zstandard in 7z) | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | AES for encrypted ZIP files (Linux only; macOS and Windows use the system's) | Apache-2.0 |

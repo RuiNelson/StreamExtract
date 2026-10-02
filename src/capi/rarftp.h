@@ -28,7 +28,7 @@ extern "C" {
 typedef struct rarftp_job rarftp_job;
 
 typedef struct rarftp_job_config {
-  const char* archive;          /* RAR, ZIP, 7z or tar archive; the first volume of a set. */
+  const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT volume image. */
   const char* archive_password; /* NULL: asked through the job when needed. */
   const char* host;             /* Host name or address, without ftp:// or a path. */
   int port;                     /* 1-65535. */

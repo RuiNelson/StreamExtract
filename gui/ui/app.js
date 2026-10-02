@@ -15,7 +15,7 @@
   const UNKNOWN_TIME = "--:--:--";
   const LEVELS = ["debug", "info", "warn", "error"];
   // What the file dialog offers; .001 is the first part of a split ZIP, 7z or tar archive.
-  const ARCHIVE_EXTENSIONS = ["rar", "zip", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "lzma",
+  const ARCHIVE_EXTENSIONS = ["rar", "zip", "7z", "tar", "exfat", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "lzma",
     "zst", "tzst", "lz4", "001"];
 
   const $ = (id) => document.getElementById(id);
@@ -272,7 +272,7 @@
     const looksLikeArchive = new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(name);
     els.archiveHint.textContent = looksLikeArchive
       ? ""
-      : "This file does not look like a RAR, ZIP, 7z or tar archive. rarftp will still try to read it.";
+      : "This file does not look like a RAR, ZIP, 7z or tar archive, or an exFAT image. rarftp will still try to read it.";
     setHidden(els.archiveHint, looksLikeArchive);
     updateSubmitState();
   }
@@ -282,7 +282,7 @@
       const selected = await tauri.dialog.open({
         multiple: false,
         directory: false,
-        filters: [{ name: "RAR, ZIP, 7z and tar archives", extensions: ARCHIVE_EXTENSIONS }],
+        filters: [{ name: "Archives and exFAT images", extensions: ARCHIVE_EXTENSIONS }],
       });
       const path = Array.isArray(selected) ? selected[0] : selected;
       const value = path && typeof path === "object" ? path.path : path;

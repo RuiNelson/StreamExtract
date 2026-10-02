@@ -220,6 +220,20 @@ TEST_CASE("ZIP, 7z and tar archives are read too") {
   }
 }
 
+TEST_CASE("a real exFAT image is reported through the GUI's JSON contract") {
+  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* job = rarftp_job_start(&config);
+  REQUIRE(job != nullptr);
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
+  CHECK(contains(json, "\"archive\":{\"name\":\"volume.exfat\",\"format\":\"exFAT\",\"compression\":null,"));
+  CHECK(contains(json, "\"volumes\":1,\"solid\":false,\"encrypted\":false"));
+  CHECK(contains(json, "no checksum of the file contents"));
+  CHECK(contains(json, "\"prompt\":null"));
+  rarftp_job_free(job);
+}
+
 TEST_CASE("a compressed tar archive is read as it is uploaded") {
   const TempFile archive("rarftpcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
   const std::string path = archive.path();
