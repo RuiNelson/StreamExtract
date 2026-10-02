@@ -3,8 +3,16 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function frontend(invoke = async () => ({ units: "si", buffer_mib: 64 }), windowApi = {}) {
+function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completion_sound: true }), windowApi = {}) {
   const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "si" }));
+  const sounds = [];
+  class AudioContext {
+    async resume() {}
+    async decodeAudioData(data) { return data; }
+    createBufferSource() {
+      return { connect() {}, start() { sounds.push("completed"); } };
+    }
+  }
   const nodes = new Map();
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {
@@ -14,7 +22,12 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64 }), window
     return nodes.get(id);
   }
   const context = vm.createContext({
-    window: { __TAURI__: { core: { invoke }, window: windowApi } },
+    window: { __TAURI__: { core: { invoke }, window: windowApi }, AudioContext },
+    fetch: async (path) => {
+      assert.equal(path, "assets/audio/completed.mp3");
+      return { ok: true, arrayBuffer: async () => new ArrayBuffer(1) };
+    },
+    console,
     document: {
       getElementById: node,
       querySelectorAll: (selector) => selector.includes('"units"') ? inputs : [],
@@ -28,12 +41,12 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64 }), window
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
   node("buffer").value = "64";
-  return { ...context.api, inputs, node };
+  return { ...context.api, inputs, node, sounds };
 }
 
 test("progress uses the engine text for ordinary and streamed archives", () => {
@@ -105,8 +118,8 @@ test("attention distinguishes fatal errors and success without notifying cancell
   assert.deepEqual(calls, [1, 2, null]);
 });
 
-test("the final extra poll notifies only once, including failures before uploading", async () => {
-  for (const status of ["success", "failed", "cancelled"]) {
+test("the final extra poll notifies and sounds only once, respecting the sound preference", async () => {
+  for (const [status, enabled] of [["success", true], ["success", false], ["failed", true], ["cancelled", true]]) {
     const attention = [];
     const progress = [];
     const app = frontend(undefined, {
@@ -117,14 +130,46 @@ test("the final extra poll notifies only once, including failures before uploadi
         requestUserAttention: async (type) => attention.push(type),
       }),
     });
+    app.state.completionSound = enabled;
     const job = { finished: false };
     const snap = { phase: "finished", result: { status }, progress: null };
     app.render(job, snap, 1);
     app.render(job, snap, 2);
     await app.flushWindowProgress();
+    await new Promise(setImmediate);
     assert.deepEqual(attention, status === "cancelled" ? [] : [status === "failed" ? 1 : 2]);
     assert.deepEqual(progress, [{ status: "none", progress: 0 }]);
+    assert.deepEqual(app.sounds, status === "success" && enabled ? ["completed"] : []);
   }
+});
+
+test("the sound preference loads and saves without changing units or buffer", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    return { units: "binary", buffer_mib: 128, completion_sound: false };
+  });
+  assert.equal(app.state.completionSound, true);
+  await app.loadPreferences();
+  assert.equal(app.node("completion-sound").checked, false);
+  app.node("completion-sound").checked = true;
+  await app.saveCompletionSound();
+  assert.deepEqual({ ...calls[1].args.preferences }, {
+    units: "binary", buffer_mib: 128, completion_sound: true,
+  });
+  assert.equal(app.state.completionSound, true);
+  assert.equal(app.node("completion-sound").disabled, false);
+  await app.saveUnits({ target: { value: "si" } });
+  assert.equal(calls[2].args.preferences.completion_sound, true);
+});
+
+test("a failed sound preference save restores the previous checkbox state", async () => {
+  const app = frontend(async () => { throw new Error("read-only directory"); });
+  app.node("completion-sound").checked = false;
+  await app.saveCompletionSound();
+  assert.equal(app.state.completionSound, true);
+  assert.equal(app.node("completion-sound").checked, true);
+  assert.equal(app.node("completion-sound").disabled, false);
 });
 
 test("loading and changing units persists automatically through the backend", async () => {

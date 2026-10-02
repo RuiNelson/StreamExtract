@@ -23,6 +23,7 @@
     app: $("app"),
     version: $("app-version"),
     unitsGroup: document.querySelectorAll('input[name="units"]'),
+    completionSound: $("completion-sound"),
     // setup
     setupView: $("setup-view"),
     dropzone: $("dropzone"),
@@ -110,6 +111,7 @@
     memoryBusy: false,
     units: "si",
     bufferMib: 64,
+    completionSound: true,
     preferencesBusy: true,
     starting: false,
     quitting: false,
@@ -131,6 +133,8 @@
       input.disabled = state.preferencesBusy;
     }
     els.buffer.disabled = state.preferencesBusy;
+    els.completionSound.disabled = state.preferencesBusy;
+    els.completionSound.checked = state.completionSound;
     els.buffer.value = String(state.bufferMib);
     validateBuffer();
     updateSubmitState();
@@ -141,6 +145,7 @@
       const preferences = await invoke("preferences_load");
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
+      state.completionSound = preferences.completion_sound ?? true;
     } catch (e) {
       toastError("Could not read preferences", e);
     } finally {
@@ -149,16 +154,20 @@
     }
   }
 
-  async function savePreferences(units, bufferMib) {
+  async function savePreferences(units, bufferMib, completionSound = state.completionSound) {
     if (state.preferencesBusy) return;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
+    els.completionSound.disabled = true;
     try {
-      await invoke("preferences_save", { preferences: { units, buffer_mib: bufferMib } });
+      await invoke("preferences_save", { preferences: {
+        units, buffer_mib: bufferMib, completion_sound: completionSound,
+      } });
       state.units = units;
       state.bufferMib = bufferMib;
+      state.completionSound = completionSound;
     } catch (e) {
       toastError("Could not save preferences", e);
     } finally {
@@ -175,6 +184,46 @@
     const bufferMib = validateBuffer();
     if (bufferMib === null) return;
     return savePreferences(state.units, bufferMib);
+  }
+
+  function saveCompletionSound() {
+    return savePreferences(state.units, state.bufferMib, els.completionSound.checked);
+  }
+
+  let completionAudioContext = null;
+  let completionAudioBuffer = null;
+
+  async function prepareCompletionSound() {
+    if (!completionAudioContext) {
+      completionAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    // Resume during the Upload button gesture so completion can sound in the background.
+    const resumed = completionAudioContext.resume();
+    if (!completionAudioBuffer) {
+      completionAudioBuffer = fetch("assets/audio/completed.mp3")
+        .then((response) => {
+          if (!response.ok) throw new Error("Could not load the completion sound");
+          return response.arrayBuffer();
+        })
+        .then((data) => completionAudioContext.decodeAudioData(data))
+        .catch((error) => {
+          completionAudioBuffer = null;
+          throw error;
+        });
+    }
+    const [, buffer] = await Promise.all([resumed, completionAudioBuffer]);
+    return buffer;
+  }
+
+  function playCompletionSound() {
+    if (!state.completionSound || state.quitting) return;
+    prepareCompletionSound().then((buffer) => {
+      if (!state.completionSound || state.quitting) return;
+      const source = completionAudioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(completionAudioContext.destination);
+      source.start();
+    }).catch((error) => console.warn("Could not play the completion sound", error));
   }
 
   function errText(e) {
@@ -567,6 +616,9 @@
     if (!state.archive || !els.host.value.trim()) return;
     const config = buildConfig();
     if (!config) return;
+    if (state.completionSound) {
+      prepareCompletionSound().catch((error) => console.warn("Could not prepare the completion sound", error));
+    }
     state.starting = true;
     updateSubmitState();
     try {
@@ -1073,6 +1125,7 @@
     setHidden(els.result, false);
     announce(status === "failed" && res.error ? `Failed: ${res.error}` : RESULT_TITLES[status]);
     requestAttention(status);
+    if (status === "success") playCompletionSound();
     if (!anyDialogOpen() && !state.quitting) els.btnNew.focus({ preventScroll: true });
   }
 
@@ -1166,6 +1219,7 @@
     els.buffer.addEventListener("change", saveBuffer);
     els.btnChoose.addEventListener("click", chooseArchive);
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
+    els.completionSound.addEventListener("change", saveCompletionSound);
 
     els.memSave.addEventListener("click", () => runMemoryAction(memorySave));
     els.memRecall.addEventListener("click", () => runMemoryAction(memoryRecall));

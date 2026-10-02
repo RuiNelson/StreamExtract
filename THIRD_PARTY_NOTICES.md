@@ -13,6 +13,11 @@ tar archives, with zlib, bzip2, liblzma (XZ Utils), Zstandard and LZ4 for
 decompression, and with mbed TLS for encrypted ZIP files in the Linux builds
 only.
 
+## Completion sound (GUI only)
+
+Thanks to **SoundShelfStudio** for the free SFX used when an upload completes
+successfully (`gui/ui/assets/audio/completed.mp3`).
+
 ## UnRAR
 
 Copyright (c) Alexander L. Roshal. Source: <https://www.rarlab.com/rar_add.htm>.

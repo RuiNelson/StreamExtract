@@ -17,11 +17,17 @@ fn default_buffer_mib() -> u32 {
     DEFAULT_BUFFER_MIB
 }
 
+fn default_completion_sound() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preferences {
     pub units: Units,
     #[serde(default = "default_buffer_mib")]
     pub buffer_mib: u32,
+    #[serde(default = "default_completion_sound")]
+    pub completion_sound: bool,
 }
 
 impl Default for Preferences {
@@ -29,6 +35,7 @@ impl Default for Preferences {
         Self {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
+            completion_sound: true,
         }
     }
 }
@@ -48,6 +55,9 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| (1..=4096).contains(value))
             .unwrap_or(DEFAULT_BUFFER_MIB),
+        completion_sound: !ini
+            .get("notifications", "completion_sound")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")),
     };
     Ok(preferences)
 }
@@ -63,8 +73,8 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     crate::ini::write_atomic(
         path,
         &format!(
-            "[display]\nunits={units}\n\n[transfer]\nbuffer_mib={}\n",
-            preferences.buffer_mib
+            "[display]\nunits={units}\n\n[transfer]\nbuffer_mib={}\n\n[notifications]\ncompletion_sound={}\n",
+            preferences.buffer_mib, preferences.completion_sound
         ),
     )
 }
@@ -93,15 +103,18 @@ mod tests {
             Preferences {
                 units: Units::Binary,
                 buffer_mib: 128,
+                completion_sound: false,
             },
         )
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
+        assert!(!load(&path).unwrap().completion_sound);
         let memory = dir.join("memory.ini");
         fs::write(&memory, "server settings").unwrap();
         save(&path, Preferences::default()).unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
+        assert!(load(&path).unwrap().completion_sound);
         assert_eq!(fs::read_to_string(&memory).unwrap(), "server settings");
         crate::memory::clear(&memory).unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
@@ -113,6 +126,18 @@ mod tests {
         assert_eq!(load(&path).unwrap(), Preferences::default());
         fs::write(&path, "[ DISPLAY ]\nunits = BINARY\nunknown=yes\n").unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Binary);
+        assert!(load(&path).unwrap().completion_sound);
+        let legacy: Preferences =
+            serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
+        assert!(legacy.completion_sound);
+        for (value, enabled) in [("FALSE", false), ("true", true), ("invalid", true)] {
+            fs::write(
+                &path,
+                format!("[notifications]\ncompletion_sound = {value}\n"),
+            )
+            .unwrap();
+            assert_eq!(load(&path).unwrap().completion_sound, enabled);
+        }
         fs::write(&path, "[ DISPLAY ]\nunits = SI\nunknown=yes\n").unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
         for value in ["0", "4097", "-1", "invalid"] {
@@ -125,6 +150,7 @@ mod tests {
                 Preferences {
                     units: Units::Si,
                     buffer_mib: value,
+                    ..Preferences::default()
                 },
             )
             .unwrap();
@@ -135,7 +161,8 @@ mod tests {
                 &path,
                 Preferences {
                     units: Units::Si,
-                    buffer_mib: value
+                    buffer_mib: value,
+                    ..Preferences::default()
                 }
             )
             .is_err());
