@@ -80,8 +80,8 @@ The macOS artifacts must be signed with the maintainer's Developer ID and notari
 3. Sign with `codesign --force --options runtime --timestamp --sign "<Developer ID Application identity>"`: the CLI binary with `--identifier io.github.ruinelson.rarftp`; for the app, `Contents/Frameworks/librarftpcore.dylib` first, then `rarftp-gui.app` (no entitlements needed).
 4. Notarize: `ditto -c -k` each into a zip (`--keepParent` for the `.app`), then `xcrun notarytool submit <zip> --keychain-profile <notary profile> --wait`.
 5. `xcrun stapler staple rarftp-gui.app` (a bare CLI binary cannot be stapled). Check with `spctl -a -vv` (the CLI with `-t open --context context:primary-signature`).
-6. Repack each with `rar a -r -m5 -ma5` (same file names and contents as the CI archives, `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.md` included).
-7. `gh release create vX.X.X --title "Version X.X.X"` with the 6 Linux/Windows archives from CI and the 2 signed macOS ones.
+6. After local signing and notarization, package each macOS artifact with `ditto -c -k` into a `.zip` (use `--keepParent` for `rarftp-gui.app`), retaining the same contents as the CI archive: `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.md`. Do not repack the macOS artifacts as RAR files: ZIP avoids compatibility problems with RAR extractors.
+7. `gh release create vX.X.X --title "Version X.X.X"` with the 6 Linux/Windows RAR archives from CI and the 2 signed, notarized macOS ZIPs.
 
 The project uses semantic versioning, tag the repository (`vX.X.X`), the GitHub version name follows the format `Version X.X.X`
 
