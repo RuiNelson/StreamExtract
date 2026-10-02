@@ -22,6 +22,7 @@
   const els = {
     app: $("app"),
     version: $("app-version"),
+    unitsGroup: document.querySelectorAll('input[name="units"]'),
     // setup
     setupView: $("setup-view"),
     dropzone: $("dropzone"),
@@ -107,6 +108,9 @@
     info: null, // app_info()
     memory: { saved: false, store_credentials: null },
     memoryBusy: false,
+    units: "binary",
+    bufferMib: 64,
+    preferencesBusy: true,
     starting: false,
     quitting: false,
     job: null, // the transfer being shown, see newJob()
@@ -119,6 +123,58 @@
 
   function invoke(command, args) {
     return tauri.core.invoke(command, args);
+  }
+
+  function syncPreferences() {
+    for (const input of els.unitsGroup) {
+      input.checked = input.value === state.units;
+      input.disabled = state.preferencesBusy;
+    }
+    els.buffer.disabled = state.preferencesBusy;
+    els.buffer.value = String(state.bufferMib);
+    validateBuffer();
+    updateSubmitState();
+  }
+
+  async function loadPreferences() {
+    try {
+      const preferences = await invoke("preferences_load");
+      state.units = preferences.units;
+      state.bufferMib = preferences.buffer_mib;
+    } catch (e) {
+      toastError("Could not read preferences", e);
+    } finally {
+      state.preferencesBusy = false;
+      syncPreferences();
+    }
+  }
+
+  async function savePreferences(units, bufferMib) {
+    if (state.preferencesBusy) return;
+    state.preferencesBusy = true;
+    updateSubmitState();
+    for (const input of els.unitsGroup) input.disabled = true;
+    els.buffer.disabled = true;
+    try {
+      await invoke("preferences_save", { preferences: { units, buffer_mib: bufferMib } });
+      state.units = units;
+      state.bufferMib = bufferMib;
+    } catch (e) {
+      toastError("Could not save preferences", e);
+    } finally {
+      state.preferencesBusy = false;
+      syncPreferences();
+    }
+  }
+
+  function saveUnits(event) {
+    return savePreferences(event.target.value, state.bufferMib);
+  }
+
+  function saveBuffer() {
+    const bufferMib = validateBuffer();
+    if (bufferMib === null) return;
+    return savePreferences(state.units, bufferMib);
   }
 
   function errText(e) {
@@ -251,7 +307,7 @@
   function updateSubmitState() {
     const host = els.host.value.trim();
     const hasArchive = Boolean(state.archive);
-    els.btnUpload.disabled = !(hasArchive && host) || state.starting;
+    els.btnUpload.disabled = !(hasArchive && host) || state.starting || state.preferencesBusy;
     let hint;
     if (!hasArchive && !host) hint = "Choose an archive and enter a host to continue.";
     else if (!hasArchive) hint = "Choose an archive to continue.";
@@ -334,6 +390,7 @@
       mkdir: server.mkdir,
       verbose: els.verbose.checked,
       buffer_mib: buffer,
+      units: state.units,
     };
   }
 
@@ -506,7 +563,7 @@
   }
 
   async function startTransfer() {
-    if (state.starting) return;
+    if (state.starting || state.preferencesBusy) return;
     if (!state.archive || !els.host.value.trim()) return;
     const config = buildConfig();
     if (!config) return;
@@ -719,7 +776,7 @@
   }
 
   function renderChips(job, archive) {
-    const key = archive ? JSON.stringify(archive) : "";
+    const key = `${state.units}|${archive ? JSON.stringify(archive) : ""}`;
     if (key === job.chipsKey) return;
     job.chipsKey = key;
     els.chips.replaceChildren();
@@ -1054,7 +1111,9 @@
     els.host.addEventListener("input", updateSubmitState);
     els.port.addEventListener("input", validatePort);
     els.buffer.addEventListener("input", validateBuffer);
+    els.buffer.addEventListener("change", saveBuffer);
     els.btnChoose.addEventListener("click", chooseArchive);
+    for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
 
     els.memSave.addEventListener("click", () => runMemoryAction(memorySave));
     els.memRecall.addEventListener("click", () => runMemoryAction(memoryRecall));
@@ -1133,7 +1192,7 @@
     updateMemoryButtons();
     initDragDrop();
     initCloseHandler();
-    await Promise.all([loadAppInfo(), refreshMemory()]);
+    await Promise.all([loadAppInfo(), refreshMemory(), loadPreferences()]);
   }
 
   init();

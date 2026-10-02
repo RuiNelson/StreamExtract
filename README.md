@@ -50,7 +50,13 @@ The app offers:
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
   if missing*.
-  *Advanced* has the buffer size and the verbose log.
+  *Advanced* has the buffer size, the verbose log and **Display units**: SI
+  (1000 MB = 1 GB) or binary (1024 MiB = 1 GiB, the default). The choice applies
+  to sizes, speeds, log messages and the final summary. The units and buffer size are saved
+  automatically in `~/.config/rarftp-gui/preferences.ini`, separately from
+  server memory (buffer default: 64 MiB; range: 1–4096 MiB).
+  The buffer setting is always entered in MiB. Sizes and speeds are formatted
+  by the engine from the original byte counts using the selected units.
 - **Memory Save**, **Memory Recall** and **Memory Clear**: keep the server
   settings between runs in `~/.config/rarftp-gui/memory.ini` (under the home
   directory on every OS), a **plain text** file. The first time a login with a

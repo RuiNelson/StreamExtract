@@ -50,6 +50,12 @@ RARFTP_API const char* rarftp_version(void);
  * also sets LC_CTYPE from the environment, as the rarftp CLI does. */
 RARFTP_API rarftp_job* rarftp_job_start(const rarftp_job_config* config);
 
+/* Like rarftp_job_start, with the display units for sizes and speeds in logs,
+ * summaries and JSON text fields. `si_units`: 0 = binary (1024, KiB/MiB/...),
+ * nonzero = SI (1000, kB/MB/...). Numeric byte counts are always unchanged.
+ * The original start function uses binary units; its config layout is unchanged. */
+RARFTP_API rarftp_job* rarftp_job_start_with_units(const rarftp_job_config* config, int si_units);
+
 /* Current state as a JSON object, including the log lines numbered
  * `log_cursor` and later. Free the result with rarftp_free(). Returns NULL
  * only if `job` is NULL or memory ran out. */

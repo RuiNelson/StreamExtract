@@ -65,6 +65,22 @@ TEST_CASE("format_bytes") {
   CHECK(format_bytes(5ull << 40) == "5.00 TiB");
 }
 
+TEST_CASE("SI sizes and speeds use the original byte counts") {
+  CHECK(format_bytes(0, ByteUnits::Si) == "0 B");
+  CHECK(format_bytes(999, ByteUnits::Si) == "999 B");
+  CHECK(format_bytes(1000, ByteUnits::Si) == "1.00 kB");
+  CHECK(format_bytes(10480) == "10.2 KiB");
+  CHECK(format_bytes(10480, ByteUnits::Si) == "10.5 kB");
+  CHECK(format_bytes(1000000, ByteUnits::Si) == "1.00 MB");
+  CHECK(format_bytes(1000000000, ByteUnits::Si) == "1.00 GB");
+  CHECK(format_bytes(1000000000000ull, ByteUnits::Si) == "1.00 TB");
+  CHECK(format_bytes(1000000000000000ull, ByteUnits::Si) == "1.00 PB");
+  CHECK(format_bytes(1000000000000000000ull, ByteUnits::Si) == "1.00 EB");
+  CHECK(format_speed(10480, ByteUnits::Si) == "10.5 kB/s");
+  CHECK(format_speed(-1, ByteUnits::Si) == "0 B/s");
+  CHECK(format_speed(std::numeric_limits<double>::infinity(), ByteUnits::Si) == "0 B/s");
+}
+
 TEST_CASE("format_speed and format_duration") {
   CHECK(format_speed(0.0) == "0 B/s");
   CHECK(format_speed(2.5 * 1024 * 1024) == "2.50 MiB/s");

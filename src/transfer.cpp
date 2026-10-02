@@ -544,8 +544,8 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
 
   progress_.end_file();
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(size),
-            format_speed(seconds > 0.0 ? static_cast<double>(size) / seconds : 0.0));
+  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(size, log_.units()),
+            format_speed(seconds > 0.0 ? static_cast<double>(size) / seconds : 0.0, log_.units()));
   if (result.timestamp_failed) {
     if (!ftp_.timestamps_unsupported()) {
       log_.warn("could not set the modification time of {}", planned.relative);

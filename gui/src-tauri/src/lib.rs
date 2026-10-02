@@ -2,7 +2,9 @@
 //! web front-end as Tauri commands (see the contract, section B).
 
 mod ffi;
+mod ini;
 mod memory;
+mod preferences;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -47,6 +49,8 @@ pub struct TransferConfig {
     pub mkdir: bool,
     pub verbose: bool,
     pub buffer_mib: u32,
+    #[serde(default)]
+    pub units: preferences::Units,
 }
 
 /// The server settings kept by Memory Save. `user`/`password` are `null` when the login was not stored.
@@ -138,6 +142,22 @@ async fn app_info(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+async fn preferences_load(app: AppHandle) -> Result<preferences::Preferences, String> {
+    preferences::load(&memory_file(&app)?.with_file_name("preferences.ini"))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn preferences_save(
+    app: AppHandle,
+    preferences: preferences::Preferences,
+) -> Result<(), String> {
+    preferences::save(
+        &memory_file(&app)?.with_file_name("preferences.ini"),
+        preferences,
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
 async fn start_transfer(state: State<'_, AppState>, config: TransferConfig) -> Result<(), String> {
     state.start(&config)
 }
@@ -203,6 +223,8 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
+            preferences_load,
+            preferences_save,
             start_transfer,
             poll_transfer,
             answer_password,
@@ -245,6 +267,7 @@ mod tests {
             mkdir: false,
             verbose: false,
             buffer_mib: 1,
+            units: preferences::Units::Binary,
         }
     }
 

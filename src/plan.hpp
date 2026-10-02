@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "archive.hpp"
+#include "util/text.hpp"
 
 namespace rarftp {
 
@@ -52,7 +53,7 @@ struct ArchiveListing {
 
 // "ZIP, 8 file(s), 13.3 MiB, 3 volumes, encrypted"; "tar (gzip), read as it is
 // uploaded" for a stream_only archive, whose contents are not known yet.
-std::string describe_archive(const ArchiveListing& listing, bool encrypted);
+std::string describe_archive(const ArchiveListing& listing, bool encrypted, ByteUnits units = ByteUnits::Binary);
 
 // Reads every header of every volume; for a stream_only archive (compressed tar) only opens it, leaving the
 // entries empty. Throws std::runtime_error, or ArchivePasswordError when the password is wrong.

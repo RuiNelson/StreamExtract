@@ -209,31 +209,35 @@ std::string latin1_to_utf8(std::string_view text) {
   return out;
 }
 
-std::string format_bytes(uint64_t bytes) {
-  if (bytes < 1024) {
+std::string format_bytes(uint64_t bytes, ByteUnits units) {
+  const uint64_t base = units == ByteUnits::Si ? 1000 : 1024;
+  if (bytes < base) {
     return fmt::format("{} B", bytes);
   }
-  static constexpr std::array<const char*, 6> kUnits = {"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
-  double value = static_cast<double>(bytes) / 1024.0;
+  static constexpr std::array<const char*, 6> kBinary = {"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"};
+  static constexpr std::array<const char*, 6> kSi = {"kB", "MB", "GB", "TB", "PB", "EB"};
+  const auto& names = units == ByteUnits::Si ? kSi : kBinary;
+  const double divisor = static_cast<double>(base);
+  double value = static_cast<double>(bytes) / divisor;
   size_t unit = 0;
-  while (value >= 1024.0 && unit + 1 < kUnits.size()) {
-    value /= 1024.0;
+  while (value >= divisor && unit + 1 < names.size()) {
+    value /= divisor;
     ++unit;
   }
   if (value < 10.0) {
-    return fmt::format("{:.2f} {}", value, kUnits[unit]);
+    return fmt::format("{:.2f} {}", value, names[unit]);
   }
   if (value < 100.0) {
-    return fmt::format("{:.1f} {}", value, kUnits[unit]);
+    return fmt::format("{:.1f} {}", value, names[unit]);
   }
-  return fmt::format("{:.0f} {}", value, kUnits[unit]);
+  return fmt::format("{:.0f} {}", value, names[unit]);
 }
 
-std::string format_speed(double bytes_per_second) {
+std::string format_speed(double bytes_per_second, ByteUnits units) {
   if (!std::isfinite(bytes_per_second) || bytes_per_second < 0.5) {
     return "0 B/s";
   }
-  return format_bytes(static_cast<uint64_t>(bytes_per_second)) + "/s";
+  return format_bytes(static_cast<uint64_t>(bytes_per_second), units) + "/s";
 }
 
 std::string format_duration(double seconds) {

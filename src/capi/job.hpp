@@ -31,6 +31,7 @@ struct JobConfig {
   bool mkdir = false;
   bool verbose = false;
   unsigned buffer_mib = 0;  // 0: the default.
+  ByteUnits units = ByteUnits::Binary;
 };
 
 // One upload (what the CLI's run() does) on its own controller thread. The
@@ -92,7 +93,7 @@ class Job {
   Result pipeline();
   ArchiveListing read_archive(std::optional<PasswordSource>& passwords);
   Result failed_result(const std::string& error);
-  static Result cancelled_result();
+  Result cancelled_result();
   std::optional<std::string> ask_password(std::optional<std::string> error);
   void throw_if_cancelled() const;
   void set_phase(Phase phase);

@@ -49,3 +49,19 @@ TEST_CASE("summary mentions skipped and ignored entries") {
   CHECK(lines[1] == "Skipped 2 file(s), 2.00 KiB already on the server with the same size.");
   CHECK(lines[2] == "Not uploaded: 1 link(s) or unsupported entries (see the warnings).");
 }
+
+TEST_CASE("SI summary formats original uploaded and skipped byte counts") {
+  TransferResult result = result_with(TransferResult::Status::Success);
+  result.bytes_uploaded = 10480;
+  result.seconds = 1;
+  result.skipped_files = 2;
+  result.skipped_bytes = 1000000;
+  const Lines lines = summary_lines(result, ByteUnits::Si);
+  REQUIRE(lines.size() == 2);
+  CHECK(lines[0] == "Done: 3 file(s), 10.5 kB uploaded in 00:00:01 (10.5 kB/s on average).");
+  CHECK(lines[1] == "Skipped 2 file(s), 1.00 MB already on the server with the same size.");
+  result.status = TransferResult::Status::Cancelled;
+  CHECK(summary_lines(result, ByteUnits::Si)[0] == "Cancelled: 3 file(s), 10.5 kB uploaded.");
+  result.status = TransferResult::Status::Failed;
+  CHECK(summary_lines(result, ByteUnits::Si)[1] == "3 file(s), 10.5 kB uploaded before the failure.");
+}

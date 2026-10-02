@@ -11,6 +11,8 @@
 
 #include <fmt/format.h>
 
+#include "util/text.hpp"
+
 namespace rarftp {
 
 enum class LogLevel { Debug, Info, Warn, Error };
@@ -31,6 +33,10 @@ std::string format_log_line(const LogLine& line);
 class Logger {
  public:
   using Sink = std::function<void(const LogLine&)>;
+
+  // Immutable per transfer, shared safely by the controller and worker threads.
+  explicit Logger(ByteUnits units = ByteUnits::Binary) : units_(units) {}
+  ByteUnits units() const { return units_; }
 
   // Called (serialized) for every accepted line, e.g. to print it right away.
   void set_sink(Sink sink);
@@ -66,6 +72,7 @@ class Logger {
   static constexpr size_t kMaxLines = 2000;
   static constexpr size_t kMaxProblems = 500;
 
+  const ByteUnits units_;
   mutable std::mutex mutex_;
   std::deque<LogLine> lines_;
   std::vector<LogLine> problems_;

@@ -22,11 +22,9 @@
 //! Values are literal after the first `=` (no trimming, no quoting, no inline comments), keys are
 //! trimmed, lines starting with `#` or `;` are comments and unknown keys are ignored.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -66,55 +64,19 @@ struct Parsed {
 }
 
 fn parse(text: &str) -> Parsed {
-    #[derive(PartialEq)]
-    enum Section {
-        None,
-        Server,
-        Memory,
-        Other,
+    let ini = crate::ini::Ini::parse(text);
+    let server = |key| ini.get("server", key).map(str::to_owned);
+    Parsed {
+        has_server_section: ini.has_section("server"),
+        host: server("host"),
+        port: server("port"),
+        mode: server("mode"),
+        user: server("user"),
+        password: server("password"),
+        directory: server("directory"),
+        mkdir: server("mkdir"),
+        store_credentials: ini.get("memory", "store_credentials").map(str::to_owned),
     }
-
-    let mut parsed = Parsed::default();
-    let mut section = Section::None;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
-            continue;
-        }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = match trimmed[1..trimmed.len() - 1]
-                .trim()
-                .to_ascii_lowercase()
-                .as_str()
-            {
-                "server" => {
-                    parsed.has_server_section = true;
-                    Section::Server
-                }
-                "memory" => Section::Memory,
-                _ => Section::Other,
-            };
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let key = key.trim().to_ascii_lowercase();
-        let value = value.to_string();
-        match (&section, key.as_str()) {
-            (Section::Server, "host") => parsed.host = Some(value),
-            (Section::Server, "port") => parsed.port = Some(value),
-            (Section::Server, "mode") => parsed.mode = Some(value),
-            (Section::Server, "user") => parsed.user = Some(value),
-            (Section::Server, "password") => parsed.password = Some(value),
-            (Section::Server, "directory") => parsed.directory = Some(value),
-            (Section::Server, "mkdir") => parsed.mkdir = Some(value),
-            (Section::Memory, "store_credentials") => parsed.store_credentials = Some(value),
-            _ => {}
-        }
-    }
-    parsed
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -127,11 +89,7 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 /// `None` when the file does not exist.
 fn read(path: &Path) -> Result<Option<Parsed>, String> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(parse(&String::from_utf8_lossy(&bytes)))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("Cannot read {}: {error}", path.display())),
-    }
+    Ok(crate::ini::read(path)?.map(|text| parse(&text)))
 }
 
 /// Whether a memory file exists and the stored consent answer.
@@ -238,7 +196,7 @@ pub fn save(
             if answer { "yes" } else { "no" }
         ));
     }
-    write_atomic(path, &text)
+    crate::ini::write_atomic(path, &text)
 }
 
 /// Deletes the memory file (and with it the stored answer). Fine if it does not exist.
@@ -261,61 +219,12 @@ fn push_value(text: &mut String, key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Creates the private directory (0700 on Unix) and any missing parents.
-fn create_private_dir(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        return Ok(());
-    }
-    if let Some(parent) = dir.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-    match builder.create(dir) {
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
-        other => other,
-    }
-}
-
-/// Creates a new file readable and writable by the owner only (0600 on Unix).
-fn create_private_file(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)
-}
-
-/// Writes `contents` to a temporary file in the same directory, then renames it over `path`.
-fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    let fail = |error: io::Error| format!("Cannot write {}: {error}", path.display());
-    let dir = path
-        .parent()
-        .ok_or_else(|| format!("Invalid memory path {}", path.display()))?;
-    create_private_dir(dir).map_err(fail)?;
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let temp = dir.join(format!(".memory.ini.{}.{nanos}.tmp", process::id()));
-    let result = (|| {
-        let mut file = create_private_file(&temp)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temp, path)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result.map_err(fail)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// A unique directory under the system temp dir, removed on drop.
     struct TempHome(PathBuf);

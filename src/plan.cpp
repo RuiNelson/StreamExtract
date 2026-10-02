@@ -57,7 +57,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
   callbacks.on_large_dictionary = [&](uint64_t dictionary, uint64_t limit) {
     log.warn(
         "the archive uses a {} dictionary (UnRAR's default limit is {}); decompression needs that much memory",
-        format_bytes(dictionary), format_bytes(limit));
+        format_bytes(dictionary, log.units()), format_bytes(limit, log.units()));
     return true;
   };
 
@@ -101,7 +101,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
   return listing;
 }
 
-std::string describe_archive(const ArchiveListing& listing, bool encrypted) {
+std::string describe_archive(const ArchiveListing& listing, bool encrypted, ByteUnits units) {
   std::string text = format_name(listing.format);
   if (!listing.flags.compression.empty()) {
     text += fmt::format(" ({})", listing.flags.compression);
@@ -117,7 +117,7 @@ std::string describe_archive(const ArchiveListing& listing, bool encrypted) {
         bytes += entry.size;
       }
     }
-    text += fmt::format(", {} file(s), {}", files, format_bytes(bytes));
+    text += fmt::format(", {} file(s), {}", files, format_bytes(bytes, units));
   }
   if (listing.volumes > 1) {
     text += fmt::format(", {} volumes", listing.volumes);

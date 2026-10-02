@@ -34,7 +34,10 @@ pub struct RarftpJobConfig {
 // The library is linked by build.rs.
 extern "C" {
     pub fn rarftp_version() -> *const c_char;
-    pub fn rarftp_job_start(config: *const RarftpJobConfig) -> *mut RarftpJob;
+    pub fn rarftp_job_start_with_units(
+        config: *const RarftpJobConfig,
+        si_units: c_int,
+    ) -> *mut RarftpJob;
     pub fn rarftp_job_poll(job: *mut RarftpJob, log_cursor: u64) -> *mut c_char;
     pub fn rarftp_job_answer_password(job: *mut RarftpJob, password: *const c_char);
     pub fn rarftp_job_cancel(job: *mut RarftpJob);
@@ -99,7 +102,12 @@ impl Job {
             buffer_mib,
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
-        let job = unsafe { rarftp_job_start(&raw_config) };
+        let job = unsafe {
+            rarftp_job_start_with_units(
+                &raw_config,
+                c_int::from(config.units == crate::preferences::Units::Si),
+            )
+        };
         NonNull::new(job)
             .map(|raw| Job { raw })
             .ok_or_else(|| "The library could not start the transfer".to_string())
@@ -163,6 +171,7 @@ mod tests {
             mkdir: false,
             verbose: false,
             buffer_mib: 0,
+            units: crate::preferences::Units::Binary,
         }
     }
 

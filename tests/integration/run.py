@@ -439,6 +439,8 @@ class Library:
         dll.rarftp_version.restype = ctypes.c_char_p  # Static storage: a copy is fine.
         dll.rarftp_job_start.argtypes = [ctypes.POINTER(RarftpJobConfig)]
         dll.rarftp_job_start.restype = ctypes.c_void_p
+        dll.rarftp_job_start_with_units.argtypes = [ctypes.POINTER(RarftpJobConfig), ctypes.c_int]
+        dll.rarftp_job_start_with_units.restype = ctypes.c_void_p
         dll.rarftp_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.rarftp_job_poll.restype = ctypes.c_void_p
         dll.rarftp_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -489,7 +491,7 @@ class LibJob:
     cursor and answers the archive password prompt. Use it as a context manager: leaving it frees the
     job, which cancels and waits for it if it is still running."""
 
-    def __init__(self, lib, config):
+    def __init__(self, lib, config, si_units=False):
         unknown = set(config) - set(LIB_CONFIG_DEFAULTS)
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
@@ -503,7 +505,8 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        self.handle = lib.dll.rarftp_job_start(ctypes.byref(self._config))
+        self.handle = (lib.dll.rarftp_job_start_with_units(ctypes.byref(self._config), 1) if si_units
+                       else lib.dll.rarftp_job_start(ctypes.byref(self._config)))
         check(self.handle, "rarftp_job_start returned NULL")
 
     def __enter__(self):
@@ -773,9 +776,9 @@ class Env:
         config.update(overrides)
         return config
 
-    def lib_run(self, archive, expect="success", on_prompt=None, on_state=None, timeout=900, **overrides):
+    def lib_run(self, archive, expect="success", on_prompt=None, on_state=None, timeout=900, si_units=False, **overrides):
         """Runs a library job to its end and returns the LibJob (its state, log and prompts)."""
-        with LibJob(self.lib, self.lib_config(archive, **overrides)) as job:
+        with LibJob(self.lib, self.lib_config(archive, **overrides), si_units=si_units) as job:
             job.wait(on_prompt, on_state, timeout)
         result = job.result
         check(result["status"] == expect, f"status {result['status']!r}, expected {expect!r}: {result['error']}",
@@ -1342,6 +1345,29 @@ def test_lib_version(env):
           f"library {version!r} and command line {cli.stdout.strip()!r} have different versions")
 
 
+def test_lib_si_units(env):
+    require_lib(env)
+    # 10480 bytes rounds to 10.2 KiB in binary, which would convert to 10.4 kB:
+    # SI must instead use the original bytes and show 10.5 kB. The file name stays literal.
+    archive = Path(env.archive("si-units.zip"))
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as writer:
+        writer.writestr("64 MiB.txt", b"x" * 10480)
+    job = env.lib_run("si-units.zip", directory="lib-si", mkdir=1, si_units=True)
+    out = job.describe()
+    check(job.state["archive"]["bytes_text"] == "10.5 kB", "wrong SI archive size", out)
+    check(job.state["progress"]["text"]["sent_bytes"] == "10.5 kB", "wrong SI progress size", out)
+    check(job.state["progress"]["text"]["buffer_capacity"] == "67.1 MB", "wrong SI buffer capacity", out)
+    check("10.5 kB uploaded" in job.result["summary"][0], "wrong SI summary size", out)
+    log = lib_log_text(job)
+    check("Archive: ZIP, 1 file(s), 10.5 kB" in log, "wrong SI archive log", out)
+    check("To upload: 1 file(s), 10.5 kB" in log, "wrong SI plan log", out)
+    check("Uploaded 64 MiB.txt (10.5 kB," in log, "wrong SI upload log or altered filename", out)
+    check(env.remote("lib-si", "64 MiB.txt").read_bytes() == b"x" * 10480, "wrong uploaded data", out)
+    skipped = env.lib_run("si-units.zip", directory="lib-si", si_units=True)
+    check("10.5 kB already" in lib_log_text(skipped), "wrong SI skipped log", skipped.describe())
+    check("10.5 kB already" in skipped.result["summary"][1], "wrong SI skipped summary", skipped.describe())
+
+
 def test_lib_basic_upload(env):
     require_lib(env)
     files, size = tree_totals(env.fixtures["main"])
@@ -1644,6 +1670,7 @@ TESTS = [
     test_tar_gz_is_read_as_it_is_uploaded,
     test_tar_compressions,
     test_lib_version,
+    test_lib_si_units,
     test_lib_basic_upload,
     test_lib_rerun_skips_identical_files,
     test_lib_multivolume,

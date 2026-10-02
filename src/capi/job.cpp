@@ -65,7 +65,7 @@ void write_log_line(JsonWriter& json, uint64_t seq, const LogLine& line) {
 }
 
 void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload_rate, double unpack_rate,
-                    double read_rate) {
+                    double read_rate, ByteUnits units) {
   const double average = s.elapsed > 0.0 ? static_cast<double>(s.sent_bytes) / s.elapsed : 0.0;
   const bool uploading = !s.current_file.empty();
   const double eta_file = uploading ? eta_seconds(remaining(s.current_size, s.current_sent), upload_rate) : -1.0;
@@ -100,17 +100,17 @@ void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload
   json.member("eta_total", eta_total);
   json.key("text");
   json.begin_object();
-  json.member("total_bytes", format_bytes(s.total_bytes));
-  json.member("archive_read", format_bytes(s.archive_read));
-  json.member("archive_size", format_bytes(s.archive_size));
-  json.member("sent_bytes", format_bytes(s.sent_bytes));
-  json.member("skipped_bytes", format_bytes(s.skipped_bytes));
-  json.member("current_size", format_bytes(s.current_size));
-  json.member("current_sent", format_bytes(s.current_sent));
-  json.member("buffer_capacity", format_bytes(s.buffer_capacity));
-  json.member("upload_rate", format_speed(upload_rate));
-  json.member("average_rate", format_speed(average));
-  json.member("unpack_rate", format_speed(unpack_rate));
+  json.member("total_bytes", format_bytes(s.total_bytes, units));
+  json.member("archive_read", format_bytes(s.archive_read, units));
+  json.member("archive_size", format_bytes(s.archive_size, units));
+  json.member("sent_bytes", format_bytes(s.sent_bytes, units));
+  json.member("skipped_bytes", format_bytes(s.skipped_bytes, units));
+  json.member("current_size", format_bytes(s.current_size, units));
+  json.member("current_sent", format_bytes(s.current_sent, units));
+  json.member("buffer_capacity", format_bytes(s.buffer_capacity, units));
+  json.member("upload_rate", format_speed(upload_rate, units));
+  json.member("average_rate", format_speed(average, units));
+  json.member("unpack_rate", format_speed(unpack_rate, units));
   json.member("eta_file", format_duration(eta_file));
   json.member("eta_total", format_duration(eta_total));
   json.member("elapsed", format_duration(s.elapsed));
@@ -120,7 +120,8 @@ void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload
 
 }  // namespace
 
-Job::Job(JobConfig config) : config_(std::move(config)), archive_name_(file_name_of(config_.archive)) {
+Job::Job(JobConfig config)
+    : config_(std::move(config)), archive_name_(file_name_of(config_.archive)), log_(config_.units) {
   log_.set_verbose(config_.verbose);
   log_.set_sink([this](const LogLine& line) { add_log_line(line); });
   thread_ = std::thread([this] { run(); });
@@ -232,7 +233,7 @@ std::string Job::poll(uint64_t log_cursor) {
     }
     json.key("bytes_text");
     if (archive_->bytes) {
-      json.value(format_bytes(*archive_->bytes));
+      json.value(format_bytes(*archive_->bytes, config_.units));
     } else {
       json.null();
     }
@@ -265,13 +266,13 @@ std::string Job::poll(uint64_t log_cursor) {
 
   json.key("progress");
   if (final_progress_) {
-    write_progress(json, *final_progress_, 0.0, 0.0, 0.0);
+    write_progress(json, *final_progress_, 0.0, 0.0, 0.0, config_.units);
   } else if (transfer_started_) {
     const Progress::Snapshot s = progress_.snapshot();
     upload_meter_.add_sample(s.elapsed, s.sent_bytes);
     unpack_meter_.add_sample(s.elapsed, s.unpacked_bytes);
     read_meter_.add_sample(s.elapsed, s.archive_read);
-    write_progress(json, s, upload_meter_.rate(), unpack_meter_.rate(), read_meter_.rate());
+    write_progress(json, s, upload_meter_.rate(), unpack_meter_.rate(), read_meter_.rate(), config_.units);
   } else {
     json.null();
   }
@@ -358,7 +359,7 @@ Job::Result Job::cancelled_result() {
   cancelled.status = TransferResult::Status::Cancelled;
   Result result;
   result.status = cancelled.status;
-  result.summary = summary_lines(cancelled);
+  result.summary = summary_lines(cancelled, config_.units);
   return result;
 }
 
@@ -472,7 +473,7 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
   info.volumes = listing.volumes;
   info.solid = listing.flags.solid;
   info.encrypted = encrypted;
-  log_.info("Archive: {}", describe_archive(listing, encrypted));
+  log_.info("Archive: {}", describe_archive(listing, encrypted, config_.units));
   {
     std::lock_guard lock(state_mutex_);
     archive_ = std::move(info);
@@ -557,10 +558,10 @@ Job::Result Job::pipeline() {
   throw_if_cancelled();
   if (plan.skip_files > 0) {
     log_.info("{} file(s), {} already on the server with the same size: skipping them", plan.skip_files,
-              format_bytes(plan.skip_bytes));
+              format_bytes(plan.skip_bytes, config_.units));
   }
   if (!plan.streamed) {
-    log_.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes));
+    log_.info("To upload: {} file(s), {}", plan.upload_files, format_bytes(plan.upload_bytes, config_.units));
   }
 
   // 4. Transfer.
@@ -607,7 +608,7 @@ Job::Result Job::pipeline() {
   result.skipped_files = transferred.skipped_files;
   result.skipped_bytes = transferred.skipped_bytes;
   result.ignored = transferred.ignored;
-  result.summary = summary_lines(transferred);
+  result.summary = summary_lines(transferred, config_.units);
   return result;
 }
 

@@ -46,6 +46,10 @@ const char* rarftp_version(void) {
 }
 
 rarftp_job* rarftp_job_start(const rarftp_job_config* config) {
+  return rarftp_job_start_with_units(config, 0);
+}
+
+rarftp_job* rarftp_job_start_with_units(const rarftp_job_config* config, int si_units) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -67,6 +71,7 @@ rarftp_job* rarftp_job_start(const rarftp_job_config* config) {
     copy.mkdir = config->mkdir != 0;
     copy.verbose = config->verbose != 0;
     copy.buffer_mib = config->buffer_mib;
+    copy.units = si_units != 0 ? rarftp::ByteUnits::Si : rarftp::ByteUnits::Binary;
     return new rarftp_job(std::move(copy));
   } catch (...) {
     return nullptr;

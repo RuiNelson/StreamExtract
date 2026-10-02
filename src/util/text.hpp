@@ -25,11 +25,13 @@ std::string cp437_to_utf8(std::string_view text);
 // Decodes ISO 8859-1 (Latin-1), which maps every byte to a code point.
 std::string latin1_to_utf8(std::string_view text);
 
-// Human readable sizes using binary units: "512 B", "1.50 KiB", "3.25 GiB".
-std::string format_bytes(uint64_t bytes);
+enum class ByteUnits { Binary, Si };
 
-// "85.3 MiB/s".
-std::string format_speed(double bytes_per_second);
+// Human readable sizes: binary (1024, KiB/MiB/...) or SI (1000, kB/MB/...).
+std::string format_bytes(uint64_t bytes, ByteUnits units = ByteUnits::Binary);
+
+// Human readable bytes per second in the same units.
+std::string format_speed(double bytes_per_second, ByteUnits units = ByteUnits::Binary);
 
 // "01:02:03" ("123:04:05" past 99 hours). Negative, NaN or infinite values
 // mean "unknown" and give "--:--:--".

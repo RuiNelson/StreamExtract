@@ -61,3 +61,14 @@ TEST_CASE("password source without a prompt") {
   PasswordSource given(std::optional<std::string>("given"), PasswordSource::Prompt());
   CHECK(given.get() == std::optional<std::string>("given"));
 }
+
+TEST_CASE("archive description formats original bytes in the selected units") {
+  ArchiveListing listing;
+  ArchiveEntry entry;
+  entry.name = "64 MiB.txt";
+  entry.kind = EntryKind::File;
+  entry.size = 10480;
+  listing.entries.push_back(entry);
+  CHECK(describe_archive(listing, false) == "RAR, 1 file(s), 10.2 KiB");
+  CHECK(describe_archive(listing, false, ByteUnits::Si) == "RAR, 1 file(s), 10.5 kB");
+}

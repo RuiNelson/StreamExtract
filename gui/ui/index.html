@@ -110,12 +110,22 @@
         <details id="advanced" class="advanced">
           <summary>Advanced</summary>
           <div class="advanced-body">
+            <div class="field">
+              <span id="units-label" class="label">Display units</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="units-label" aria-describedby="units-hint">
+                <input type="radio" name="units" id="units-si" value="si" disabled>
+                <label for="units-si">SI (1000)</label>
+                <input type="radio" name="units" id="units-binary" value="binary" checked disabled>
+                <label for="units-binary">Binary (1024)</label>
+              </div>
+            </div>
+            <p id="units-hint" class="hint muted">SI: 1000 MB = 1 GB. Binary: 1024 MiB = 1 GiB. Saved automatically.</p>
             <div class="field narrow">
               <label for="buffer">Buffer (MiB)</label>
-              <input id="buffer" type="text" inputmode="numeric" autocomplete="off" value="64"
+              <input id="buffer" type="text" inputmode="numeric" autocomplete="off" value="64" disabled
                      aria-describedby="buffer-hint buffer-error">
             </div>
-            <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB).</p>
+            <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB). Saved automatically.</p>
             <p id="buffer-error" class="error-text" role="alert" hidden></p>
             <label class="check">
               <input type="checkbox" id="verbose">

@@ -401,3 +401,26 @@ TEST_CASE("cancelling while the server stays silent") {
   ::close(listener);
 }
 #endif
+
+TEST_CASE("display units are selected per job while the original C API stays binary") {
+  CHECK(rarftp_job_start_with_units(nullptr, 1) == nullptr);
+  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
+  rarftp_job_config config = make_config(path, 1);
+  rarftp_job* si = rarftp_job_start_with_units(&config, 1);
+  rarftp_job* binary = rarftp_job_start(&config);
+  rarftp_job* explicit_binary = rarftp_job_start_with_units(&config, 0);
+  REQUIRE(si != nullptr);
+  REQUIRE(binary != nullptr);
+  REQUIRE(explicit_binary != nullptr);
+  const std::string si_json = wait_for(si, "\"phase\":\"finished\"");
+  const std::string binary_json = wait_for(binary, "\"phase\":\"finished\"");
+  const std::string explicit_json = wait_for(explicit_binary, "\"phase\":\"finished\"");
+  CHECK(contains(si_json, "\"bytes\":6484635,\"bytes_text\":\"6.48 MB\""));
+  CHECK(contains(si_json, "Archive: exFAT, 19 file(s), 6.48 MB"));
+  CHECK(contains(binary_json, "\"bytes\":6484635,\"bytes_text\":\"6.18 MiB\""));
+  CHECK(contains(binary_json, "Archive: exFAT, 19 file(s), 6.18 MiB"));
+  CHECK(contains(explicit_json, "Archive: exFAT, 19 file(s), 6.18 MiB"));
+  rarftp_job_free(si);
+  rarftp_job_free(binary);
+  rarftp_job_free(explicit_binary);
+}
