@@ -46,7 +46,9 @@ The app offers:
   or pick it with a file dialog. For multi-volume sets, use the first volume
   (`.part1.rar`, `.zip.001`, `.7z.001`...).
   When the archive is encrypted and no password was typed in, the app asks for
-  it, and asks again if it was wrong.
+  it, and asks again if it was wrong. **Show passwords** toggles visibility for all
+  password fields, including that prompt, and is saved automatically in
+  `~/.config/rarftp-gui/preferences.ini` (off by default).
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
   if missing*.

@@ -24,6 +24,7 @@
     version: $("app-version"),
     unitsGroup: document.querySelectorAll('input[name="units"]'),
     completionSound: $("completion-sound"),
+    passwordVisibility: [$("archive-password-visible"), $("password-visible"), $("pw-input-visible")],
     // setup
     setupView: $("setup-view"),
     dropzone: $("dropzone"),
@@ -112,6 +113,7 @@
     units: "si",
     bufferMib: 64,
     completionSound: true,
+    showPasswords: false,
     preferencesBusy: true,
     starting: false,
     quitting: false,
@@ -132,6 +134,13 @@
       input.checked = input.value === state.units;
       input.disabled = state.preferencesBusy;
     }
+    for (const input of els.passwordVisibility) {
+      input.disabled = state.preferencesBusy;
+      input.checked = state.showPasswords;
+    }
+    for (const input of [els.archivePassword, els.password, els.pwInput]) {
+      input.type = state.showPasswords ? "text" : "password";
+    }
     els.buffer.disabled = state.preferencesBusy;
     els.completionSound.disabled = state.preferencesBusy;
     els.completionSound.checked = state.completionSound;
@@ -146,6 +155,7 @@
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
       state.completionSound = preferences.completion_sound ?? true;
+      state.showPasswords = preferences.show_passwords ?? false;
     } catch (e) {
       toastError("Could not read preferences", e);
     } finally {
@@ -154,20 +164,23 @@
     }
   }
 
-  async function savePreferences(units, bufferMib, completionSound = state.completionSound) {
+  async function savePreferences(units, bufferMib, completionSound = state.completionSound,
+    showPasswords = state.showPasswords) {
     if (state.preferencesBusy) return;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
     els.completionSound.disabled = true;
+    for (const input of els.passwordVisibility) input.disabled = true;
     try {
       await invoke("preferences_save", { preferences: {
-        units, buffer_mib: bufferMib, completion_sound: completionSound,
+        units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
       state.completionSound = completionSound;
+      state.showPasswords = showPasswords;
     } catch (e) {
       toastError("Could not save preferences", e);
     } finally {
@@ -188,6 +201,10 @@
 
   function saveCompletionSound() {
     return savePreferences(state.units, state.bufferMib, els.completionSound.checked);
+  }
+
+  function savePasswordVisibility(event) {
+    return savePreferences(state.units, state.bufferMib, state.completionSound, event.target.checked);
   }
 
   let completionAudioContext = null;
@@ -1220,6 +1237,7 @@
     els.btnChoose.addEventListener("click", chooseArchive);
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
     els.completionSound.addEventListener("change", saveCompletionSound);
+    for (const input of els.passwordVisibility) input.addEventListener("change", savePasswordVisibility);
 
     els.memSave.addEventListener("click", () => runMemoryAction(memorySave));
     els.memRecall.addEventListener("click", () => runMemoryAction(memoryRecall));

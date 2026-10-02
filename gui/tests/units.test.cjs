@@ -41,7 +41,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -155,7 +155,7 @@ test("the sound preference loads and saves without changing units or buffer", as
   app.node("completion-sound").checked = true;
   await app.saveCompletionSound();
   assert.deepEqual({ ...calls[1].args.preferences }, {
-    units: "binary", buffer_mib: 128, completion_sound: true,
+    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false,
   });
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").disabled, false);
@@ -170,6 +170,33 @@ test("a failed sound preference save restores the previous checkbox state", asyn
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").checked, true);
   assert.equal(app.node("completion-sound").disabled, false);
+});
+
+test("password visibility is shared, persists across preference changes, and keeps input values", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    return { units: "binary", buffer_mib: 128, completion_sound: false, show_passwords: true };
+  });
+  const fields = ["archive-password", "password", "pw-input"];
+  for (const id of fields) app.node(id).value = "secret";
+  await app.loadPreferences();
+  for (const id of fields) {
+    assert.equal(app.node(id).type, "text");
+    assert.equal(app.node(`${id}-visible`).checked, true);
+  }
+  await app.saveUnits({ target: { value: "si" } });
+  assert.equal(calls[1].args.preferences.show_passwords, true);
+  await app.savePasswordVisibility({ target: { checked: false } });
+  assert.deepEqual({ ...calls[2].args.preferences }, {
+    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false,
+  });
+  for (const id of fields) {
+    assert.equal(app.node(id).type, "password");
+    assert.equal(app.node(id).value, "secret");
+    assert.equal(app.node(`${id}-visible`).checked, false);
+    assert.equal(app.node(`${id}-visible`).disabled, false);
+  }
 });
 
 test("loading and changing units persists automatically through the backend", async () => {

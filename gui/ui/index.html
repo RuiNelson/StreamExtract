@@ -45,6 +45,10 @@
             <label for="archive-password">Archive password</label>
             <input id="archive-password" type="password" autocomplete="new-password" autocapitalize="off"
                    spellcheck="false" placeholder="Only if the archive is encrypted">
+            <label class="check">
+              <input type="checkbox" id="archive-password-visible">
+              <span>Show passwords</span>
+            </label>
           </div>
         </section>
 
@@ -92,6 +96,10 @@
               <label for="password">Password</label>
               <input id="password" type="password" autocomplete="new-password" autocapitalize="off"
                      spellcheck="false">
+              <label class="check">
+                <input type="checkbox" id="password-visible">
+                <span>Show passwords</span>
+              </label>
             </div>
           </div>
 
@@ -263,6 +271,10 @@
         <label for="pw-input">Archive password</label>
         <input id="pw-input" type="password" autocomplete="new-password" autocapitalize="off"
                spellcheck="false" aria-describedby="pw-error" autofocus>
+        <label class="check">
+          <input type="checkbox" id="pw-input-visible">
+          <span>Show passwords</span>
+        </label>
         <p id="pw-error" class="error-text" role="alert" hidden></p>
       </div>
       <div class="dialog-actions">

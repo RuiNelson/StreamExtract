@@ -28,6 +28,8 @@ pub struct Preferences {
     pub buffer_mib: u32,
     #[serde(default = "default_completion_sound")]
     pub completion_sound: bool,
+    #[serde(default)]
+    pub show_passwords: bool,
 }
 
 impl Default for Preferences {
@@ -36,6 +38,7 @@ impl Default for Preferences {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
             completion_sound: true,
+            show_passwords: false,
         }
     }
 }
@@ -55,6 +58,9 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| (1..=4096).contains(value))
             .unwrap_or(DEFAULT_BUFFER_MIB),
+        show_passwords: ini
+            .get("display", "show_passwords")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true")),
         completion_sound: !ini
             .get("notifications", "completion_sound")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")),
@@ -73,8 +79,8 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     crate::ini::write_atomic(
         path,
         &format!(
-            "[display]\nunits={units}\n\n[transfer]\nbuffer_mib={}\n\n[notifications]\ncompletion_sound={}\n",
-            preferences.buffer_mib, preferences.completion_sound
+            "[display]\nunits={units}\nshow_passwords={}\n\n[transfer]\nbuffer_mib={}\n\n[notifications]\ncompletion_sound={}\n",
+            preferences.show_passwords, preferences.buffer_mib, preferences.completion_sound
         ),
     )
 }
@@ -104,12 +110,14 @@ mod tests {
                 units: Units::Binary,
                 buffer_mib: 128,
                 completion_sound: false,
+                show_passwords: true,
             },
         )
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
         assert!(!load(&path).unwrap().completion_sound);
+        assert!(load(&path).unwrap().show_passwords);
         let memory = dir.join("memory.ini");
         fs::write(&memory, "server settings").unwrap();
         save(&path, Preferences::default()).unwrap();
@@ -130,6 +138,11 @@ mod tests {
         let legacy: Preferences =
             serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
         assert!(legacy.completion_sound);
+        assert!(!legacy.show_passwords);
+        for (value, enabled) in [("TRUE", true), ("false", false), ("invalid", false)] {
+            fs::write(&path, format!("[display]\nshow_passwords = {value}\n")).unwrap();
+            assert_eq!(load(&path).unwrap().show_passwords, enabled);
+        }
         for (value, enabled) in [("FALSE", false), ("true", true), ("invalid", true)] {
             fs::write(
                 &path,
