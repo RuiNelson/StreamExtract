@@ -66,6 +66,7 @@ ff[0-9]*.zip
 # Build trees and tooling
 /build*/
 /out/
+/.products/
 /.cache/
 compile_commands.json
 CMakeUserPresets.json
