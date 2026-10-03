@@ -10,10 +10,10 @@
 
 #include <fmt/format.h>
 
+#include "archive.hpp"
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "progress.hpp"
-#include "archive.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -21,6 +21,7 @@ namespace rarftp {
 namespace {
 
 constexpr size_t kBlockSize = 1 << 20;
+constexpr size_t kMinBlockCapacity = 4096;
 
 std::string file_name_of(const std::string& path) {
   const size_t slash = path.find_last_of("/\\");
@@ -167,7 +168,15 @@ void Transfer::extract() {
     }
     while (size > 0) {
       if (block.capacity() == 0) {
-        block = pipe_.acquire_buffer(kBlockSize);
+        // A tiny file must not retain a 1 MiB allocation while it waits for
+        // FTP. The queue bounds payload bytes, so thousands of small files
+        // can be waiting at once. Size from the file header, not this callback,
+        // keeps large files from repeatedly growing buffers for small chunks.
+        size_t capacity = kMinBlockCapacity;
+        while (capacity < unpacking_size_ && capacity < kBlockSize) {
+          capacity *= 2;
+        }
+        block = pipe_.acquire_buffer(capacity);
       }
       const size_t take = std::min(size, kBlockSize - block.size());
       block.insert(block.end(), data, data + take);
@@ -236,6 +245,7 @@ void Transfer::extract() {
             break;
           }
           case PlannedEntry::Action::Upload: {
+            unpacking_size_ = planned.entry.size;
             progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
             PipeMessage begin;
             begin.kind = PipeMessage::Kind::FileBegin;
@@ -259,9 +269,9 @@ void Transfer::extract() {
             if (plan_.skip_decompresses) {
               // It has to be decompressed anyway. test() (instead of skip())
               // keeps cancellation responsive.
-              progress_.set_activity(fmt::format(
-                  "Skipping {} (already on the server), decompressing it to reach the next files",
-                  planned.relative));
+              progress_.set_activity(
+                  fmt::format("Skipping {} (already on the server), decompressing it to reach the next files",
+                              planned.relative));
               discard = true;
               archive->test();
               discard = false;
@@ -345,6 +355,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
           break;
         }
         case PlannedEntry::Action::Upload: {
+          unpacking_size_ = planned.entry.size;
           // The uploader checks the server first, and drops the data of a file
           // that is already there: it has to be decompressed anyway.
           progress_.set_activity(fmt::format("Unpacking {}", planned.relative));

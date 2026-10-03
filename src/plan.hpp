@@ -115,7 +115,7 @@ TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& l
 
 // Tells whether files are already on the server with a given size, one at a
 // time: one existence check and one listing per directory, then SIZE only for
-// the names that are there.
+// the listed names and dotfiles (which some servers omit from NLST).
 class RemoteProbe {
  public:
   RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log);

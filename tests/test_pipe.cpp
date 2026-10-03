@@ -92,3 +92,21 @@ TEST_CASE("buffers are recycled") {
   CHECK(again.empty());
   CHECK(again.data() == storage);
 }
+
+TEST_CASE("recycled buffers fit both small and large files") {
+  Pipe pipe(1 << 20);
+  auto large = pipe.acquire_buffer(1 << 20);
+  pipe.release_buffer(std::move(large));
+  auto small = pipe.acquire_buffer(4096);
+  CHECK(small.capacity() >= 4096);
+  CHECK(small.capacity() <= 8192);
+  const uint8_t* small_storage = small.data();
+  pipe.release_buffer(std::move(small));
+
+  // A larger request must not get the tiny buffer at the back of the pool.
+  auto again_large = pipe.acquire_buffer(1 << 20);
+  CHECK(again_large.capacity() >= (1 << 20));
+  pipe.release_buffer(std::move(again_large));
+  auto again_small = pipe.acquire_buffer(4096);
+  CHECK(again_small.data() == small_storage);
+}

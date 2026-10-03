@@ -93,6 +93,7 @@ class Transfer {
   std::deque<PlannedEntry> streamed_;
   std::unique_ptr<RemoteProbe> probe_;
   const Archive* reading_ = nullptr;  // Extractor only: for the position in the archive.
+  uint64_t unpacking_size_ = 0;       // Extractor only: sizes buffers for the current file.
   uint64_t files_uploaded_ = 0;
   uint64_t bytes_uploaded_ = 0;
   uint64_t skipped_files_ = 0;  // Streamed plans; otherwise the plan's counts.

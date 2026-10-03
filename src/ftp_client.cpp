@@ -186,7 +186,10 @@ struct FtpClient::Impl {
     curl_easy_setopt(curl, CURLOPT_FTP_USE_EPSV, 1L);
     curl_easy_setopt(curl, CURLOPT_FTP_USE_EPRT, 1L);
     curl_easy_setopt(curl, CURLOPT_FTP_SKIP_PASV_IP, 1L);
-    curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, static_cast<long>(CURLFTPMETHOD_MULTICWD));
+    // One CWD for the whole directory instead of one per path component.
+    // The latter adds a round trip per level whenever small files alternate
+    // between directories. perform() retains it as a compatibility fallback.
+    curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, static_cast<long>(CURLFTPMETHOD_SINGLECWD));
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, kConnectTimeout);
     curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, kResponseTimeout);
     curl_easy_setopt(curl, CURLOPT_ACCEPTTIMEOUT_MS, kAcceptTimeoutMs);
@@ -211,8 +214,15 @@ struct FtpClient::Impl {
     }
   }
 
-  CURLcode perform() {
-    const CURLcode code = curl_easy_perform(curl);
+  CURLcode perform(bool retry_cwd = true) {
+    CURLcode code = curl_easy_perform(curl);
+    if (retry_cwd && code == CURLE_REMOTE_ACCESS_DENIED) {
+      // CWD failed before any data was transferred. Walking the components
+      // supports servers that reject a full path and creates missing parents
+      // one at a time when FTP_CREATE_MISSING_DIRS is enabled.
+      curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, static_cast<long>(CURLFTPMETHOD_MULTICWD));
+      code = curl_easy_perform(curl);
+    }
     if (code == CURLE_OK) {
       logged_in = true;
     }
@@ -247,8 +257,11 @@ struct FtpClient::Impl {
       list.append(command);
     }
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    // Commands already contain absolute paths; do not return to the login
+    // directory afterwards (e.g. when falling back from MFMT to MDTM).
+    curl_easy_setopt(curl, CURLOPT_FTP_FILEMETHOD, static_cast<long>(CURLFTPMETHOD_NOCWD));
     curl_easy_setopt(curl, CURLOPT_QUOTE, list.get());
-    return perform();
+    return perform(false);
   }
 };
 

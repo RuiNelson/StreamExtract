@@ -266,7 +266,14 @@ bool RemoteProbe::same_size(const PlannedEntry& planned) {
     it = directories_.emplace(dir, std::move(directory)).first;
   }
   const Directory& directory = it->second;
-  if (!directory.exists || (directory.names && directory.names->count(remote_basename(planned.remote)) == 0)) {
+  if (!directory.exists) {
+    return false;
+  }
+  const std::string name = remote_basename(planned.remote);
+  // NLST can omit dotfiles even though SIZE can query them. Keep the listing
+  // shortcut for ordinary names, but ask for hidden files individually.
+  const bool hidden = !name.empty() && name.front() == '.';
+  if (directory.names && !hidden && directory.names->count(name) == 0) {
     return false;
   }
   const RemoteFile remote = ftp_.stat_file(planned.remote);
