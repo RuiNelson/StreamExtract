@@ -456,6 +456,36 @@ input[type="checkbox"] {
   white-space: nowrap;
 }
 
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.archive-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.archive-row:last-child { border-bottom: 0; }
+.archive-details { flex: 1; min-width: 0; }
+.archive-name, .archive-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.archive-path { font-size: 11px; color: var(--muted); }
+.archive-status { flex: none; font-size: 12px; color: var(--muted); }
+.archive-row[data-status="running"] .archive-status { color: var(--accent-text); }
+.archive-row[data-status="success"] .archive-status { color: var(--success); }
+.archive-row[data-status="failed"] .archive-status { color: var(--danger); }
+.batch-list { margin-top: 8px; max-height: 130px; }
+
 .advanced {
   border-radius: 10px;
   border: 1px solid var(--border);
@@ -464,6 +494,7 @@ input[type="checkbox"] {
 }
 
 .advanced summary,
+.batch-progress summary,
 .problems summary {
   display: flex;
   align-items: center;
@@ -473,11 +504,13 @@ input[type="checkbox"] {
 }
 
 .advanced summary::-webkit-details-marker,
+.batch-progress summary::-webkit-details-marker,
 .problems summary::-webkit-details-marker {
   display: none;
 }
 
 .advanced summary::before,
+.batch-progress summary::before,
 .problems summary::before {
   content: "";
   flex: none;
@@ -491,6 +524,7 @@ input[type="checkbox"] {
 }
 
 .advanced[open] summary::before,
+.batch-progress[open] summary::before,
 .problems[open] summary::before {
   transform: rotate(45deg);
 }
@@ -696,6 +730,23 @@ input[type="checkbox"] {
   border-radius: 3px;
   background: var(--accent);
   transition: width 0.2s linear;
+}
+
+.block.batch-progress { padding: 0; }
+.batch-progress summary {
+  padding: 10px 12px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.batch-progress summary .bar {
+  flex: 1;
+  min-width: 40px;
+  margin: 0;
+}
+.batch-progress summary > span:not(.bar) { flex: none; }
+.batch-details {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
 }
 
 /* The file bar updates several times per second: no animation, only the archive total animates. */

@@ -32,6 +32,14 @@
     dzSub: $("dz-sub"),
     btnChoose: $("btn-choose"),
     archiveHint: $("archive-hint"),
+    archiveList: $("archive-list"),
+    batchBlock: $("batch-block"),
+    batchCount: $("batch-count"),
+    batchPercent: $("batch-percent"),
+    batchIssues: $("batch-issues"),
+    batchBar: $("batch-bar"),
+    batchStats: $("batch-stats"),
+    batchList: $("batch-list"),
     archivePassword: $("archive-password"),
     host: $("host"),
     port: $("port"),
@@ -106,7 +114,7 @@
 
   const state = {
     view: "setup",
-    archive: null, // absolute path of the chosen archive
+    archives: [], // absolute paths in batch order
     info: null, // app_info()
     memory: { saved: false, store_credentials: null },
     memoryBusy: false,
@@ -372,43 +380,68 @@
 
   function updateSubmitState() {
     const host = els.host.value.trim();
-    const hasArchive = Boolean(state.archive);
+    const hasArchive = state.archives.length > 0;
     els.btnUpload.disabled = !(hasArchive && host) || state.starting || state.preferencesBusy;
     let hint;
     if (!hasArchive && !host) hint = "Choose an archive and enter a host to continue.";
     else if (!hasArchive) hint = "Choose an archive to continue.";
     else if (!host) hint = "Enter a host to continue.";
-    else hint = `${basename(state.archive)} → ${host}`;
+    else hint = `${plural(state.archives.length, "archive")} → ${host}`;
+    els.btnChoose.disabled = state.starting;
     setText(els.submitHint, hint);
   }
 
-  function setArchive(path) {
-    state.archive = path;
-    const name = basename(path);
-    els.dropzone.dataset.state = "chosen";
-    setText(els.dzTitle, name);
-    setTitle(els.dzTitle, name);
-    setText(els.dzSub, path);
-    setTitle(els.dzSub, path);
-    els.btnChoose.textContent = "Change…";
-    const looksLikeArchive = new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(name);
-    els.archiveHint.textContent = looksLikeArchive
-      ? ""
-      : "This file does not look like a RAR, ZIP, 7z or tar archive, or an exFAT image. rarftp will still try to read it.";
-    setHidden(els.archiveHint, looksLikeArchive);
+  function renderArchiveList() {
+    const paths = state.archives;
+    const count = paths.length;
+    els.dropzone.dataset.state = count ? "chosen" : "empty";
+    setText(els.dzTitle, count ? `${plural(count, "archive")} queued` : "Drop archives here");
+    setText(els.dzSub, "For multi-volume sets, use the first volume (.part1.rar, zip.001, etc.).");
+    els.archiveList.replaceChildren(...paths.map((path, index) => {
+      const row = el("li", "archive-row");
+      const details = el("div", "archive-details selectable");
+      details.title = path;
+      details.append(el("div", "archive-name", basename(path)), el("div", "archive-path", path));
+      const remove = el("button", "btn btn-small", "Remove File");
+      remove.type = "button";
+      remove.disabled = state.starting;
+      remove.setAttribute("aria-label", `Remove ${basename(path)}`);
+      remove.addEventListener("click", () => removeArchive(index));
+      row.append(details, remove);
+      return row;
+    }));
+    setHidden(els.archiveList, count === 0);
+    const unusual = paths.some((path) => !new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(path));
+    setText(els.archiveHint, unusual
+      ? "Some files do not look like archives or exFAT images. rarftp will still try to read them." : "");
+    setHidden(els.archiveHint, !unusual);
     updateSubmitState();
+  }
+
+  function addArchives(paths) {
+    if (state.starting || state.view !== "setup") return;
+    for (const selected of paths) {
+      const path = selected && typeof selected === "object" ? selected.path : selected;
+      if (typeof path === "string" && path && !state.archives.includes(path)) state.archives.push(path);
+    }
+    renderArchiveList();
+  }
+
+  function removeArchive(index) {
+    if (state.starting || state.view !== "setup") return;
+    state.archives.splice(index, 1);
+    renderArchiveList();
+    els.btnChoose.focus({ preventScroll: true });
   }
 
   async function chooseArchive() {
     try {
       const selected = await tauri.dialog.open({
-        multiple: false,
+        multiple: true,
         directory: false,
         filters: [{ name: "Archives and exFAT images", extensions: ARCHIVE_EXTENSIONS }],
       });
-      const path = Array.isArray(selected) ? selected[0] : selected;
-      const value = path && typeof path === "object" ? path.path : path;
-      if (value) setArchive(value);
+      if (selected) addArchives(Array.isArray(selected) ? selected : [selected]);
     } catch (e) {
       toastError("Could not open the file dialog", e);
     }
@@ -445,7 +478,7 @@
     }
     const server = readServer();
     return {
-      archive: state.archive,
+      archive: state.archives[0],
       archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
       host: server.host,
       port,
@@ -490,7 +523,7 @@
             break;
           case "drop":
             setDragging(false);
-            if (payload.paths && payload.paths.length) setArchive(payload.paths[0]);
+            if (payload.paths && payload.paths.length) addArchives(payload.paths);
             break;
           default:
             break;
@@ -630,23 +663,24 @@
 
   async function startTransfer() {
     if (state.starting || state.preferencesBusy) return;
-    if (!state.archive || !els.host.value.trim()) return;
+    if (!state.archives.length || !els.host.value.trim()) return;
     const config = buildConfig();
     if (!config) return;
     if (state.completionSound) {
       prepareCompletionSound().catch((error) => console.warn("Could not prepare the completion sound", error));
     }
     state.starting = true;
-    updateSubmitState();
+    renderArchiveList();
+    const archives = [...state.archives];
     try {
-      await invoke("start_transfer", { config });
+      await invoke("start_transfer", { config, archives });
     } catch (e) {
       toastError("Could not start the upload", e);
       requestAttention("failed");
       return;
     } finally {
       state.starting = false;
-      updateSubmitState();
+      renderArchiveList();
     }
     const job = newJob(config);
     state.job = job;
@@ -665,6 +699,9 @@
     setText(els.tTarget, "");
     setText(els.tSub, `${capitalize(config.mode)} mode · ${config.user || "anonymous"}`);
 
+    setHidden(els.batchBlock, true);
+    els.batchBlock.open = false;
+    els.batchList.replaceChildren();
     setText(els.phaseText, "Reading the archive…");
     els.phaseDot.dataset.state = "";
     els.chips.replaceChildren();
@@ -809,8 +846,57 @@
     }
   }
 
+  // Each archive contributes an equal share. Archive sizes and uncompressed totals
+  // are not all known up front, especially for streamed tar archives.
+  function batchRatio(snap) {
+    const batch = snap.batch;
+    if (!batch || !batch.total) return 0;
+    const p = snap.progress;
+    const current = snap.phase === "transferring" && p
+      ? (p.totals_known ? ratio(p.sent_bytes, p.total_bytes) : ratio(p.archive_read, p.archive_size)) : 0;
+    return Math.min(1, (batch.completed + current) / batch.total);
+  }
+
+  const ARCHIVE_STATUSES = {
+    waiting: "Waiting", running: "In progress", success: "Done", failed: "Failed",
+    cancelled: "Cancelled", not_started: "Not started",
+  };
+
+  function renderBatch(job, snap) {
+    const batch = snap.batch;
+    setHidden(els.batchBlock, !batch || batch.total <= 1);
+    if (!batch || batch.total <= 1) return;
+    setText(els.batchCount, `${batch.completed}/${plural(batch.total, "archive")}`);
+    const progress = batchRatio(snap);
+    setBar(els.batchBar, progress);
+    setText(els.batchPercent, formatPercent(progress));
+    const counts = (status) => batch.items.filter((item) => item.status === status).length;
+    const stats = [`${counts("success")} done`, `${counts("failed")} failed`];
+    const failed = counts("failed");
+    setText(els.batchIssues, failed ? `${failed} failed` : "");
+    setHidden(els.batchIssues, failed === 0);
+    if (counts("cancelled")) stats.push(`${counts("cancelled")} cancelled`);
+    if (counts("not_started")) stats.push(`${counts("not_started")} not started`);
+    stats.push("Progress by archive");
+    setText(els.batchStats, stats.join(" · "));
+    setTitle(els.batchCount, `${batch.completed} of ${plural(batch.total, "archive")} processed`);
+    const key = JSON.stringify(batch.items.map((item) => [item.path, item.status]));
+    if (job.batchKey === key) return;
+    job.batchKey = key;
+    els.batchList.replaceChildren(...batch.items.map((item) => {
+      const row = el("li", "archive-row");
+      row.dataset.status = item.status;
+      const details = el("div", "archive-details selectable");
+      details.title = item.path;
+      details.append(el("div", "archive-name", basename(item.path)));
+      row.append(details, el("span", "archive-status", ARCHIVE_STATUSES[item.status] || item.status));
+      return row;
+    }));
+  }
+
   function render(job, snap, seq) {
     if (snap.progress) job.hadProgress = true;
+    renderBatch(job, snap);
     renderHeader(job, snap);
     renderPhase(job, snap);
     renderCurrent(snap);
@@ -824,7 +910,12 @@
   }
 
   function renderHeader(job, snap) {
-    setText(els.tArchive, (snap.archive && snap.archive.name) || job.archiveName);
+    const path = snap.batch?.items[snap.batch.current_index]?.path;
+    const batchFinished = snap.phase === "finished" && snap.batch?.total > 1;
+    setText(els.tArchive, batchFinished ? `Batch of ${plural(snap.batch.total, "archive")}`
+      : (snap.archive && snap.archive.name) || (path ? basename(path) : job.archiveName));
+    if (batchFinished) setTitle(els.tArchive, "");
+    else if (path) setTitle(els.tArchive, path);
     if (snap.target) {
       setText(els.tTarget, snap.target);
       setTitle(els.tTarget, snap.target);
@@ -836,7 +927,10 @@
 
   function renderPhase(job, snap) {
     let label = phaseLabel(snap);
-    const key = `${snap.phase}|${Boolean(snap.cancelling)}|${Boolean(snap.prompt)}`;
+    if (snap.batch && snap.batch.total > 1 && snap.phase !== "finished") {
+      label = `Archive ${snap.batch.current_index + 1}/${snap.batch.total} · ${label}`;
+    }
+    const key = `${snap.batch?.current_index ?? 0}|${snap.phase}|${Boolean(snap.cancelling)}|${Boolean(snap.prompt)}`;
     if (key !== job.srKey) {
       job.srKey = key;
       if (snap.phase !== "finished") announce(label);
@@ -845,7 +939,7 @@
       label += ` ${snap.probe.done}/${snap.probe.total}`;
     }
     setText(els.phaseText, label);
-    renderChips(job, snap.archive);
+    renderChips(job, snap.phase === "finished" && snap.batch?.total > 1 ? null : snap.archive);
   }
 
   function renderChips(job, archive) {
@@ -867,7 +961,14 @@
   function renderCurrent(snap) {
     const p = snap.progress;
     setHidden(els.currentBlock, snap.phase === "finished");
-    if (!p) return;
+    if (!p) {
+      setText(els.curLabel, "File");
+      setText(els.curName, "-");
+      setTitle(els.curName, "");
+      setText(els.curStats, "");
+      setBar(els.curBar, 0);
+      return;
+    }
     const t = p.text || {};
     const uploading = Boolean(p.current_file);
     const r = uploading ? ratio(p.current_sent, p.current_size) : 0;
@@ -887,7 +988,12 @@
 
   function renderTotal(job, snap) {
     const p = snap.progress;
-    if (!p) return;
+    if (!p) {
+      setBar(els.totalBar, 0);
+      setText(els.totalStats, "");
+      setText(els.totalFiles, "");
+      return;
+    }
     const t = p.text || {};
     const finished = snap.phase === "finished";
     if (!p.totals_known) {
@@ -923,7 +1029,13 @@
 
   function renderStatus(snap) {
     const p = snap.progress;
-    if (!p) return;
+    if (!p) {
+      for (const node of [els.statUploadValue, els.statUnpackValue, els.statBufferValue, els.statElapsedValue]) {
+        setText(node, "-");
+      }
+      setMeter(els.bufferMeter, 0);
+      return;
+    }
     const t = p.text || {};
     setText(els.statUploadValue, t.average_rate || "-");
     setTitle(els.statUpload, t.upload_rate ? `Current: ${t.upload_rate}` : "");
@@ -941,7 +1053,7 @@
   function renderCancel(job, snap) {
     const cancelling = Boolean(snap.cancelling) || job.cancelRequested;
     els.btnCancel.disabled = cancelling;
-    setText(els.btnCancel, cancelling ? "Cancelling…" : "Cancel");
+    setText(els.btnCancel, cancelling ? "Cancelling…" : snap.batch?.total > 1 ? "Cancel batch" : "Cancel");
   }
 
   /* --------------------------------------------------------- transfer: log */
@@ -989,6 +1101,7 @@
   function renderPrompt(job, snap, seq) {
     const prompt = snap.prompt;
     const wanted = prompt && prompt.kind === "archive_password";
+    setText(els.pwCancel, snap.batch?.total > 1 ? "Skip archive" : "Cancel");
     if (!wanted) {
       if (els.dlgPassword.open && !job.answering) els.dlgPassword.close();
       return;
@@ -1053,6 +1166,9 @@
     let progress = 0;
     if (snap.phase === "finished") {
       status = statuses.None;
+    } else if (snap.batch && snap.batch.total > 1) {
+      status = statuses.Normal;
+      progress = Math.floor(batchRatio(snap) * 100);
     } else if (snap.phase === "transferring" && p) {
       const total = p.totals_known ? p.total_bytes : p.archive_size;
       const done = p.totals_known ? p.sent_bytes : p.archive_read;
@@ -1097,19 +1213,22 @@
       problems_dropped: 0,
     };
     const status = RESULT_TITLES[res.status] ? res.status : "failed";
+    const batch = snap?.batch?.total > 1;
 
     if (els.dlgPassword.open) els.dlgPassword.close();
     els.phaseDot.dataset.state = status;
     els.totalBlock.dataset.state = status;
     setHidden(els.currentBlock, true);
     // Failed before the transfer started: there are no numbers worth showing.
-    setHidden(els.totalBlock, !job.hadProgress);
-    setHidden(els.statusRow, !job.hadProgress);
+    setHidden(els.totalBlock, batch || !job.hadProgress);
+    setHidden(els.statusRow, batch || !job.hadProgress);
     setText(els.phaseText, "Finished");
     if (snap) renderTotal(job, snap); // final numbers, without the ETA
 
     els.resultBanner.dataset.status = status;
-    setText(els.resultTitle, RESULT_TITLES[status]);
+    setText(els.resultTitle, batch
+      ? ({ success: "Batch complete", failed: "Batch finished with errors", cancelled: "Batch cancelled" })[status]
+      : RESULT_TITLES[status]);
     const showError = status !== "success" && Boolean(res.error);
     setText(els.resultError, showError ? res.error : "");
     setHidden(els.resultError, !showError);
@@ -1170,7 +1289,7 @@
   async function quitNow(win) {
     state.quitting = true;
     els.app.inert = true;
-    toast("Cancelling the upload…");
+    toast("Cancelling the batch…");
     const job = state.job;
     try {
       if (job && !job.finished) {

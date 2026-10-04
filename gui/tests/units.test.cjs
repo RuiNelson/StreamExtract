@@ -3,7 +3,7 @@ const { readFileSync } = require("node:fs");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completion_sound: true }), windowApi = {}) {
+function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completion_sound: true }), windowApi = {}, tauriApi = {}) {
   const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "si" }));
   const sounds = [];
   class AudioContext {
@@ -17,12 +17,15 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   function node(id) {
     if (!nodes.has(id)) nodes.set(id, {
       value: "", textContent: "", title: "", style: {}, dataset: {}, children: [], firstElementChild: { style: {} },
-      setAttribute() {}, removeAttribute() {}, append() {}, replaceChildren() {}, remove() {}, focus() {},
+      classList: { toggle() {} },
+      setAttribute() {}, removeAttribute() {},
+      append(...children) { this.children.push(...children); },
+      replaceChildren(...children) { this.children = children; }, remove() {}, focus() {},
     });
     return nodes.get(id);
   }
   const context = vm.createContext({
-    window: { __TAURI__: { core: { invoke }, window: windowApi }, AudioContext },
+    window: { __TAURI__: { core: { invoke }, window: windowApi, ...tauriApi }, AudioContext },
     fetch: async (path) => {
       assert.equal(path, "assets/audio/completed.mp3");
       return { ok: true, arrayBuffer: async () => new ArrayBuffer(1) };
@@ -32,16 +35,19 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
       getElementById: node,
       querySelectorAll: (selector) => selector.includes('"units"') ? inputs : [],
       createElement: () => ({
-        dataset: {}, children: [], addEventListener() {},
+        dataset: {}, children: [], attributes: {}, events: {},
+        setAttribute(key, value) { this.attributes[key] = value; },
+        addEventListener(type, listener) { this.events[type] = listener; },
         append(...children) { this.children.push(...children); }, remove() {},
       }),
+      createDocumentFragment: () => ({ append() {} }),
       createTextNode: (text) => ({ textContent: text }),
     },
     setTimeout: () => 0,
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -267,8 +273,138 @@ test("log messages retain file names and the engine's selected units verbatim", 
 test("the selected units are sent to the engine when a transfer starts", () => {
   const app = frontend();
   app.node("port").value = "21";
-  app.state.archive = "/tmp/archive.zip";
+  app.state.archives = ["/tmp/archive.zip"];
   assert.equal(app.buildConfig().units, "si");
   app.state.units = "binary";
   assert.equal(app.buildConfig().units, "binary");
+});
+
+test("Add File appends multiple selections, ignores duplicates, and Remove File empties the queue", async () => {
+  const options = [];
+  const app = frontend(undefined, {}, { dialog: { open: async (value) => {
+    options.push(value);
+    return ["/tmp/first.zip", { path: "/tmp/second.7z" }, "/tmp/first.zip"];
+  } } });
+  app.node("host").value = "ftp.example.com";
+  await app.chooseArchive();
+  assert.equal(options[0].multiple, true);
+  assert.deepEqual(Array.from(app.state.archives), ["/tmp/first.zip", "/tmp/second.7z"]);
+  assert.equal(app.node("archive-list").children.length, 2);
+  assert.equal(app.node("btn-upload").disabled, false);
+  // Exercise the row button's actual handler.
+  app.node("archive-list").children[0].children[1].events.click();
+  assert.deepEqual(Array.from(app.state.archives), ["/tmp/second.7z"]);
+  app.removeArchive(0);
+  assert.equal(app.node("archive-list").hidden, true);
+  assert.equal(app.node("btn-upload").disabled, true);
+});
+
+test("dropping multiple archives appends to the queue and cannot change a running batch", async () => {
+  let drop;
+  const app = frontend(undefined, {}, { webview: { getCurrentWebview: () => ({
+    onDragDropEvent: async (callback) => { drop = callback; },
+  }) } });
+  app.addArchives(["/tmp/first.rar"]);
+  await app.initDragDrop();
+  drop({ payload: { type: "drop", paths: ["/tmp/second.zip", "/tmp/third.tar.gz"] } });
+  assert.equal(app.state.archives.length, 3);
+  app.state.starting = true;
+  app.addArchives(["/tmp/ignored.zip"]);
+  app.removeArchive(0);
+  assert.equal(app.state.archives.length, 3);
+  app.state.starting = false;
+  app.state.view = "transfer";
+  drop({ payload: { type: "drop", paths: ["/tmp/ignored.zip"] } });
+  assert.equal(app.state.archives.length, 3);
+});
+
+test("starting a batch sends every archive with one shared configuration", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "poll_transfer") return new Promise(() => {});
+  }, {
+    ProgressBarStatus: { Indeterminate: "indeterminate" },
+    getCurrentWindow: () => ({ setProgressBar: async () => {}, requestUserAttention: async () => {} }),
+  });
+  app.node("port").value = "21";
+  app.node("host").value = "ftp.example.com";
+  app.node("directory").value = "/shared";
+  app.addArchives(["/tmp/first.zip", "/tmp/second.7z"]);
+  await app.startTransfer();
+  const start = calls.find((call) => call.command === "start_transfer");
+  assert.deepEqual(Array.from(start.args.archives), ["/tmp/first.zip", "/tmp/second.7z"]);
+  assert.equal(start.args.config.archive, "/tmp/first.zip");
+  assert.equal(start.args.config.host, "ftp.example.com");
+  assert.equal(start.args.config.directory, "/shared");
+  assert.equal(app.state.view, "transfer");
+});
+
+test("batch progress includes completed archives and streamed progress, and exposes each outcome", async () => {
+  const calls = [];
+  const app = frontend(undefined, {
+    ProgressBarStatus: { Normal: "normal" },
+    getCurrentWindow: () => ({ setProgressBar: async (value) => calls.push({ ...value }) }),
+  });
+  const snap = { phase: "transferring", progress: {
+    totals_known: false, archive_read: 50, archive_size: 100,
+  }, batch: { total: 4, completed: 2, current_index: 2, items: [
+    { path: "/tmp/first.zip", status: "success" },
+    { path: "/tmp/second.rar", status: "failed" },
+    { path: "/tmp/third.tar.gz", status: "running" },
+    { path: "/tmp/fourth.7z", status: "waiting" },
+  ] } };
+  app.renderBatch({}, snap);
+  assert.equal(app.batchRatio(snap), 0.625);
+  assert.equal(app.node("batch-bar").firstElementChild.style.width, "62.5%");
+  assert.equal(app.node("batch-count").textContent, "2/4 archives");
+  assert.equal(app.node("batch-percent").textContent, "62.5%");
+  assert.equal(app.node("batch-issues").textContent, "1 failed");
+  assert.match(app.node("batch-stats").textContent, /1 done · 1 failed/);
+  assert.deepEqual(app.node("batch-list").children.map((row) => row.children[1].textContent),
+    ["Done", "Failed", "In progress", "Waiting"]);
+  app.updateWindowProgress(snap);
+  await app.flushWindowProgress();
+  assert.deepEqual(calls, [{ status: "normal", progress: 62 }]);
+  snap.phase = "finished";
+  snap.batch.items[2].status = "cancelled";
+  snap.batch.items[3].status = "not_started";
+  snap.batch.completed = 3;
+  app.renderBatch({}, snap);
+  assert.equal(app.batchRatio(snap), 0.75);
+  assert.match(app.node("batch-stats").textContent, /1 cancelled · 1 not started/);
+});
+
+test("intermediate archive failure does not notify, and final batch failure notifies once", async () => {
+  const attention = [];
+  const app = frontend(undefined, {
+    ProgressBarStatus: { Normal: "normal", None: "none" },
+    UserAttentionType: { Critical: 1 },
+    getCurrentWindow: () => ({
+      setProgressBar: async () => {}, requestUserAttention: async (type) => attention.push(type),
+    }),
+  });
+  const job = { finished: false };
+  const snap = { phase: "reading", progress: null, batch: {
+    total: 2, completed: 1, current_index: 1, items: [
+      { path: "/tmp/first.zip", status: "failed" }, { path: "/tmp/second.zip", status: "running" },
+    ],
+  } };
+  app.render(job, snap, 1);
+  assert.equal(job.finished, false);
+  assert.equal(attention.length, 0);
+  assert.match(app.node("phase-text").textContent, /Archive 2\/2/);
+  assert.equal(app.node("t-archive").textContent, "second.zip");
+  snap.phase = "finished";
+  snap.result = { status: "failed", error: "1 archive failed" };
+  snap.batch.completed = 2;
+  snap.batch.items[1].status = "success";
+  app.render(job, snap, 2);
+  app.render(job, snap, 3);
+  await app.flushWindowProgress();
+  assert.equal(app.node("result-title").textContent, "Batch finished with errors");
+  assert.equal(app.node("t-archive").textContent, "Batch of 2 archives");
+  assert.equal(app.node("total-block").hidden, true);
+  assert.deepEqual(attention, [1]);
+  assert.equal(app.sounds.length, 0);
 });

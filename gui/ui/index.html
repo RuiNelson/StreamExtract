@@ -17,15 +17,16 @@
         <header class="app-header">
           <h1>rarftp</h1>
           <span id="app-version" class="version muted"></span>
-          <p class="tagline muted">Stream an archive to an FTP server without unpacking it to disk.</p>
+          <p class="tagline muted">Stream archives to an FTP server without unpacking them to disk.</p>
         </header>
 
         <!-- Archive -->
         <section class="card" aria-labelledby="archive-title">
           <div class="card-head">
-            <h2 id="archive-title">Archive</h2>
+            <h2 id="archive-title">Files to upload</h2>
           </div>
 
+          <ul id="archive-list" class="archive-list" aria-label="Files to upload" hidden></ul>
           <div id="dropzone" class="dropzone" data-state="empty">
             <svg class="dz-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -34,17 +35,18 @@
               <path d="M10 11h2M10 14h2M10 17h2"/>
             </svg>
             <div class="dz-text">
-              <div id="dz-title" class="dz-title selectable">Drop an archive here</div>
+              <div id="dz-title" class="dz-title selectable">Drop archives here</div>
               <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume (.part1.rar, zip.001, etc.).</div>
             </div>
-            <button type="button" id="btn-choose" class="btn">Choose…</button>
+            <button type="button" id="btn-choose" class="btn">Add File</button>
           </div>
+          <p class="hint muted">Files run in order using the same server and directory. The batch continues if a file fails.</p>
           <p id="archive-hint" class="hint warn-text" role="status" hidden></p>
 
           <div class="field">
             <label for="archive-password">Archive password</label>
             <input id="archive-password" type="password" autocomplete="new-password" autocapitalize="off"
-                   spellcheck="false" placeholder="Only if the archive is encrypted">
+                   spellcheck="false" placeholder="Used for all encrypted archives; leave blank to ask for each">
             <label class="check">
               <input type="checkbox" id="archive-password-visible">
               <span>Show passwords</span>
@@ -173,6 +175,21 @@
         <ul id="chips" class="chips" aria-label="Archive details"></ul>
       </div>
 
+      <details id="batch-block" class="block batch-progress" hidden>
+        <summary aria-label="Batch progress and archive statuses">
+          <span class="block-label">Batch</span>
+          <span id="batch-count" class="muted"></span>
+          <span id="batch-bar" class="bar" role="progressbar" aria-label="Batch progress by archive"
+                aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></span>
+          <span id="batch-percent" class="muted"></span>
+          <span id="batch-issues" class="error-text" hidden></span>
+        </summary>
+        <div class="batch-details">
+          <p id="batch-stats" class="block-stats muted"></p>
+          <ul id="batch-list" class="archive-list batch-list" aria-label="Archive statuses"></ul>
+        </div>
+      </details>
+
       <section class="log-panel" aria-label="Log">
         <div id="log" class="log selectable" role="log" aria-live="off" tabindex="0"></div>
         <button type="button" id="btn-latest" class="btn btn-small latest" hidden>Latest ↓</button>
@@ -286,8 +303,8 @@
 
   <dialog id="dlg-quit" class="dialog" aria-labelledby="dlg-quit-title">
     <form method="dialog">
-      <h2 id="dlg-quit-title">Cancel the upload and quit?</h2>
-      <p>The incomplete file on the server will be deleted.</p>
+      <h2 id="dlg-quit-title">Cancel the batch and quit?</h2>
+      <p>The incomplete file on the server will be deleted. Remaining archives will not be started.</p>
       <div class="dialog-actions">
         <button type="submit" value="quit" class="btn">Cancel and quit</button>
         <button type="submit" value="keep" class="btn btn-primary" autofocus>Keep uploading</button>
