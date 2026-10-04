@@ -112,9 +112,9 @@ The builds are portable: there is no installer.
 
 ```bash
 sext --file archive.rar \
-       --host ftp.example.com --port 21 --mode passive \
-       --user username --password "password" \
-       --directory "/destination/dir" --mkdir
+     --host ftp.example.com --port 21 --mode passive \
+     --user username --password "password" \
+     --directory "/destination/dir" --mkdir
 ```
 
 The input can be a RAR, ZIP, 7z or tar archive (also compressed, such as
