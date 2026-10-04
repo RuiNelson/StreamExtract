@@ -225,6 +225,16 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
 
+      - name: Cache Cargo source downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+            ~/.cargo/git/db
+          key: cargo-source-v1-${{ runner.os }}-${{ env.TAURI_CLI_VERSION }}-${{ hashFiles('gui/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-source-v1-${{ runner.os }}-${{ env.TAURI_CLI_VERSION }}-
+
       - name: Cache tauri-cli
         id: tauri-cli-cache
         uses: actions/cache@v4
