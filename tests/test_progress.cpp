@@ -73,3 +73,21 @@ TEST_CASE("resumed file progress includes the prefix but upload totals exclude i
   CHECK(progress.snapshot().sent_bytes == 250);
   CHECK(progress.snapshot().files_done == 2);
 }
+
+TEST_CASE("retries count retained bytes once and add an original prefix if the server loses it") {
+  Progress progress;
+  progress.set_totals(1, 50, 0, 0);
+  progress.begin_file(1, "partial.bin", 100, 50);
+  progress.file_progress(80);
+  progress.retry_file(75);  // Some buffered bytes never reached the server.
+  CHECK(progress.snapshot().sent_bytes == 25);
+  CHECK(progress.snapshot().total_bytes == 50);
+  progress.retry_file(20);  // The server also lost 30 bytes of the original prefix.
+  CHECK(progress.snapshot().sent_bytes == 0);
+  CHECK(progress.snapshot().total_bytes == 80);
+  progress.file_progress(100);
+  CHECK(progress.snapshot().sent_bytes == 80);
+  progress.end_file();
+  CHECK(progress.snapshot().sent_bytes == 80);
+  CHECK(progress.snapshot().files_done == 1);
+}

@@ -7,6 +7,7 @@ python3 tests/integration/ftp_faults.py --rarftp build/rarftp --lib build/librar
 import argparse
 import io
 import posixpath
+import re
 import socket
 import socketserver
 import subprocess
@@ -17,6 +18,7 @@ import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from run import Library, LibJob, lib_log_text
 
@@ -41,6 +43,13 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 if command == "USER":
                     reply("331 Password required")
                 elif command == "PASS":
+                    self.server.login_attempts += 1
+                    if self.server.stall_login_retry and self.server.login_attempts > 1:
+                        self.server.pause()
+                    if self.server.fail_logins > 0:
+                        self.server.fail_logins -= 1
+                        reply("530 Login temporarily unavailable")
+                        return
                     reply("230 Logged in")
                 elif command == "PWD":
                     reply('257 "/"')
@@ -54,6 +63,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     cwd = path(arg)
                     reply("250 Directory changed")
                 elif command == "SIZE":
+                    if self.server.stall_retry_size and self.server.failed_uploads:
+                        self.server.pause()
                     contents = self.server.files.get(path(arg))
                     reply(f"213 {len(contents)}" if contents is not None else "550 File not found")
                 elif command == "MDTM":
@@ -75,12 +86,16 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     passive = None
                     reply("226 Listing complete")
                 elif command in ("STOR", "APPE"):
+                    target = path(arg)
+                    fail_upload = (self.server.fail_uploads > 0 and
+                                   (self.server.fail_target is None or target == self.server.fail_target))
+                    if fail_upload:
+                        self.server.fail_uploads -= 1
                     with passive.accept()[0] as data:
                         data.settimeout(10)
                         if self.server.reject_upload:
                             reply("550 Overwrite refused")
                         else:
-                            target = path(arg)
                             if command == "STOR":
                                 self.server.files[target] = b""
                             else:
@@ -88,7 +103,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                             payload = bytearray()
                             reply("150 Upload accepted")
                             while True:
-                                chunk = data.recv(65536)
+                                limit = min(65536, self.server.drop_after - len(payload)) if fail_upload else 65536
+                                chunk = data.recv(limit)
                                 if not chunk:
                                     break
                                 payload.extend(chunk)
@@ -96,9 +112,17 @@ class FtpHandler(socketserver.StreamRequestHandler):
                                     # Cleanup can unlink the upload while queued data is still arriving.
                                     if target in self.server.files:
                                         self.server.files[target] += chunk
+                                if fail_upload and len(payload) >= self.server.drop_after:
+                                    break
                             self.server.uploads.append((command, target, bytes(payload)))
                     passive.close()
                     passive = None
+                    if fail_upload and not self.server.reject_upload:
+                        self.server.failed_uploads += 1
+                        if self.server.after_failure:
+                            self.server.after_failure(self.server, target)
+                        reply("426 Data connection interrupted")
+                        return  # Drop the control connection too; retry must reconnect.
                     if not self.server.reject_upload:
                         if self.server.stall_confirmation:
                             self.server.pause()
@@ -128,7 +152,9 @@ class FtpServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(self, *, files=None, reject_upload=False, reject_delete=False, stall_directory=None,
-                 stall_listing=False, stall_confirmation=False):
+                 stall_listing=False, stall_confirmation=False, fail_uploads=0, drop_after=65539,
+                 fail_target=None, stall_retry_size=False, after_failure=None, fail_logins=0,
+                 stall_login_retry=False):
         super().__init__(("127.0.0.1", 0), FtpHandler)
         self.files = dict(files or {})
         self.files_lock = threading.Lock()
@@ -140,6 +166,15 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.stall_directory = stall_directory
         self.stall_listing = stall_listing
         self.stall_confirmation = stall_confirmation
+        self.fail_uploads = fail_uploads
+        self.failed_uploads = 0
+        self.drop_after = drop_after
+        self.fail_target = fail_target
+        self.stall_retry_size = stall_retry_size
+        self.after_failure = after_failure
+        self.fail_logins = fail_logins
+        self.login_attempts = 0
+        self.stall_login_retry = stall_login_retry
         self.stalled = threading.Event()
         self.release = threading.Event()
         self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -186,9 +221,9 @@ class FtpFaultTests(unittest.TestCase):
                                          b"" if data is None else data)
         return str(archive)
 
-    def job(self, archive, server):
+    def job(self, archive, server, retries=None, **options):
         return LibJob(self.lib, {"archive": archive, "host": "127.0.0.1", "port": server.server_address[1],
-                                 "directory": "/upload", "buffer_mib": 1})
+                                 "directory": "/upload", "buffer_mib": 1, **options}, retries=retries)
 
     def assert_cancelled(self, job, server):
         try:
@@ -219,6 +254,250 @@ class FtpFaultTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertEqual(server.files.get("/upload/hello.txt"), original)
                 self.assertEqual(server.deleted, [])
+                attempts = [command for command, _ in server.commands if command in ("STOR", "APPE")]
+                self.assertEqual(attempts, ["APPE"] * 3)
+
+    def cli(self, archive, server, *options):
+        return subprocess.run([ARGS.rarftp, "--file", archive, "--host", "127.0.0.1",
+                               "--port", str(server.server_address[1]), "--directory", "/upload",
+                               "--no-tui", "--buffer", "1", *options],
+                              capture_output=True, text=True, timeout=15)
+
+    def test_upload_failures_resume_immediately_and_continue_in_archive_order(self):
+        source = bytes(range(251)) * 12000  # Larger than both the pipe and curl buffers.
+        entries = [("before.txt", b"before"), ("nested/", None), ("nested/blocks.bin", source),
+                   ("nested/blocks.bin", source + b"tail"), ("after.txt", b"after")]
+        for streamed in (False, True):
+            archive = self.archive(entries, streamed=streamed)
+            for frontend in ("library", "cli"):
+                with self.subTest(streamed=streamed, frontend=frontend):
+                    prefix = source[:19]
+                    with FtpServer(files={"/upload/nested/blocks.bin": prefix}, fail_uploads=2,
+                                   fail_target="/upload/nested/blocks.bin") as server:
+                        if frontend == "library":
+                            with self.job(archive, server) as job:
+                                job.wait(timeout=15)
+                                self.assertEqual(job.result["status"], "success", job.describe())
+                                self.assertEqual(job.result["files_uploaded"], 4)
+                                expected_bytes = len(source) - len(prefix) + 4 + 6 + 5
+                                self.assertEqual(job.result["bytes_uploaded"], expected_bytes)
+                                self.assertEqual(job.state["progress"]["total_bytes"], expected_bytes)
+                                self.assertEqual(job.state["progress"]["sent_bytes"], expected_bytes)
+                                output = lib_log_text(job)
+                        else:
+                            result = self.cli(archive, server)
+                            output = result.stdout + result.stderr
+                            self.assertEqual(result.returncode, 0, output)
+                        self.assertIn("attempt 2/3", output)
+                        self.assertIn("attempt 3/3", output)
+                        self.assertEqual(server.files["/upload/nested/blocks.bin"], source + b"tail")
+                        self.assertEqual(server.files["/upload/after.txt"], b"after")
+                        self.assertEqual(server.deleted, [])
+                        uploads = [(command, data) for command, name, data in server.uploads
+                                   if name == "/upload/nested/blocks.bin"]
+                        self.assertEqual(uploads, [("APPE", source[19:19 + 65539]),
+                                                   ("APPE", source[19 + 65539:19 + 2 * 65539]),
+                                                   ("APPE", source[19 + 2 * 65539:]), ("APPE", b"tail")])
+
+    def test_exhausted_attempts_remove_partial_and_stop_before_the_next_file(self):
+        source = bytes(range(251)) * 12000
+        for streamed in (False, True):
+            archive = self.archive([("blocks.bin", source), ("after.txt", b"after")], streamed=streamed)
+            with self.subTest(streamed=streamed), FtpServer(fail_uploads=3) as server:
+                with self.job(archive, server) as job:
+                    job.wait(timeout=15)
+                    self.assertEqual(job.result["status"], "failed", job.describe())
+                    self.assertIn("after 3 attempt(s)", job.result["error"])
+                    self.assertEqual(job.result["files_uploaded"], 0)
+                self.assertNotIn("/upload/blocks.bin", server.files)
+                self.assertNotIn("/upload/after.txt", server.files)
+                self.assertEqual(server.deleted, ["/upload/blocks.bin"])
+                self.assertEqual([command for command, _, _ in server.uploads], ["STOR", "APPE", "APPE"])
+
+    def test_cli_retries_sets_total_attempts_and_one_disables_retries(self):
+        archive = self.archive([("hello.txt", b"hello")])
+        for attempts in (1, 2, 4):
+            with self.subTest(attempts=attempts), FtpServer(reject_upload=True) as server:
+                result = self.cli(archive, server, "--retries", str(attempts))
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"after {attempts} attempt(s)", result.stdout + result.stderr)
+                self.assertEqual(sum(command == "STOR" for command, _ in server.commands), attempts)
+        for value in ("0", "-1", "1.5", "oops", "4294967296"):
+            with self.subTest(value=value), FtpServer() as server:
+                result = self.cli(archive, server, "--retries", value)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertFalse(server.commands)
+
+    def test_gui_attempt_setting_reaches_the_engine(self):
+        archive = self.archive([("hello.txt", b"hello\n")])
+        for attempts, expected in ((0, 3), (1, 1), (2, 2), (4, 4)):
+            with self.subTest(attempts=attempts), FtpServer(reject_upload=True) as server:
+                with self.job(archive, server, retries=attempts) as job:
+                    job.wait(timeout=15)
+                    self.assertEqual(job.result["status"], "failed", job.describe())
+                    self.assertIn(f"after {expected} attempt(s)", job.result["error"])
+                self.assertEqual(sum(command == "STOR" for command, _ in server.commands), expected)
+
+        with FtpServer(fail_uploads=3, drop_after=1) as server:
+            with self.job(archive, server, retries=4) as job:
+                job.wait(timeout=15)
+                self.assertEqual(job.result["status"], "success", job.describe())
+                self.assertIn("attempt 4/4", lib_log_text(job))
+            self.assertEqual(server.files["/upload/hello.txt"], b"hello\n")
+
+    def test_refused_initial_connection_uses_the_configured_attempt_count(self):
+        archive = self.archive([("hello.txt", b"hello\n")])
+        for frontend in ("library", "cli"):
+            for attempts in (None, 1, 4):
+                with self.subTest(frontend=frontend, attempts=attempts), socket.socket() as refused:
+                    # Close an unused local port so every connect is refused.
+                    # A bound but non-listening socket can drop SYNs on macOS.
+                    refused.bind(("127.0.0.1", 0))
+                    server = SimpleNamespace(server_address=refused.getsockname())
+                    refused.close()
+                    expected = 3 if attempts is None else attempts
+                    if frontend == "library":
+                        with self.job(archive, server, retries=attempts, verbose=1) as job:
+                            job.wait(timeout=15)
+                            self.assertEqual(job.result["status"], "failed", job.describe())
+                            self.assertIn(f"after {expected} attempt(s)", job.result["error"])
+                            self.assertIsNone(job.state["progress"])
+                            output = lib_log_text(job)
+                    else:
+                        options = [] if attempts is None else ["--retries", str(attempts)]
+                        result = self.cli(archive, server, "--verbose", *options)
+                        output = result.stdout + result.stderr
+                        self.assertEqual(result.returncode, 1, output)
+                        self.assertIn(f"after {expected} attempt(s)", output)
+                    # curl reports each real TCP connection attempt, including the first.
+                    self.assertEqual(output.count("Trying 127.0.0.1:"), expected, output)
+
+    def test_initial_login_retries_can_recover_or_exhaust_the_limit(self):
+        archive = self.archive([("hello.txt", b"hello\n")])
+        for frontend in ("library", "cli"):
+            for failures in (2, 3):
+                with self.subTest(frontend=frontend, failures=failures), FtpServer(fail_logins=failures) as server:
+                    if frontend == "library":
+                        with self.job(archive, server) as job:
+                            job.wait(timeout=15)
+                            self.assertEqual(job.result["status"], "success" if failures == 2 else "failed",
+                                             job.describe())
+                            output = lib_log_text(job)
+                    else:
+                        result = self.cli(archive, server)
+                        output = result.stdout + result.stderr
+                        self.assertEqual(result.returncode, 0 if failures == 2 else 1, output)
+                    self.assertEqual(server.login_attempts, 3)
+                    self.assertIn("Retrying connection to", output)
+                    self.assertIn("attempt 3/3", output)
+                    self.assertEqual(server.files.get("/upload/hello.txt"), b"hello\n" if failures == 2 else None)
+
+    def test_connection_retries_do_not_consume_the_file_upload_attempts(self):
+        archive = self.archive([("hello.txt", b"hello\n")])
+        with FtpServer(fail_logins=2, fail_uploads=2, drop_after=1) as server, self.job(archive, server) as job:
+            job.wait(timeout=15)
+            self.assertEqual(job.result["status"], "success", job.describe())
+            self.assertIn("Retrying connection to", lib_log_text(job))
+            self.assertIn("Retrying hello.txt at byte 2 (attempt 3/3)", lib_log_text(job))
+            self.assertEqual(server.files["/upload/hello.txt"], b"hello\n")
+
+    def test_cancellation_during_login_retry_prevents_another_attempt(self):
+        archive = self.archive([("hello.txt", b"hello\n")])
+        with FtpServer(fail_logins=1, stall_login_retry=True) as server, self.job(archive, server) as job:
+            try:
+                self.assertTrue(server.stalled.wait(5), job.describe())
+                self.assertEqual(job.poll()["phase"], "connecting")
+                job.cancel()
+                job.wait(timeout=5)
+                self.assertEqual(job.result["status"], "cancelled", job.describe())
+                self.assertEqual(server.login_attempts, 2)
+                self.assertNotIn("attempt 3/3", lib_log_text(job))
+                self.assertEqual(server.uploads, [])
+            finally:
+                server.release.set()
+
+    def test_cancellation_interrupts_size_check_before_retry_and_removes_partial(self):
+        archive = self.archive([("blocks.bin", bytes(range(251)) * 12000)])
+        with FtpServer(fail_uploads=1, stall_retry_size=True) as server, self.job(archive, server) as job:
+            self.assert_cancelled(job, server)
+            self.assertEqual(server.deleted, ["/upload/blocks.bin"])
+            self.assertEqual(sum(command in ("STOR", "APPE") for command, _ in server.commands), 1)
+
+    def test_rereading_rar_solid_7z_and_encrypted_archives(self):
+        fixtures = (Path(__file__).parents[1] / "archive_fixtures.hpp").read_text()
+        for fixture, target, expected, password in (
+                ("kTinyRar", "hello.txt", b"hello\n", None),
+                ("kSolid7z", "b.txt", b"second\n", None),
+                ("kAesNonSolid7z", "b.txt", b"second\n", "secret"),
+                ("kAesHeaders7z", "hello.txt", b"hello\n", "secret"),
+                ("kAesZip", "hello.txt", b"hello\n", "secret")):
+            with self.subTest(fixture=fixture):
+                # Reuse real archives already checked by the C++ tests.
+                match = re.search(rf"{fixture}\[\] = \{{(.*?)\}};", fixtures, re.DOTALL)
+                self.assertIsNotNone(match)
+                archive = Path(self.temp.name) / fixture
+                archive.write_bytes(bytes(int(value, 16) for value in re.findall(r"0x[0-9a-f]+", match[1])))
+                with FtpServer(fail_uploads=2, drop_after=2, fail_target="/upload/" + target) as server:
+                    with self.job(str(archive), server, archive_password=password) as job:
+                        job.wait(timeout=15)
+                        self.assertEqual(job.result["status"], "success", job.describe())
+                        self.assertIn("attempt 3/3", lib_log_text(job))
+                    self.assertEqual(server.files["/upload/" + target], expected)
+                    self.assertEqual(server.deleted, [])
+                    if target == "b.txt":
+                        self.assertEqual(server.files["/upload/a.txt"], b"first\n")
+
+    def test_rereading_a_real_exfat_volume(self):
+        with zipfile.ZipFile(Path(__file__).parents[1] / "fixtures" / "exfat.zip") as fixtures:
+            archive = Path(self.temp.name) / "volume.exfat"
+            archive.write_bytes(fixtures.read("volume.exfat"))
+        with FtpServer(fail_uploads=2, drop_after=2, fail_target="/upload/hello.txt") as server:
+            with self.job(str(archive), server) as job:
+                job.wait(timeout=15)
+                self.assertEqual(job.result["status"], "success", job.describe())
+                self.assertIn("attempt 3/3", lib_log_text(job))
+            self.assertEqual(server.files["/upload/hello.txt"], b"hello\n")
+            self.assertEqual(server.deleted, [])
+
+    def test_retry_handles_a_lost_original_prefix_without_invalid_progress(self):
+        source = bytes(range(251)) * 12000
+        for streamed in (False, True):
+            archive = self.archive([("blocks.bin", source)], streamed=streamed)
+            with self.subTest(streamed=streamed), FtpServer(
+                    files={"/upload/blocks.bin": source[:19]}, fail_uploads=1,
+                    after_failure=lambda server, target: server.files.pop(target)) as server:
+                with self.job(archive, server) as job:
+                    def check_progress(current_job, state):
+                        progress = state["progress"]
+                        if progress is not None:
+                            self.assertLessEqual(progress["sent_bytes"], progress["total_bytes"],
+                                                 current_job.describe())
+                    job.wait(timeout=15, on_state=check_progress)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                    self.assertEqual(job.result["bytes_uploaded"], len(source))
+                    self.assertEqual(job.state["progress"]["sent_bytes"], len(source))
+                    self.assertEqual(job.state["progress"]["total_bytes"], len(source))
+                self.assertEqual(server.files["/upload/blocks.bin"], source)
+                self.assertEqual([command for command, _, _ in server.uploads], ["APPE", "STOR"])
+
+    def test_checksum_failure_during_rereading_stops_without_another_retry(self):
+        archive = Path(self.archive([("hello.txt", b"hello\n")]))
+
+        def corrupt_archive(server, target):
+            damaged = bytearray(archive.read_bytes())
+            offset = 30 + int.from_bytes(damaged[26:28], "little") + int.from_bytes(damaged[28:30], "little")
+            damaged[offset] ^= 1
+            archive.write_bytes(damaged)
+
+        with FtpServer(fail_uploads=1, drop_after=2, after_failure=corrupt_archive) as server:
+            with self.job(str(archive), server) as job:
+                job.wait(timeout=15)
+                self.assertEqual(job.result["status"], "failed", job.describe())
+                self.assertIn("checksum", job.result["error"].lower())
+                self.assertEqual(job.result["files_uploaded"], 0)
+                self.assertNotIn("attempt 3/3", lib_log_text(job))
+            self.assertNotIn("/upload/hello.txt", server.files)
+            self.assertEqual(server.deleted, ["/upload/hello.txt"])
 
     def test_cancellation_interrupts_directory_creation_and_streamed_probe(self):
         for streamed, entries in ((False, [("stall", None)]), (True, [("stall", None)]),

@@ -321,6 +321,7 @@ mod tests {
             mkdir: false,
             verbose: false,
             buffer_mib: 1,
+            retries: 3,
             units: Units::Si,
         }
     }

@@ -55,6 +55,11 @@ ParsedOptions parse_options(int argc, char** argv) {
   CLI::Option* rar_password_option = app.add_option("--rar-password", archive_password)->group("");
   app.add_flag("--no-tui", o.no_tui, "Plain log output instead of the full-screen interface");
   app.add_flag("--verbose", o.verbose, "Log every FTP command and reply");
+  app.add_option("--retries", o.retries,
+                 "Total attempts for connection/login and each file upload, including the first; 1 disables retries")
+      ->check(CLI::PositiveNumber.description(""))
+      ->capture_default_str()
+      ->type_name("N");
   app.add_option("--buffer", o.buffer_mib, "Memory buffer between decompression and upload, in MiB")
       ->check(CLI::Range(1, 4096).description(""))
       ->capture_default_str()

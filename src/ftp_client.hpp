@@ -68,8 +68,10 @@ class FtpClient {
   // Not set by default, and not thread-safe: set it while no request runs.
   void set_cancel_check(std::function<bool()> check);
 
-  // Logs in and returns the login directory reported by PWD.
-  std::string connect();
+  // Logs in and returns the login directory reported by PWD. Connection/login
+  // failures get up to `attempts` total attempts, immediately; cancellation
+  // stops without retrying. This limit is separate from each file's uploads.
+  std::string connect(unsigned attempts = 1);
 
   bool directory_exists(const std::string& dir);
   // One MKD, not recursive.

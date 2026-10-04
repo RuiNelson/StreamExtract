@@ -120,7 +120,7 @@ int run(const Options& options) {
   try {
     log.info("Connecting to {}:{} ({} mode)", options.host, options.port,
              options.mode == FtpMode::Active ? "active" : "passive");
-    const std::string home = normalize_remote_path(ftp.connect());
+    const std::string home = normalize_remote_path(ftp.connect(options.retries));
     log.info("Logged in as {}", options.user ? *options.user : "anonymous");
     if (!options.directory) {
       target = home;
@@ -181,7 +181,7 @@ int run(const Options& options) {
 
   // 4. Transfer.
   Progress progress;
-  Transfer transfer(plan, ftp, passwords, log, progress, options.buffer_mib << 20);
+  Transfer transfer(plan, ftp, passwords, log, progress, options.buffer_mib << 20, options.retries);
   install_interrupt_handler();
   if (use_tui) {
     log.set_sink(nullptr);  // The dashboard shows the log.

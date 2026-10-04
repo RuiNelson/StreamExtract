@@ -31,6 +31,7 @@ struct JobConfig {
   bool mkdir = false;
   bool verbose = false;
   unsigned buffer_mib = 0;  // 0: the default.
+  unsigned retries = 3;  // Total connection/login and per-file upload attempts, including the first.
   ByteUnits units = ByteUnits::Binary;
 };
 

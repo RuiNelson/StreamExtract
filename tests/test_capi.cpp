@@ -124,6 +124,7 @@ TEST_CASE("version string") {
 
 TEST_CASE("a missing config is refused and NULL handles are ignored") {
   CHECK(rarftp_job_start(nullptr) == nullptr);
+  CHECK(rarftp_job_start_with_options(nullptr, 1, 5) == nullptr);
   CHECK(rarftp_job_poll(nullptr, 0) == nullptr);
   rarftp_job_answer_password(nullptr, "x");
   rarftp_job_cancel(nullptr);
@@ -187,6 +188,9 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   CHECK(contains(json, "\"target\":null"));
   CHECK(contains(json, "\"progress\":null"));
   CHECK(contains(json, "Connecting to 127.0.0.1:1 (passive mode)"));
+  CHECK(contains(json, "after 3 attempt(s)"));
+  CHECK(contains(json, "attempt 2/3"));
+  CHECK(contains(json, "attempt 3/3"));
   rarftp_job_free(job);
 }
 

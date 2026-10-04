@@ -50,6 +50,8 @@ pub struct TransferConfig {
     pub mkdir: bool,
     pub verbose: bool,
     pub buffer_mib: u32,
+    #[serde(default = "preferences::default_retries")]
+    pub retries: u32,
     #[serde(default)]
     pub units: preferences::Units,
 }
@@ -273,6 +275,7 @@ mod tests {
             mkdir: false,
             verbose: false,
             buffer_mib: 1,
+            retries: 3,
             units: preferences::Units::Binary,
         }
     }

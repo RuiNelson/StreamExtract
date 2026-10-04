@@ -511,7 +511,7 @@ Job::Result Job::pipeline() {
 
   log_.info("Connecting to {}:{} ({} mode)", config_.host, config_.port,
             config_.active_mode ? "active" : "passive");
-  const std::string home = normalize_remote_path(ftp.connect());
+  const std::string home = normalize_remote_path(ftp.connect(config_.retries));
   throw_if_cancelled();
   log_.info("Logged in as {}", config_.user.empty() ? "anonymous" : config_.user);
   std::string target;
@@ -568,7 +568,7 @@ Job::Result Job::pipeline() {
   const size_t buffer_mib =
       config_.buffer_mib == 0 ? kDefaultBufferMib : std::min(config_.buffer_mib, kMaxBufferMib);
   ftp.set_cancel_check(nullptr);  // The transfer handles cancellation by itself.
-  Transfer transfer(plan, ftp, *passwords, log_, progress_, buffer_mib << 20);
+  Transfer transfer(plan, ftp, *passwords, log_, progress_, buffer_mib << 20, config_.retries);
   struct Unpublish {
     Job& job;
     ~Unpublish() {

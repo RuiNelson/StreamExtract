@@ -10,6 +10,9 @@ upload it (network busy, CPU idle). `rarftp` streams each file from the
 decompressor to the FTP data connection instead:
 
 - **No temporary files**: nothing is written to the local disk.
+- **Automatic upload retries**: up to 3 attempts for the initial connection/login
+  and each file upload, resuming the bytes already on the server, with no delay
+  between attempts.
 - **Decompression and upload overlap**: a bounded memory buffer (64 MiB by
   default) sits between the two, so the CPU and the network work at the same
   time.
@@ -55,9 +58,10 @@ The app offers:
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
   if missing*.
-  *Advanced* has the buffer size, the verbose log and **Display units**: SI
+  *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
+  each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
-  to sizes, speeds, log messages and the final summary. The units and buffer size are saved
+  to sizes, speeds, log messages and the final summary. The units, buffer size and upload attempts are saved
   automatically in `~/.config/rarftp-gui/preferences.ini`, separately from
   server memory (buffer default: 64 MiB; range: 1–4096 MiB).
   The buffer setting is always entered in MiB. Sizes and speeds are formatted
@@ -136,6 +140,7 @@ password-protected archives are supported:
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
 | `--verbose` | Log every FTP command and reply (the password is masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
+| `--retries N` | Total attempts for connection/login and each file upload, including the first. Default `3`; `1` disables retries. |
 
 The interface shows a fixed log panel, the progress of the current file and of
 the whole archive with their ETAs (for a compressed tar, by how much of the
@@ -216,7 +221,11 @@ code (its LZMA SDK), ZIP and tar archives with libarchive, and exFAT volume
 images with [FatFs](https://elm-chan.org/fsw/ff/). Contents are read in memory,
 without creating local files, and go into the buffer, which the FTP upload drains.
 A file only counts as uploaded after its checksum was confirmed (tar and exFAT have none,
-see below); on any error the incomplete remote file is deleted.
+see below). On an upload failure, the engine verifies the remaining source data,
+checks the remote size, and rereads the entry to resume from that offset. Retries
+use the same bounded memory buffer; solid archives and compressed tar may need
+to decompress earlier entries again. A source error, cancellation, or exhausted
+upload attempts removes the incomplete remote file.
 
 The command line links this engine statically. The app uses it through a
 shared library (`librarftpcore`, C API in `src/capi/rarftp.h`).
@@ -286,13 +295,19 @@ Behaviour, in both:
   stores them.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
-- **Fail-fast**: a checksum error, a missing volume or a network failure stops
-  the transfer and removes the incomplete remote file.
+- **Connection and upload failures**: the initial connection/login and each file
+  upload get up to 3 attempts (including the first), immediately reconnecting
+  or resuming from the size stored on the server. Change this with `--retries N`
+  in the CLI or **Upload attempts** under *Advanced* in the GUI. Same-size files
+  are considered complete, larger files
+  are deleted first, and missing files or files with unknown sizes are uploaded
+  from the beginning, following the usual remote-size policy.
+- **Fail-fast**: a checksum error, a missing volume, cancellation, or exhausting
+  the upload attempts stops the transfer and removes the incomplete remote file.
 
 ### Not supported yet
 
-FTPS, automatic retries after a network failure, extracting only
-some files, and several parallel connections. Symbolic links, hard links and
+FTPS, extracting only some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 

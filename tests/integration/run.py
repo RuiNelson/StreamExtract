@@ -469,6 +469,8 @@ class Library:
         dll.rarftp_job_start.restype = ctypes.c_void_p
         dll.rarftp_job_start_with_units.argtypes = [ctypes.POINTER(RarftpJobConfig), ctypes.c_int]
         dll.rarftp_job_start_with_units.restype = ctypes.c_void_p
+        dll.rarftp_job_start_with_options.argtypes = [ctypes.POINTER(RarftpJobConfig), ctypes.c_int, ctypes.c_uint]
+        dll.rarftp_job_start_with_options.restype = ctypes.c_void_p
         dll.rarftp_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.rarftp_job_poll.restype = ctypes.c_void_p
         dll.rarftp_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -519,7 +521,7 @@ class LibJob:
     cursor and answers the archive password prompt. Use it as a context manager: leaving it frees the
     job, which cancels and waits for it if it is still running."""
 
-    def __init__(self, lib, config, si_units=False):
+    def __init__(self, lib, config, si_units=False, retries=None):
         unknown = set(config) - set(LIB_CONFIG_DEFAULTS)
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
@@ -533,8 +535,11 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        self.handle = (lib.dll.rarftp_job_start_with_units(ctypes.byref(self._config), 1) if si_units
-                       else lib.dll.rarftp_job_start(ctypes.byref(self._config)))
+        if retries is not None:
+            self.handle = lib.dll.rarftp_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
+        else:
+            self.handle = (lib.dll.rarftp_job_start_with_units(ctypes.byref(self._config), 1) if si_units
+                           else lib.dll.rarftp_job_start(ctypes.byref(self._config)))
         check(self.handle, "rarftp_job_start returned NULL")
 
     def __enter__(self):

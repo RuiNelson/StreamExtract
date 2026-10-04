@@ -34,9 +34,10 @@ pub struct RarftpJobConfig {
 // The library is linked by build.rs.
 extern "C" {
     pub fn rarftp_version() -> *const c_char;
-    pub fn rarftp_job_start_with_units(
+    pub fn rarftp_job_start_with_options(
         config: *const RarftpJobConfig,
         si_units: c_int,
+        retries: c_uint,
     ) -> *mut RarftpJob;
     pub fn rarftp_job_poll(job: *mut RarftpJob, log_cursor: u64) -> *mut c_char;
     pub fn rarftp_job_answer_password(job: *mut RarftpJob, password: *const c_char);
@@ -85,6 +86,11 @@ impl Job {
             c_int::try_from(config.port).map_err(|_| "The port is out of range".to_string())?;
         let buffer_mib = c_uint::try_from(config.buffer_mib)
             .map_err(|_| "The buffer size is out of range".to_string())?;
+        if config.retries == 0 {
+            return Err("Upload attempts must be at least 1.".to_string());
+        }
+        let retries = c_uint::try_from(config.retries)
+            .map_err(|_| "The upload attempt count is out of range".to_string())?;
 
         let raw_config = RarftpJobConfig {
             archive: archive.as_ptr(),
@@ -103,9 +109,10 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            rarftp_job_start_with_units(
+            rarftp_job_start_with_options(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
+                retries,
             )
         };
         NonNull::new(job)
@@ -171,6 +178,7 @@ mod tests {
             mkdir: false,
             verbose: false,
             buffer_mib: 0,
+            retries: 3,
             units: crate::preferences::Units::Binary,
         }
     }
@@ -194,6 +202,9 @@ mod tests {
     fn out_of_range_numbers_are_rejected() {
         let mut bad = config();
         bad.port = u32::MAX;
+        assert!(Job::start(&bad).is_err());
+        let mut bad = config();
+        bad.retries = 0;
         assert!(Job::start(&bad).is_err());
     }
 

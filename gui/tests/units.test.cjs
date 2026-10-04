@@ -20,7 +20,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
       classList: { toggle() {} },
       setAttribute() {}, removeAttribute() {},
       append(...children) { this.children.push(...children); },
-      replaceChildren(...children) { this.children = children; }, remove() {}, focus() {},
+      replaceChildren(...children) { this.children = children; }, remove() {}, focus() {}, scrollIntoView() {},
     });
     return nodes.get(id);
   }
@@ -47,11 +47,12 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
   node("buffer").value = "64";
+  node("retries").value = "3";
   return { ...context.api, inputs, node, sounds };
 }
 
@@ -161,7 +162,7 @@ test("the sound preference loads and saves without changing units or buffer", as
   app.node("completion-sound").checked = true;
   await app.saveCompletionSound();
   assert.deepEqual({ ...calls[1].args.preferences }, {
-    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false,
+    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3,
   });
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").disabled, false);
@@ -195,7 +196,7 @@ test("password visibility is shared, persists across preference changes, and kee
   assert.equal(calls[1].args.preferences.show_passwords, true);
   await app.savePasswordVisibility({ target: { checked: false } });
   assert.deepEqual({ ...calls[2].args.preferences }, {
-    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false,
+    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3,
   });
   for (const id of fields) {
     assert.equal(app.node(id).type, "password");
@@ -330,6 +331,7 @@ test("starting a batch sends every archive with one shared configuration", async
   app.node("port").value = "21";
   app.node("host").value = "ftp.example.com";
   app.node("directory").value = "/shared";
+  app.node("retries").value = "5";
   app.addArchives(["/tmp/first.zip", "/tmp/second.7z"]);
   await app.startTransfer();
   const start = calls.find((call) => call.command === "start_transfer");
@@ -337,6 +339,7 @@ test("starting a batch sends every archive with one shared configuration", async
   assert.equal(start.args.config.archive, "/tmp/first.zip");
   assert.equal(start.args.config.host, "ftp.example.com");
   assert.equal(start.args.config.directory, "/shared");
+  assert.equal(start.args.config.retries, 5);
   assert.equal(app.state.view, "transfer");
 });
 
@@ -407,4 +410,42 @@ test("intermediate archive failure does not notify, and final batch failure noti
   assert.equal(app.node("total-block").hidden, true);
   assert.deepEqual(attention, [1]);
   assert.equal(app.sounds.length, 0);
+});
+
+
+test("upload attempts persist and reach the engine; invalid values block transfer", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    return { units: "si", buffer_mib: 128, retries: 5 };
+  });
+  await app.loadPreferences();
+  assert.equal(app.node("retries").value, "5");
+  app.node("port").value = "21";
+  app.state.archives = ["/tmp/archive.zip"];
+  assert.equal(app.buildConfig().retries, 5);
+  app.node("retries").value = "1";
+  await app.saveRetries();
+  assert.equal(calls[1].args.preferences.retries, 1);
+  assert.equal(calls[1].args.preferences.buffer_mib, 128);
+  assert.equal(app.buildConfig().retries, 1);
+  await app.saveUnits({ target: { value: "binary" } });
+  assert.equal(calls[2].args.preferences.retries, 1);
+  for (const value of ["", "0", "-1", "1.5", "abc", "4294967296"]) {
+    app.node("retries").value = value;
+    await app.saveRetries();
+    assert.equal(app.buildConfig(), null);
+    assert.equal(app.node("advanced").open, true);
+  }
+  assert.equal(calls.length, 3);
+  assert.equal(app.state.retries, 1);
+});
+
+test("a failed attempt count save restores the previous value", async () => {
+  const app = frontend(async () => { throw new Error("read-only directory"); });
+  app.node("retries").value = "5";
+  await app.saveRetries();
+  assert.equal(app.state.retries, 3);
+  assert.equal(app.node("retries").value, "3");
+  assert.equal(app.node("retries").disabled, false);
 });

@@ -52,6 +52,8 @@
     advanced: $("advanced"),
     buffer: $("buffer"),
     bufferError: $("buffer-error"),
+    retries: $("retries"),
+    retriesError: $("retries-error"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
     memRecall: $("btn-mem-recall"),
@@ -120,6 +122,7 @@
     memoryBusy: false,
     units: "si",
     bufferMib: 64,
+    retries: 3,
     completionSound: true,
     showPasswords: false,
     preferencesBusy: true,
@@ -150,10 +153,13 @@
       input.type = state.showPasswords ? "text" : "password";
     }
     els.buffer.disabled = state.preferencesBusy;
+    els.retries.disabled = state.preferencesBusy;
     els.completionSound.disabled = state.preferencesBusy;
     els.completionSound.checked = state.completionSound;
     els.buffer.value = String(state.bufferMib);
     validateBuffer();
+    els.retries.value = String(state.retries);
+    validateRetries();
     updateSubmitState();
   }
 
@@ -162,6 +168,7 @@
       const preferences = await invoke("preferences_load");
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
+      state.retries = preferences.retries ?? 3;
       state.completionSound = preferences.completion_sound ?? true;
       state.showPasswords = preferences.show_passwords ?? false;
     } catch (e) {
@@ -173,20 +180,23 @@
   }
 
   async function savePreferences(units, bufferMib, completionSound = state.completionSound,
-    showPasswords = state.showPasswords) {
+    showPasswords = state.showPasswords, retries = state.retries) {
     if (state.preferencesBusy) return;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
+    els.retries.disabled = true;
     els.completionSound.disabled = true;
     for (const input of els.passwordVisibility) input.disabled = true;
     try {
       await invoke("preferences_save", { preferences: {
         units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
+        retries,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
+      state.retries = retries;
       state.completionSound = completionSound;
       state.showPasswords = showPasswords;
     } catch (e) {
@@ -209,6 +219,12 @@
 
   function saveCompletionSound() {
     return savePreferences(state.units, state.bufferMib, els.completionSound.checked);
+  }
+
+  function saveRetries() {
+    const retries = validateRetries();
+    if (retries === null) return;
+    return savePreferences(state.units, state.bufferMib, state.completionSound, state.showPasswords, retries);
   }
 
   function savePasswordVisibility(event) {
@@ -377,6 +393,9 @@
     parseIntInRange(els.port, els.portError, 1, 65535, "Port must be a number between 1 and 65535.");
   const validateBuffer = () =>
     parseIntInRange(els.buffer, els.bufferError, 1, 4096, "Buffer must be a number between 1 and 4096 MiB.");
+  const validateRetries = () =>
+    parseIntInRange(els.retries, els.retriesError, 1, 4294967295,
+      "Upload attempts must be a whole number between 1 and 4294967295.");
 
   function updateSubmitState() {
     const host = els.host.value.trim();
@@ -467,6 +486,7 @@
   function buildConfig() {
     const port = validatePort();
     const buffer = validateBuffer();
+    const retries = validateRetries();
     if (port === null) {
       focusField(els.port);
       return null;
@@ -477,6 +497,11 @@
       return null;
     }
     const server = readServer();
+    if (retries === null) {
+      els.advanced.open = true;
+      focusField(els.retries);
+      return null;
+    }
     return {
       archive: state.archives[0],
       archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
@@ -489,6 +514,7 @@
       mkdir: server.mkdir,
       verbose: els.verbose.checked,
       buffer_mib: buffer,
+      retries,
       units: state.units,
     };
   }
@@ -1353,6 +1379,8 @@
     els.port.addEventListener("input", validatePort);
     els.buffer.addEventListener("input", validateBuffer);
     els.buffer.addEventListener("change", saveBuffer);
+    els.retries.addEventListener("input", validateRetries);
+    els.retries.addEventListener("change", saveRetries);
     els.btnChoose.addEventListener("click", chooseArchive);
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
     els.completionSound.addEventListener("change", saveCompletionSound);

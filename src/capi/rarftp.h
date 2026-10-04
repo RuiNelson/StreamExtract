@@ -56,6 +56,14 @@ RARFTP_API rarftp_job* rarftp_job_start(const rarftp_job_config* config);
  * The original start function uses binary units; its config layout is unchanged. */
 RARFTP_API rarftp_job* rarftp_job_start_with_units(const rarftp_job_config* config, int si_units);
 
+/* Like rarftp_job_start_with_units, with a configurable total attempt count
+ * for connection/login and each file upload (including the first).
+ * `retries`: 0 = default (3), 1 = no
+ * retries. The older start functions keep the default and the config layout
+ * is unchanged. */
+RARFTP_API rarftp_job* rarftp_job_start_with_options(const rarftp_job_config* config, int si_units,
+                                                  unsigned retries);
+
 /* Current state as a JSON object, including the log lines numbered
  * `log_cursor` and later. Free the result with rarftp_free(). Returns NULL
  * only if `job` is NULL or memory ran out. */

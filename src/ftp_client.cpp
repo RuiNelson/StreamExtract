@@ -297,23 +297,45 @@ FtpClient::~FtpClient() {
 
 void FtpClient::set_cancel_check(std::function<bool()> check) { impl_->cancel_check = std::move(check); }
 
-std::string FtpClient::connect() {
-  impl_->prepare(impl_->base_url + "/");
-  SList quote;
-  quote.append("*OPTS UTF8 ON");  // '*': ignore servers that do not know it.
-  curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
-  curl_easy_setopt(impl_->curl, CURLOPT_QUOTE, quote.get());
-  const CURLcode code = impl_->perform();
-  if (code != CURLE_OK) {
-    impl_->fail(fmt::format("cannot log in to {}:{}", impl_->config.host, impl_->config.port), code);
+std::string FtpClient::connect(unsigned attempts) {
+  if (attempts == 0) {
+    attempts = 1;
   }
-  const char* entry = nullptr;
-  curl_easy_getinfo(impl_->curl, CURLINFO_FTP_ENTRY_PATH, &entry);
-  if (entry == nullptr || *entry == '\0') {
-    impl_->log.warn("the server did not report its current directory (PWD); assuming \"/\"");
-    return "/";
+  for (unsigned attempt = 1;; ++attempt) {
+    if (attempt > 1) {
+      // Check before preparing another request so a cancellation after the
+      // previous failure cannot start another login.
+      if (impl_->cancel_check && impl_->cancel_check()) {
+        impl_->fail("connection cancelled", CURLE_ABORTED_BY_CALLBACK);
+      }
+      impl_->log.info("Retrying connection to {}:{} (attempt {}/{})", impl_->config.host, impl_->config.port,
+                      attempt, attempts);
+    }
+    impl_->prepare(impl_->base_url + "/");
+    SList quote;
+    quote.append("*OPTS UTF8 ON");  // '*': ignore servers that do not know it.
+    curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(impl_->curl, CURLOPT_QUOTE, quote.get());
+    const CURLcode code = impl_->perform();
+    if (code == CURLE_OK) {
+      const char* entry = nullptr;
+      curl_easy_getinfo(impl_->curl, CURLINFO_FTP_ENTRY_PATH, &entry);
+      if (entry == nullptr || *entry == '\0') {
+        impl_->log.warn("the server did not report its current directory (PWD); assuming \"/\"");
+        return "/";
+      }
+      return entry;
+    }
+    const std::string error = fmt::format("cannot log in to {}:{}: {}", impl_->config.host, impl_->config.port,
+                                          impl_->describe(code));
+    if (code == CURLE_ABORTED_BY_CALLBACK || (impl_->cancel_check && impl_->cancel_check())) {
+      throw FtpError(error, static_cast<int>(code));
+    }
+    if (attempt == attempts) {
+      throw FtpError(fmt::format("{} (after {} attempt(s))", error, attempt), static_cast<int>(code));
+    }
+    impl_->log.warn("connection failed (attempt {}/{}): {}; retrying immediately", attempt, attempts, error);
   }
-  return entry;
 }
 
 bool FtpClient::directory_exists(const std::string& dir) {

@@ -45,6 +45,15 @@ void Progress::begin_file(uint64_t number, std::string name, uint64_t size, uint
 
 void Progress::file_progress(uint64_t sent) { current_sent_ = sent; }
 
+void Progress::retry_file(uint64_t resume_offset) {
+  std::lock_guard lock(mutex_);
+  if (resume_offset < current_resume_offset_) {
+    total_bytes_ += current_resume_offset_ - resume_offset;
+    current_resume_offset_ = resume_offset;
+  }
+  current_sent_ = resume_offset;
+}
+
 void Progress::end_file() {
   std::lock_guard lock(mutex_);
   done_bytes_ += current_size_ - current_resume_offset_;

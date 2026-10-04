@@ -137,6 +137,13 @@
             </div>
             <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB). Saved automatically.</p>
             <p id="buffer-error" class="error-text" role="alert" hidden></p>
+            <div class="field narrow">
+              <label for="retries">Upload attempts</label>
+              <input id="retries" type="text" inputmode="numeric" autocomplete="off" value="3" disabled
+                     aria-describedby="retries-hint retries-error">
+            </div>
+            <p id="retries-hint" class="hint muted">Total attempts for connection/login and each file upload, including the first. 1 disables retries. Saved automatically.</p>
+            <p id="retries-error" class="error-text" role="alert" hidden></p>
             <label class="check">
               <input type="checkbox" id="completion-sound" checked disabled>
               <span>Play a sound when the upload completes successfully</span>

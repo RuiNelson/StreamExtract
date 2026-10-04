@@ -22,6 +22,7 @@ struct Options {
   bool no_tui = false;
   bool verbose = false;
   size_t buffer_mib = 64;
+  unsigned retries = 3;  // Total connection/login and per-file upload attempts, including the first.
 };
 
 struct ParsedOptions {

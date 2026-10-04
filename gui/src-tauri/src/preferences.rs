@@ -17,6 +17,10 @@ fn default_buffer_mib() -> u32 {
     DEFAULT_BUFFER_MIB
 }
 
+pub(crate) fn default_retries() -> u32 {
+    3
+}
+
 fn default_completion_sound() -> bool {
     true
 }
@@ -26,6 +30,8 @@ pub struct Preferences {
     pub units: Units,
     #[serde(default = "default_buffer_mib")]
     pub buffer_mib: u32,
+    #[serde(default = "default_retries")]
+    pub retries: u32,
     #[serde(default = "default_completion_sound")]
     pub completion_sound: bool,
     #[serde(default)]
@@ -37,6 +43,7 @@ impl Default for Preferences {
         Self {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
+            retries: default_retries(),
             completion_sound: true,
             show_passwords: false,
         }
@@ -58,6 +65,11 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| (1..=4096).contains(value))
             .unwrap_or(DEFAULT_BUFFER_MIB),
+        retries: ini
+            .get("transfer", "retries")
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or_else(default_retries),
         show_passwords: ini
             .get("display", "show_passwords")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("true")),
@@ -72,6 +84,9 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     if !(1..=4096).contains(&preferences.buffer_mib) {
         return Err("Buffer must be a number between 1 and 4096 MiB.".to_string());
     }
+    if preferences.retries == 0 {
+        return Err("Upload attempts must be at least 1.".to_string());
+    }
     let units = match preferences.units {
         Units::Si => "si",
         Units::Binary => "binary",
@@ -79,8 +94,8 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     crate::ini::write_atomic(
         path,
         &format!(
-            "[display]\nunits={units}\nshow_passwords={}\n\n[transfer]\nbuffer_mib={}\n\n[notifications]\ncompletion_sound={}\n",
-            preferences.show_passwords, preferences.buffer_mib, preferences.completion_sound
+            "[display]\nunits={units}\nshow_passwords={}\n\n[transfer]\nbuffer_mib={}\nretries={}\n\n[notifications]\ncompletion_sound={}\n",
+            preferences.show_passwords, preferences.buffer_mib, preferences.retries, preferences.completion_sound
         ),
     )
 }
@@ -109,12 +124,14 @@ mod tests {
             Preferences {
                 units: Units::Binary,
                 buffer_mib: 128,
+                retries: 5,
                 completion_sound: false,
                 show_passwords: true,
             },
         )
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
+        assert_eq!(load(&path).unwrap().retries, 5);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
         assert!(!load(&path).unwrap().completion_sound);
         assert!(load(&path).unwrap().show_passwords);
@@ -138,6 +155,7 @@ mod tests {
         let legacy: Preferences =
             serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
         assert!(legacy.completion_sound);
+        assert_eq!(legacy.retries, 3);
         assert!(!legacy.show_passwords);
         for (value, enabled) in [("TRUE", true), ("false", false), ("invalid", false)] {
             fs::write(&path, format!("[display]\nshow_passwords = {value}\n")).unwrap();
@@ -181,6 +199,30 @@ mod tests {
             .is_err());
             assert_eq!(load(&path).unwrap().buffer_mib, 4096);
         }
+        for value in ["0", "-1", "1.5", "4294967296", "invalid"] {
+            fs::write(&path, format!("[transfer]\nretries={value}\n")).unwrap();
+            assert_eq!(load(&path).unwrap().retries, 3);
+        }
+        for value in [1, 5, u32::MAX] {
+            save(
+                &path,
+                Preferences {
+                    retries: value,
+                    ..Preferences::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(load(&path).unwrap().retries, value);
+        }
+        assert!(save(
+            &path,
+            Preferences {
+                retries: 0,
+                ..Preferences::default()
+            }
+        )
+        .is_err());
+        assert_eq!(load(&path).unwrap().retries, u32::MAX);
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(load(&path).is_err());

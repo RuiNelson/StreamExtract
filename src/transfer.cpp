@@ -31,8 +31,14 @@ std::string file_name_of(const std::string& path) {
 }  // namespace
 
 Transfer::Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& passwords, Logger& log,
-                   Progress& progress, size_t buffer_bytes)
-    : plan_(plan), ftp_(ftp), passwords_(passwords), log_(log), progress_(progress), pipe_(buffer_bytes) {
+                   Progress& progress, size_t buffer_bytes, unsigned attempts)
+    : plan_(plan),
+      ftp_(ftp),
+      passwords_(passwords),
+      log_(log),
+      progress_(progress),
+      pipe_(buffer_bytes),
+      attempts_(std::max(1u, attempts)) {
   progress_.set_buffer_capacity(buffer_bytes);
 }
 
@@ -63,6 +69,8 @@ void Transfer::cancel() {
   log_.info("Cancelling...");
   progress_.set_activity("Cancelling...");
   pipe_.abort();
+  std::lock_guard lock(reply_mutex_);
+  reply_ready_.notify_all();
 }
 
 TransferResult Transfer::wait() {
@@ -104,6 +112,8 @@ void Transfer::fail(const std::string& message) {
     log_.error(message);
   }
   pipe_.abort();
+  std::lock_guard lock(reply_mutex_);
+  reply_ready_.notify_all();
 }
 
 std::string Transfer::describe_archive_error(const ArchiveError& error, const std::string& what) const {
@@ -260,10 +270,7 @@ void Transfer::extract() {
             if (!flush()) {
               return;
             }
-            PipeMessage end;
-            end.kind = PipeMessage::Kind::FileEnd;
-            end.entry = current;
-            if (!pipe_.push(std::move(end))) {
+            if (!finish_extraction(current, callbacks, flush)) {
               return;
             }
             break;
@@ -372,10 +379,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
           if (!flush()) {
             return;
           }
-          PipeMessage end;
-          end.kind = PipeMessage::Kind::FileEnd;
-          end.entry = index;
-          if (!pipe_.push(std::move(end))) {
+          if (!finish_extraction(index, callbacks, flush)) {
             return;
           }
           break;
@@ -402,6 +406,92 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
   PipeMessage end;
   end.kind = PipeMessage::Kind::End;
   pipe_.push(std::move(end));
+}
+
+bool Transfer::finish_extraction(size_t index, ArchiveCallbacks& callbacks, const std::function<bool()>& flush) {
+  while (true) {
+    PipeMessage end;
+    end.kind = PipeMessage::Kind::FileEnd;
+    end.entry = index;
+    if (!pipe_.push(std::move(end))) {
+      return false;
+    }
+    std::unique_lock lock(reply_mutex_);
+    reply_ready_.wait(lock, [&] { return file_reply_ != FileReply::Waiting || pipe_.aborted(); });
+    if (pipe_.aborted()) {
+      return false;
+    }
+    const bool retry = file_reply_ == FileReply::Retry;
+    file_reply_ = FileReply::Waiting;
+    lock.unlock();
+    if (!retry) {
+      return true;
+    }
+    if (!reread_file(index, callbacks) || !flush()) {
+      return false;
+    }
+  }
+}
+
+bool Transfer::reread_file(size_t index, ArchiveCallbacks callbacks) {
+  bool target = false;
+  const auto on_data = callbacks.on_data;
+  callbacks.on_data = [&](const uint8_t* data, size_t size) {
+    if (cancel_requested_ || pipe_.aborted()) {
+      return false;
+    }
+    if (!target) {
+      progress_.add_unpacked(size);
+      return true;
+    }
+    return on_data(data, size);
+  };
+  // Rereading compressed tar must not move its archive-level progress backwards
+  // or inflate it; the original reader resumes after this attempt.
+  const Archive* original = reading_;
+  reading_ = nullptr;
+  struct Restore {
+    const Archive*& reading;
+    const Archive* original;
+    ~Restore() { reading = original; }
+  } restore{reading_, original};
+  progress_.set_activity(fmt::format("Rereading {} for retry", entry(index).relative));
+  const auto archive = open_archive(plan_.archive_path, Archive::Mode::Extract, std::move(callbacks));
+  ArchiveEntry header;
+  size_t current = 0;
+  while (archive->next(header)) {
+    if (cancel_requested_ || pipe_.aborted()) {
+      return false;
+    }
+    if (header.split_before) {
+      archive->skip();
+      continue;
+    }
+    const ArchiveEntry& expected = entry(current).entry;
+    if (header.name != expected.name || header.size != expected.size || header.kind != expected.kind) {
+      fail("the archive changed while it was being read");
+      return false;
+    }
+    if (current == index) {
+      target = true;
+      archive->test();
+      return true;
+    }
+    ++current;
+    if (archive->flags().skip_decompresses) {
+      archive->test();
+    } else {
+      archive->skip();
+    }
+  }
+  fail("the archive ended before the file to retry was read");
+  return false;
+}
+
+void Transfer::acknowledge_file(bool retry) {
+  std::lock_guard lock(reply_mutex_);
+  file_reply_ = retry ? FileReply::Retry : FileReply::Continue;
+  reply_ready_.notify_all();
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +540,7 @@ void Transfer::upload_loop() {
             if (!discard_file()) {
               return;
             }
+            acknowledge_file(false);
             break;
           }
           progress_.add_upload(planned.entry.size - planned.resume_offset);
@@ -457,6 +548,7 @@ void Transfer::upload_loop() {
         if (!upload_file(planned, ++number)) {
           return;
         }
+        acknowledge_file(false);
         break;
       }
       case PipeMessage::Kind::End:
@@ -471,7 +563,8 @@ void Transfer::upload_loop() {
 
 bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   const uint64_t size = planned.entry.size;
-  const uint64_t remaining = size - planned.resume_offset;
+  uint64_t initial_remaining = size - planned.resume_offset;
+  uint64_t counted_prefix = planned.resume_offset;
   if (cancel_requested_ || pipe_.aborted()) {
     return false;
   }
@@ -484,110 +577,171 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   }
   if (planned.resume_offset > 0) {
     log_.info("Resuming {} at byte {} ({} remaining)", planned.relative, planned.resume_offset,
-              format_bytes(remaining, log_.units()));
+              format_bytes(initial_remaining, log_.units()));
   }
+  // Bytes already stored during this run still count after a retry. If the
+  // server loses an original prefix, include its replacement in the totals.
   progress_.begin_file(number, planned.relative, size, planned.resume_offset);
+  const auto started = std::chrono::steady_clock::now();
+  uint64_t resume_offset = planned.resume_offset;
+  bool remote_started = false;
+  uint64_t bytes_sent = 0;
+  bool complete = false;
+  UploadResult result;
 
-  std::vector<uint8_t> block;
-  size_t offset = 0;
-  bool complete = false;  // FileEnd seen: the whole file was verified.
-  uint64_t discard = planned.resume_offset;
-
-  const FtpClient::ReadFn read = [&](char* buffer, size_t capacity) -> std::optional<size_t> {
-    while (true) {
-      if (offset < block.size()) {
-        if (discard > 0) {
-          const size_t take = static_cast<size_t>(std::min<uint64_t>(discard, block.size() - offset));
-          offset += take;
-          discard -= take;
-          continue;
+  for (unsigned attempt = 1;; ++attempt) {
+    uint64_t remaining = size - resume_offset;
+    bool ready = true;
+    if (attempt > 1) {
+      // SIZE is authoritative: curl may have buffered bytes which never
+      // reached the server. Never use its bytes_sent as the append offset.
+      result = UploadResult{};
+      try {
+        const RemoteFile remote = ftp_.stat_file(planned.remote);
+        if (remote.exists && remote.size && *remote.size == size) {
+          log_.info("{} is complete on the server", planned.relative);
+          progress_.file_progress(size);
+          result.ok = true;  // The source was verified before requesting a retry.
+          break;
         }
-        const size_t n = std::min(capacity, block.size() - offset);
-        std::memcpy(buffer, block.data() + offset, n);
-        offset += n;
-        return n;
+        resume_offset = remote.exists && remote.size && *remote.size < size ? *remote.size : 0;
+        if (remote.exists && remote.size && *remote.size > size && !ftp_.delete_file(planned.remote)) {
+          result.error = fmt::format("cannot delete the larger remote file {}", planned.relative);
+          ready = false;
+        }
+      } catch (const FtpError& error) {
+        result.error = error.what();
+        ready = false;
       }
-      if (complete) {
-        return 0;
+      remaining = size - resume_offset;
+      if (ready && !cancel_requested_ && !pipe_.aborted()) {
+        log_.info("Retrying {} at byte {} (attempt {}/{})", planned.relative, resume_offset, attempt, attempts_);
+        progress_.retry_file(resume_offset);
+        if (resume_offset < counted_prefix) {
+          initial_remaining += counted_prefix - resume_offset;
+          counted_prefix = resume_offset;
+        }
+        complete = false;
+        acknowledge_file(true);
       }
+    }
+
+    if (ready && !cancel_requested_ && !pipe_.aborted()) {
+      std::vector<uint8_t> block;
+      size_t offset = 0;
+      uint64_t discard = resume_offset;
+      const FtpClient::ReadFn read = [&](char* buffer, size_t capacity) -> std::optional<size_t> {
+        while (true) {
+          if (offset < block.size()) {
+            if (discard > 0) {
+              const size_t take = static_cast<size_t>(std::min<uint64_t>(discard, block.size() - offset));
+              offset += take;
+              discard -= take;
+              continue;
+            }
+            const size_t n = std::min(capacity, block.size() - offset);
+            std::memcpy(buffer, block.data() + offset, n);
+            offset += n;
+            return n;
+          }
+          if (complete) {
+            return 0;
+          }
+          if (block.capacity() > 0) {
+            pipe_.release_buffer(std::move(block));
+            block = std::vector<uint8_t>();
+          }
+          offset = 0;
+          std::optional<PipeMessage> message = pipe_.pop();
+          progress_.set_buffer_used(pipe_.buffered());
+          if (!message) {
+            return std::nullopt;
+          }
+          if (message->kind == PipeMessage::Kind::Data) {
+            block = std::move(message->data);
+          } else if (message->kind == PipeMessage::Kind::FileEnd) {
+            complete = true;
+            return 0;
+          } else {
+            return std::nullopt;
+          }
+        }
+      };
+      const FtpClient::ProgressFn on_progress = [&](uint64_t sent) {
+        progress_.file_progress(resume_offset + std::min(sent, remaining));
+        return !cancel_requested_.load() && !pipe_.aborted();
+      };
+      result = ftp_.upload(planned.remote, remaining, planned.entry.mtime, read, on_progress, resume_offset > 0);
+      remote_started = remote_started || result.remote_started;
+      bytes_sent += result.bytes_sent;
+      const bool unsent_data = offset < block.size();
       if (block.capacity() > 0) {
         pipe_.release_buffer(std::move(block));
-        block = std::vector<uint8_t>();
       }
-      offset = 0;
-      std::optional<PipeMessage> message = pipe_.pop();
-      progress_.set_buffer_used(pipe_.buffered());
-      if (!message) {
-        return std::nullopt;
+      if (result.ok && unsent_data) {
+        fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
+        result.ok = false;
+        result.aborted_by_source = true;
       }
-      if (message->kind == PipeMessage::Kind::Data) {
-        block = std::move(message->data);
-      } else if (message->kind == PipeMessage::Kind::FileEnd) {
-        complete = true;
-        return 0;
-      } else {
-        return std::nullopt;
+      // curl can stop at INFILESIZE before reading the checksum-gated marker.
+      if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= remaining)) {
+        complete = await_file_end(planned);
+        if (!complete) {
+          result.ok = false;
+          result.aborted_by_source = true;
+        }
+      }
+      if (!result.ok && complete && result.bytes_sent >= remaining && !cancel_requested_ && !pipe_.aborted()) {
+        log_.warn("no confirmation from the server for {} ({}); checking its size", planned.relative, result.error);
+        try {
+          const RemoteFile remote = ftp_.stat_file(planned.remote);
+          if (remote.exists && remote.size && *remote.size == size) {
+            log_.warn("{} is complete on the server", planned.relative);
+            result.ok = true;
+          }
+        } catch (const FtpError&) {
+        }
       }
     }
-  };
-  const FtpClient::ProgressFn on_progress = [&](uint64_t sent) {
-    progress_.file_progress(planned.resume_offset + std::min(sent, remaining));
-    return !cancel_requested_.load();
-  };
 
-  const auto started = std::chrono::steady_clock::now();
-  UploadResult result =
-      ftp_.upload(planned.remote, remaining, planned.entry.mtime, read, on_progress, planned.resume_offset > 0);
-  const bool unsent_data = offset < block.size();  // libcurl took only the announced size.
-  if (block.capacity() > 0) {
-    pipe_.release_buffer(std::move(block));
-  }
-  if (result.ok && unsent_data) {
-    fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
-    result.ok = false;
-    result.aborted_by_source = true;
-  }
+    if (result.ok) {
+      break;
+    }
+    if (result.aborted_by_source || cancel_requested_ || pipe_.aborted() || attempt == attempts_) {
+      if (!result.aborted_by_source && !cancel_requested_ && !pipe_.aborted()) {
+        fail(fmt::format("upload of {} failed after {} attempt(s): {}", planned.relative, attempt, result.error));
+      }
+      // Wake the extractor even when curl aborted before requesting data.
+      pipe_.abort();
+      {
+        std::lock_guard lock(reply_mutex_);
+        reply_ready_.notify_all();
+      }
+      if (remote_started) {
+        remove_partial(planned, bytes_sent);
+      }
+      return false;
+    }
 
-  // libcurl stops reading once it has the announced size, so the end marker,
-  // which the archive's checksum verification gates, is usually still queued.
-  if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= remaining)) {
-    complete = await_file_end(planned);
+    // Finish verifying this attempt before retrying. Drop its remaining data,
+    // leaving the original archive reader waiting at the same file boundary.
     if (!complete) {
-      result.ok = false;
-      result.aborted_by_source = true;
-    }
-  }
-
-  if (!result.ok && complete && result.bytes_sent >= remaining && !cancel_requested_ && !pipe_.aborted()) {
-    // Everything was sent but the confirmation never came (typical of control
-    // connections dropped by NAT during very long transfers). Check what the
-    // server has.
-    log_.warn("no confirmation from the server for {} ({}); checking its size", planned.relative, result.error);
-    try {
-      const RemoteFile remote = ftp_.stat_file(planned.remote);
-      if (remote.exists && remote.size && *remote.size == size) {
-        log_.warn("{} is complete on the server", planned.relative);
-        result.ok = true;
+      complete = discard_file();
+      if (!complete) {
+        if (remote_started) {
+          remove_partial(planned, bytes_sent);
+        }
+        return false;
       }
-    } catch (const FtpError&) {
     }
-  }
-
-  if (!result.ok) {
-    if (!result.aborted_by_source && !cancel_requested_) {
-      fail(fmt::format("upload of {} failed: {}", planned.relative, result.error));
-    }
-    pipe_.abort();
-    if (result.remote_started) {
-      remove_partial(planned, result.bytes_sent);
-    }
-    return false;
+    log_.warn("upload of {} failed (attempt {}/{}): {}; retrying immediately", planned.relative, attempt,
+              attempts_, result.error);
   }
 
   progress_.end_file();
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(remaining, log_.units()),
-            format_speed(seconds > 0.0 ? static_cast<double>(remaining) / seconds : 0.0, log_.units()));
+  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(initial_remaining, log_.units()),
+            format_speed(seconds > 0.0 ? static_cast<double>(initial_remaining) / seconds : 0.0, log_.units()));
   if (result.timestamp_failed) {
     if (!ftp_.timestamps_unsupported()) {
       log_.warn("could not set the modification time of {}", planned.relative);
@@ -598,7 +752,7 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   }
   std::lock_guard lock(mutex_);
   ++files_uploaded_;
-  bytes_uploaded_ += remaining;
+  bytes_uploaded_ += initial_remaining;
   return true;
 }
 

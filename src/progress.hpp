@@ -54,6 +54,9 @@ class Progress {
 
   // Uploader side.
   void begin_file(uint64_t number, std::string name, uint64_t size, uint64_t resume_offset = 0);
+  // Refresh the server offset for a retry. If the server lost the original
+  // prefix, those bytes must now be included in this run's total.
+  void retry_file(uint64_t resume_offset);
   void file_progress(uint64_t sent);
   void end_file();
 

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -35,14 +36,15 @@ struct TransferResult {
 
 // Runs the pipeline: an extractor thread decompresses and verifies entries in
 // memory (nothing touches the disk) into a bounded Pipe, and an uploader thread
-// streams them to the FTP server. Any error stops both (fail-fast) and the
-// incomplete remote file is deleted. With a streamed plan (compressed tar) the
+// streams them to the FTP server. Upload failures are retried by rereading the
+// entry and resuming the remote file. Source errors and exhausted attempts stop
+// both threads and delete the incomplete remote file. With a streamed plan (compressed tar) the
 // extractor plans each entry as it reads it, and the uploader checks the
 // server before each file, discarding the data of those already there.
 class Transfer {
  public:
   Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& passwords, Logger& log, Progress& progress,
-           size_t buffer_bytes);
+           size_t buffer_bytes, unsigned attempts = 3);
   ~Transfer();
   Transfer(const Transfer&) = delete;
   Transfer& operator=(const Transfer&) = delete;
@@ -59,6 +61,9 @@ class Transfer {
   void run_extractor();
   void extract();
   void extract_streamed(ArchiveCallbacks& callbacks, const std::function<bool()>& flush);
+  bool finish_extraction(size_t index, ArchiveCallbacks& callbacks, const std::function<bool()>& flush);
+  bool reread_file(size_t index, ArchiveCallbacks callbacks);
+  void acknowledge_file(bool retry);
   const PlannedEntry& entry(size_t index);
   void run_uploader();
   void upload_loop();
@@ -75,6 +80,14 @@ class Transfer {
   Logger& log_;
   Progress& progress_;
   Pipe pipe_;
+  const unsigned attempts_;
+
+  // Keep the original reader at the file boundary so retries can use the same
+  // bounded pipe and extractor thread, without buffering a whole file.
+  enum class FileReply { Waiting, Continue, Retry };
+  std::mutex reply_mutex_;
+  std::condition_variable reply_ready_;
+  FileReply file_reply_ = FileReply::Waiting;
 
   std::thread extractor_;
   std::thread uploader_;
