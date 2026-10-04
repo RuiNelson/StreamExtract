@@ -233,6 +233,27 @@
 
   let completionAudioContext = null;
   let completionAudioBuffer = null;
+  let completionAudioUnlocked = false;
+
+  function unlockCompletionSound() {
+    if (completionAudioUnlocked) return;
+    try {
+      if (!completionAudioContext) {
+        completionAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      // Some WebViews only grant background audio to a context that actually starts a source
+      // during the user's Upload action. A source with no buffer outputs silence.
+      const source = completionAudioContext.createBufferSource();
+      source.connect(completionAudioContext.destination);
+      source.start();
+      source.stop();
+      completionAudioContext.resume().catch((error) => console.warn("Could not unlock the completion sound", error));
+      completionAudioUnlocked = true;
+    } catch (error) {
+      // Audio support must never prevent a transfer from starting.
+      console.warn("Could not unlock the completion sound", error);
+    }
+  }
 
   async function prepareCompletionSound() {
     if (!completionAudioContext) {
@@ -693,6 +714,7 @@
     const config = buildConfig();
     if (!config) return;
     if (state.completionSound) {
+      unlockCompletionSound();
       prepareCompletionSound().catch((error) => console.warn("Could not prepare the completion sound", error));
     }
     state.starting = true;
@@ -1240,6 +1262,13 @@
     };
     const status = RESULT_TITLES[res.status] ? res.status : "failed";
     const batch = snap?.batch?.total > 1;
+
+    // A completed batch should not be accidentally submitted again from the setup view.
+    // Keep a partially cancelled queue so its remaining archives can still be retried.
+    if (snap?.batch && snap.batch.completed === snap.batch.total) {
+      state.archives = [];
+      renderArchiveList();
+    }
 
     if (els.dlgPassword.open) els.dlgPassword.close();
     els.phaseDot.dataset.state = status;

@@ -6,11 +6,21 @@ const vm = require("node:vm");
 function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completion_sound: true }), windowApi = {}, tauriApi = {}) {
   const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "si" }));
   const sounds = [];
+  const soundUnlocks = [];
   class AudioContext {
     async resume() {}
     async decodeAudioData(data) { return data; }
     createBufferSource() {
-      return { connect() {}, start() { sounds.push("completed"); } };
+      const source = {
+        buffer: null,
+        connect() {},
+        stop() {},
+        start() {
+          if (source.buffer) sounds.push("completed");
+          else soundUnlocks.push("silent");
+        },
+      };
+      return source;
     }
   }
   const nodes = new Map();
@@ -53,7 +63,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   context.api.state.preferencesBusy = false;
   node("buffer").value = "64";
   node("retries").value = "3";
-  return { ...context.api, inputs, node, sounds };
+  return { ...context.api, inputs, node, sounds, soundUnlocks };
 }
 
 test("progress uses the engine text for ordinary and streamed archives", () => {
@@ -341,6 +351,7 @@ test("starting a batch sends every archive with one shared configuration", async
   assert.equal(start.args.config.directory, "/shared");
   assert.equal(start.args.config.retries, 5);
   assert.equal(app.state.view, "transfer");
+  assert.deepEqual(app.soundUnlocks, ["silent"]);
 });
 
 test("batch progress includes completed archives and streamed progress, and exposes each outcome", async () => {
@@ -388,6 +399,7 @@ test("intermediate archive failure does not notify, and final batch failure noti
     }),
   });
   const job = { finished: false };
+  app.state.archives = ["/tmp/first.zip", "/tmp/second.zip"];
   const snap = { phase: "reading", progress: null, batch: {
     total: 2, completed: 1, current_index: 1, items: [
       { path: "/tmp/first.zip", status: "failed" }, { path: "/tmp/second.zip", status: "running" },
@@ -408,6 +420,8 @@ test("intermediate archive failure does not notify, and final batch failure noti
   assert.equal(app.node("result-title").textContent, "Batch finished with errors");
   assert.equal(app.node("t-archive").textContent, "Batch of 2 archives");
   assert.equal(app.node("total-block").hidden, true);
+  assert.deepEqual(Array.from(app.state.archives), []);
+  assert.equal(app.node("archive-list").hidden, true);
   assert.deepEqual(attention, [1]);
   assert.equal(app.sounds.length, 0);
 });
