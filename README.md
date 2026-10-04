@@ -41,9 +41,12 @@ Keka, `unrar`, ...).
 
 The app offers:
 
-- **Archive**: drop a RAR, ZIP, 7z or tar archive (also compressed: `.tar.gz`,
+- **Archives**: drop RAR, ZIP, 7z or tar archives (also compressed: `.tar.gz`,
   `.tgz`, `.tar.xz`...), or an exFAT volume image (`.exfat`), on the window,
-  or pick it with a file dialog. For multi-volume sets, use the first volume
+  or select several with **Add File**. **Remove File** removes an archive from
+  the queue before uploading. Archives run in order with the same server,
+  directory and other settings; a failed archive does not stop the remaining ones.
+  For multi-volume sets, use the first volume
   (`.part1.rar`, `.zip.001`, `.7z.001`...).
   When the archive is encrypted and no password was typed in, the app asks for
   it, and asks again if it was wrong. **Show passwords** toggles visibility for all
@@ -65,10 +68,12 @@ The app offers:
   username is saved, the app asks whether the username and password may be
   stored unencrypted; if not, they are left out (Memory Clear also forgets the
   answer). The archive password is never stored.
-- **Progress**: the current step, the current file and the whole archive with
+- **Progress**: a compact batch progress row with expandable archive statuses,
+  the current step, the current file and the whole archive with
   their ETAs (for a compressed tar, by how much of the archive has been read),
   the upload and decompression speeds, the buffer fill, a live log, and a final
-  summary with any warnings. **Cancel** stops the transfer and
+  summary with any warnings and results for every archive. **Cancel batch** stops
+  the active transfer, prevents remaining archives from starting, and
   removes the incomplete remote file; closing the window during a transfer asks
   for confirmation first.
 

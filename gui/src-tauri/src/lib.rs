@@ -1,6 +1,7 @@
 //! rarftp-gui backend: exposes the `librarftpcore` transfer jobs and the "memory" file to the
 //! web front-end as Tauri commands (see the contract, section B).
 
+mod batch;
 mod ffi;
 mod ini;
 mod memory;
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
-use ffi::Job;
+use batch::Batch;
 
 /// FTP data connection mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +36,7 @@ impl Mode {
 /// Everything needed to start a transfer. `user` "" is anonymous, `directory` "" the login
 /// directory, `archive_password` `null` means "ask when needed". Deliberately not `Debug`: it
 /// holds passwords.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TransferConfig {
     pub archive: String,
@@ -69,16 +70,16 @@ pub struct ServerSettings {
 /// The one transfer job of the app (if any). A finished job stays here until it is replaced or closed.
 #[derive(Default)]
 struct AppState {
-    job: Mutex<Option<Job>>,
+    job: Mutex<Option<Batch>>,
 }
 
 impl AppState {
-    fn lock(&self) -> MutexGuard<'_, Option<Job>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Batch>> {
         self.job.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Starts a transfer, replacing a finished one; refused while a transfer is still running.
-    fn start(&self, config: &TransferConfig) -> Result<(), String> {
+    fn start(&self, config: &TransferConfig, archives: Vec<String>) -> Result<(), String> {
         let old_job = {
             let mut slot = self.lock();
             if let Some(job) = slot.as_ref() {
@@ -87,7 +88,7 @@ impl AppState {
                     return Err("A transfer is already in progress".to_string());
                 }
             }
-            let job = Job::start(config)?;
+            let job = Batch::start(config, archives)?;
             slot.replace(job)
         };
         drop(old_job); // finished: nothing to wait for
@@ -115,7 +116,7 @@ impl AppState {
     }
 
     /// Takes the job out of the state; dropping it cancels and waits if it is still running.
-    fn take(&self) -> Option<Job> {
+    fn take(&self) -> Option<Batch> {
         self.lock().take()
     }
 }
@@ -158,8 +159,13 @@ async fn preferences_save(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn start_transfer(state: State<'_, AppState>, config: TransferConfig) -> Result<(), String> {
-    state.start(&config)
+async fn start_transfer(
+    state: State<'_, AppState>,
+    config: TransferConfig,
+    archives: Option<Vec<String>>,
+) -> Result<(), String> {
+    let archives = archives.unwrap_or_else(|| vec![config.archive.clone()]);
+    state.start(&config, archives)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -298,14 +304,24 @@ mod tests {
     #[test]
     fn a_failed_job_is_reported_and_can_be_replaced_and_closed() {
         let state = AppState::default();
-        state.start(&missing_archive_config()).unwrap();
+        state
+            .start(
+                &missing_archive_config(),
+                vec![missing_archive_config().archive],
+            )
+            .unwrap();
         let snapshot = wait_until_finished(&state);
         assert_eq!(snapshot["result"]["status"], "failed", "{snapshot}");
         assert_eq!(snapshot["cancelling"], false);
         assert!(snapshot["log"]["next"].is_u64(), "{snapshot}");
 
         // A finished job does not block the next one.
-        state.start(&missing_archive_config()).unwrap();
+        state
+            .start(
+                &missing_archive_config(),
+                vec![missing_archive_config().archive],
+            )
+            .unwrap();
         wait_until_finished(&state);
 
         drop(state.take());
@@ -315,7 +331,12 @@ mod tests {
     #[test]
     fn dropping_a_running_job_cancels_it() {
         let state = AppState::default();
-        state.start(&missing_archive_config()).unwrap();
+        state
+            .start(
+                &missing_archive_config(),
+                vec![missing_archive_config().archive],
+            )
+            .unwrap();
         state.cancel();
         drop(state.take()); // must not hang
     }
