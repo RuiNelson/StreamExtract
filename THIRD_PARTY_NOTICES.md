@@ -1,13 +1,13 @@
 # Third-party notices
 
-`rarftp` itself is MIT licensed. Its binaries include or link the components
+`streamextract` itself is MIT licensed. Its binaries include or link the components
 below, under their own licenses. There are two programs: the command-line
-`rarftp` (UnRAR, the LZMA SDK, FatFs, libarchive and its compression libraries,
-libcurl, FTXUI, CLI11 and {fmt}) and the desktop app `rarftp-gui` (UnRAR, the
+`streamextract` (UnRAR, the LZMA SDK, FatFs, libarchive and its compression libraries,
+libcurl, FTXUI, CLI11 and {fmt}) and the desktop app `streamextract-gui` (UnRAR, the
 LZMA SDK, FatFs, libarchive and its compression libraries, libcurl and {fmt}, inside
-its `librarftpcore` shared library, plus Tauri and the Rust crates below). FTXUI
+its `libstreamextractcore` shared library, plus Tauri and the Rust crates below). FTXUI
 and CLI11 are not in the GUI, and Tauri and the Rust crates are not in the
-`rarftp` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
+`streamextract` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
 zlib, bzip2 and Zstandard for the methods it lacks. libarchive reads the ZIP and
 tar archives, with zlib, bzip2, liblzma (XZ Utils), Zstandard and LZ4 for
 decompression, and with mbed TLS for encrypted ZIP files in the Linux builds
@@ -242,7 +242,7 @@ AES-encrypted ZIP files. Dual-licensed Apache-2.0 or GPL-2.0-or-later; used here
 under the Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0>.
 Source: <https://github.com/Mbed-TLS/mbedtls>.
 
-## Tauri and Rust crates (`rarftp-gui` only)
+## Tauri and Rust crates (`streamextract-gui` only)
 
 The app is built with [Tauri](https://tauri.app) 2 (Copyright (c) 2017 - present
 Tauri Apps Contributors: <https://github.com/tauri-apps/tauri>) and its

@@ -2,7 +2,7 @@
 
 #include "util/remote_path.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 TEST_CASE("sanitize keeps ordinary relative paths") {
   const SanitizedPath r = sanitize_archive_path("dir/sub/file.txt", false);

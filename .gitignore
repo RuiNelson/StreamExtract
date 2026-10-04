@@ -74,7 +74,7 @@ CMakeUserPresets.json
 __pycache__/
 *.sh
 
-# rarftp-gui (Tauri) build output and generated files
+# streamextract-gui (Tauri) build output and generated files
 /gui/src-tauri/target/
 /gui/src-tauri/gen/
 *.sh

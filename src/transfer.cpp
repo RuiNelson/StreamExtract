@@ -16,7 +16,7 @@
 #include "progress.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -810,4 +810,4 @@ void Transfer::remove_partial(const PlannedEntry& planned, uint64_t bytes_sent) 
   }
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

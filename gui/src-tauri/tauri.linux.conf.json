@@ -4,7 +4,7 @@
     "linux": {
       "appimage": {
         "files": {
-          "/usr/lib/rarftp-gui/librarftpcore.so": "../../build/librarftpcore.so"
+          "/usr/lib/streamextract/libstreamextractcore.so": "../../build/libstreamextractcore.so"
         }
       }
     }

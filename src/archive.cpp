@@ -12,7 +12,7 @@
 #include "sevenzip_archive.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -124,4 +124,4 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
   return std::make_unique<RarArchive>(path, mode, std::move(callbacks));
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

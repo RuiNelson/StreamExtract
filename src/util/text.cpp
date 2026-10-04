@@ -5,7 +5,7 @@
 
 #include <fmt/format.h>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -274,4 +274,4 @@ int64_t filetime_to_unix(uint64_t filetime) {
   return static_cast<int64_t>(filetime / 10000000) - kEpochDelta;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -23,7 +23,7 @@
 namespace {
 
 [[noreturn]] void exfat_error(const std::string& message) {
-  throw rarftp::ArchiveError(rarftp::ArchiveError::Kind::Other, "exFAT: " + message);
+  throw streamextract::ArchiveError(streamextract::ArchiveError::Kind::Other, "exFAT: " + message);
 }
 
 uint32_t le32(const uint8_t* bytes) {
@@ -35,7 +35,7 @@ uint64_t le64(const uint8_t* bytes) { return le32(bytes) | (static_cast<uint64_t
 
 std::filesystem::path to_path(const std::string& path) {
 #ifdef _WIN32
-  return std::filesystem::path(rarftp::from_utf8(path));
+  return std::filesystem::path(streamextract::from_utf8(path));
 #else
   return std::filesystem::path(path);
 #endif
@@ -217,7 +217,7 @@ DRESULT disk_ioctl(BYTE drive, BYTE command, void* data) {
 }
 }
 
-namespace rarftp {
+namespace streamextract {
 
 struct ExfatArchive::Impl {
   struct Directory {
@@ -388,4 +388,4 @@ void ExfatArchive::test() {
 
 void ExfatArchive::skip() { impl_->has_current = false; }
 
-}  // namespace rarftp
+}  // namespace streamextract

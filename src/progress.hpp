@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-namespace rarftp {
+namespace streamextract {
 
 // Transfer counters shared between the worker threads and the UI.
 class Progress {
@@ -109,4 +109,4 @@ class SpeedMeter {
 // Seconds needed to transfer `remaining` bytes at `rate`; negative if unknown.
 double eta_seconds(uint64_t remaining, double rate);
 
-}  // namespace rarftp
+}  // namespace streamextract

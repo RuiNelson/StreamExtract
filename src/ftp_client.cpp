@@ -12,7 +12,7 @@
 #include "util/remote_path.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -503,4 +503,4 @@ std::string curl_version_string() {
   return info != nullptr && info->version != nullptr ? info->version : "unknown";
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

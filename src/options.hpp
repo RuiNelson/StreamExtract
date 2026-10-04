@@ -7,7 +7,7 @@
 #include "app_version.hpp"
 #include "ftp_client.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 struct Options {
   std::string file;
@@ -34,4 +34,4 @@ struct ParsedOptions {
 // printed here.
 ParsedOptions parse_options(int argc, char** argv);
 
-}  // namespace rarftp
+}  // namespace streamextract

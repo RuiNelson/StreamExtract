@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace rarftp {
+namespace streamextract {
 
 // Unit of work handed from the extractor thread to the uploader thread.
 struct PipeMessage {
@@ -137,4 +137,4 @@ class Pipe {
   bool aborted_ = false;
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -1,4 +1,4 @@
-//! rarftp-gui backend: exposes the `librarftpcore` transfer jobs and the "memory" file to the
+//! StreamExtract backend: exposes the `libstreamextractcore` transfer jobs and the "memory" file to the
 //! web front-end as Tauri commands (see the contract, section B).
 
 mod batch;
@@ -244,7 +244,7 @@ pub fn run() {
             memory_clear,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building the rarftp-gui application");
+        .expect("error while building the StreamExtract application");
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Exit = event {
@@ -264,7 +264,7 @@ mod tests {
     /// Needs the real library: the archive does not exist, so the job fails by itself, quickly.
     fn missing_archive_config() -> TransferConfig {
         TransferConfig {
-            archive: "/nonexistent/rarftp-gui-test.rar".to_string(),
+            archive: "/nonexistent/streamextract-test.rar".to_string(),
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 1,

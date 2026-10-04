@@ -16,12 +16,12 @@ def main():
 
     root = Path(__file__).resolve().parent.parent
     updates = (
-        ("CMakeLists.txt", r"(project\(rarftp\s+VERSION\s+)([0-9.]+)"),
-        ("gui/src-tauri/Cargo.toml", r'(\[package\]\s+name = "rarftp-gui"\s+version = ")([^"\n]+)'),
-        ("gui/src-tauri/Cargo.lock", r'(\[\[package\]\]\s+name = "rarftp-gui"\s+version = ")([^"\n]+)'),
-        ("src/app_version.hpp", r'("rarftp )([0-9.]+)(?= \()'),
-        ("src/capi/rarftp.h", r'("rarftp )([0-9.]+)(?= \()'),
-        ("gui/src-tauri/src/ffi.rs", r'("rarftp )([0-9.]+)(?= \()'),
+        ("CMakeLists.txt", r"(project\(StreamExtract\s+VERSION\s+)([0-9.]+)"),
+        ("gui/src-tauri/Cargo.toml", r'(\[package\]\s+name = "StreamExtract"\s+version = ")([^"\n]+)'),
+        ("gui/src-tauri/Cargo.lock", r'(\[\[package\]\]\s+name = "StreamExtract"\s+version = ")([^"\n]+)'),
+        ("src/app_version.hpp", r'("StreamExtract )([0-9.]+)(?= \()'),
+        ("src/capi/streamextract.h", r'("StreamExtract )([0-9.]+)(?= \()'),
+        ("gui/src-tauri/src/ffi.rs", r'("StreamExtract )([0-9.]+)(?= \()'),
     )
 
     # Read and validate every location before writing any changes.

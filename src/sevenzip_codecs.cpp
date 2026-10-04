@@ -30,8 +30,8 @@
 #include "7zip/Compress/PpmdRegister.cpp"
 #include "7zip/Crypto/7zAesRegister.cpp"
 
-namespace rarftp {
+namespace streamextract {
 
 void sevenzip_codecs_linked() {}
 
-}  // namespace rarftp
+}  // namespace streamextract

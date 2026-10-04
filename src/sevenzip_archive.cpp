@@ -29,7 +29,7 @@
 #include "../C/7zCrc.h"
 #include "../C/7zVersion.h"
 
-namespace rarftp {
+namespace streamextract {
 
 void sevenzip_codecs_linked();  // sevenzip_codecs.cpp
 
@@ -645,4 +645,4 @@ bool SevenZipArchive::aborted_by_callback() const { return impl_->aborted; }
 
 std::string lzma_sdk_version() { return MY_VERSION_NUMBERS; }
 
-}  // namespace rarftp
+}  // namespace streamextract

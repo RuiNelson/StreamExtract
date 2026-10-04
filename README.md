@@ -1,4 +1,4 @@
-# rarftp
+# StreamExtract
 
 Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume
 image, straight to an FTP
@@ -6,7 +6,7 @@ server, **without extracting it to disk first**.
 
 The usual way to publish a huge archive is to extract it (needing as much free
 space as the unpacked data, with the CPU busy and the network idle) and then
-upload it (network busy, CPU idle). `rarftp` streams each file from the
+upload it (network busy, CPU idle). `StreamExtract` streams each file from the
 decompressor to the FTP data connection instead:
 
 - **No temporary files**: nothing is written to the local disk.
@@ -23,17 +23,17 @@ decompressor to the FTP data connection instead:
 
 It comes in two forms, with the same engine:
 
-- [**rarftp-gui**](#desktop-app-rarftp-gui), a desktop app for Windows, macOS
+- [**StreamExtract**](#desktop-app-streamextract), a desktop app for Windows, macOS
   and Linux.
-- [**rarftp**](#command-line-rarftp), a command-line tool with a full-screen
+- [**sext**](#command-line-sext), a command-line tool with a full-screen
   terminal interface.
 
 Both are published as assets of each release on the repository's
-[**Releases** page](https://github.com/RuiNelson/rarftp/releases), one `.rar`
+[**Releases** page](https://github.com/RuiNelson/streamextract/releases), one `.rar`
 per platform. Extracting them needs a program that reads RAR5 (WinRAR, 7-Zip,
 Keka, `unrar`, ...).
 
-## Desktop app (rarftp-gui)
+## Desktop app (StreamExtract)
 
 <table>
 <tr>
@@ -54,7 +54,7 @@ The app offers:
   When the archive is encrypted and no password was typed in, the app asks for
   it, and asks again if it was wrong. **Show passwords** toggles visibility for all
   password fields, including that prompt, and is saved automatically in
-  `~/.config/rarftp-gui/preferences.ini` (off by default).
+  `~/.config/streamextract/preferences.ini` (off by default).
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
   if missing*.
@@ -62,12 +62,12 @@ The app offers:
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
   to sizes, speeds, log messages and the final summary. The units, buffer size and upload attempts are saved
-  automatically in `~/.config/rarftp-gui/preferences.ini`, separately from
+  automatically in `~/.config/streamextract/preferences.ini`, separately from
   server memory (buffer default: 64 MiB; range: 1–4096 MiB).
   The buffer setting is always entered in MiB. Sizes and speeds are formatted
   by the engine from the original byte counts using the selected units.
 - **Memory Save**, **Memory Recall** and **Memory Clear**: keep the server
-  settings between runs in `~/.config/rarftp-gui/memory.ini` (under the home
+  settings between runs in `~/.config/streamextract/memory.ini` (under the home
   directory on every OS), a **plain text** file. The first time a login with a
   username is saved, the app asks whether the username and password may be
   stored unencrypted; if not, they are left out (Memory Clear also forgets the
@@ -85,33 +85,33 @@ The app offers:
 
 | Platform | Asset | Contents |
 |---|---|---|
-| Windows 10/11 (x64) | `rarftp-gui-windows-x64.rar` | `rarftp-gui.exe` and `rarftpcore.dll` |
-| macOS 12+ (Intel and Apple Silicon) | `rarftp-gui-macos-universal.zip` | `rarftp-gui.app` |
-| Linux (x64, glibc 2.35+) | `rarftp-gui-linux-x64.rar` | `rarftp-gui.AppImage` |
-| Linux (arm64, glibc 2.35+) | `rarftp-gui-linux-arm64.rar` | `rarftp-gui.AppImage` |
+| Windows 10/11 (x64) | `streamextract-gui-windows-x64.rar` | `StreamExtract.exe` and `streamextractcore.dll` |
+| macOS 12+ (Intel and Apple Silicon) | `streamextract-gui-macos-universal.zip` | `StreamExtract.app` |
+| Linux (x64, glibc 2.35+) | `streamextract-gui-linux-x64.rar` | `StreamExtract.AppImage` |
+| Linux (arm64, glibc 2.35+) | `streamextract-gui-linux-arm64.rar` | `StreamExtract.AppImage` |
 
 Each archive also holds `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.md`.
 The builds are portable: there is no installer.
 
 - **Windows**: extract the archive into a folder of its own and run
-  `rarftp-gui.exe`; keep `rarftpcore.dll` next to it. It uses the WebView2
+  `StreamExtract.exe`; keep `streamextractcore.dll` next to it. It uses the WebView2
   runtime that Windows 10 and 11 ship. The executable is not code-signed, so
   SmartScreen may warn the first time (*More info* → *Run anyway*).
-- **macOS**: extract the archive and move `rarftp-gui.app` to `/Applications`.
+- **macOS**: extract the archive and move `StreamExtract.app` to `/Applications`.
   Release builds are signed with a Developer ID and notarized by Apple, so they
   open normally.
 - **Linux**: extract the archive and run the AppImage (it needs FUSE 2, e.g.
   the `libfuse2` package):
 
   ```bash
-  chmod +x rarftp-gui.AppImage
-  ./rarftp-gui.AppImage
+  chmod +x StreamExtract.AppImage
+  ./StreamExtract.AppImage
   ```
 
-## Command line (rarftp)
+## Command line (sext)
 
 ```bash
-rarftp --file archive.rar \
+sext --file archive.rar \
        --host ftp.example.com --port 21 --mode passive \
        --user username --password "password" \
        --directory "/destination/dir" --mkdir
@@ -155,24 +155,24 @@ Exit codes: `0` success, `1` error, `2` invalid command line, `130` cancelled.
 
 | Platform | Asset |
 |---|---|
-| Windows (x64) | `rarftp-cli-windows-x64.rar` |
-| macOS (Intel and Apple Silicon) | `rarftp-cli-macos-universal.rar` |
-| Linux (x64, glibc 2.35+) | `rarftp-cli-linux-x64.rar` |
-| Linux (arm64, glibc 2.35+) | `rarftp-cli-linux-arm64.rar` |
+| Windows (x64) | `streamextract-cli-windows-x64.rar` |
+| macOS (Intel and Apple Silicon) | `streamextract-cli-macos-universal.rar` |
+| Linux (x64, glibc 2.35+) | `streamextract-cli-linux-x64.rar` |
+| Linux (arm64, glibc 2.35+) | `streamextract-cli-linux-arm64.rar` |
 
-Each archive holds the `rarftp` executable, `LICENSE`, `README.md` and
+Each archive holds the `sext` executable, `LICENSE`, `README.md` and
 `THIRD_PARTY_NOTICES.md`. The executables are statically linked and need no
 other installation.
 
 #### Windows
 
-1. Extract `rarftp-cli-windows-x64.rar` into `C:\rarftp`, so that the
-   result is `C:\rarftp\rarftp.exe`.
+1. Extract `streamextract-cli-windows-x64.rar` into `C:\StreamExtract`, so that the
+   result is `C:\StreamExtract\sext.exe`.
 
 2. Run it from a terminal:
 
    ```powershell
-   C:\rarftp\rarftp.exe --version
+   C:\StreamExtract\sext.exe --version
    ```
 
 The binary is not code-signed, so if it does not start at all, check whether
@@ -185,20 +185,20 @@ the archive into a directory of its own and install it:
 
 ```bash
 sudo install -d /usr/local/bin
-sudo install -m 755 rarftp /usr/local/bin/rarftp
-rarftp --version
+sudo install -m 755 sext /usr/local/bin/sext
+sext --version
 ```
 
 #### Linux
 
 ```bash
-unrar x rarftp-cli-linux-x64.rar rarftp/        # or: 7z x -orarftp rarftp-linux-x64.rar
-sudo install -m 755 rarftp/rarftp /usr/local/bin/rarftp
-rarftp --version
+unrar x streamextract-cli-linux-x64.rar sext/        # or: 7z x -osext streamextract-cli-linux-x64.rar
+sudo install -m 755 sext/sext /usr/local/bin/sext
+sext --version
 ```
 
 Without root, install it into a directory in your `PATH` instead, for example
-`install -D -m 755 rarftp/rarftp ~/.local/bin/rarftp`. The binary is built on
+`install -D -m 755 sext/sext ~/.local/bin/sext`. The binary is built on
 Ubuntu 22.04, so it runs on distributions with glibc 2.35 or newer; libstdc++
 is linked statically.
 
@@ -228,7 +228,7 @@ to decompress earlier entries again. A source error, cancellation, or exhausted
 upload attempts removes the incomplete remote file.
 
 The command line links this engine statically. The app uses it through a
-shared library (`librarftpcore`, C API in `src/capi/rarftp.h`).
+shared library (`libstreamextractcore`, C API in `src/capi/streamextract.h`).
 
 Behaviour, in both:
 
@@ -270,7 +270,7 @@ Behaviour, in both:
   Latin-1.
 - **Compressed tar is read once, as it is uploaded.** Its files can only be
   reached by decompressing everything before them, so instead of listing the
-  archive first, rarftp plans each file when it reaches it and checks the
+  archive first, StreamExtract plans each file when it reaches it and checks the
   server just before sending it, using the same size rules. Complete files and
   existing prefixes of incomplete files are decompressed and dropped; only the
   remaining bytes are sent. There are no totals until the end: the progress
@@ -291,7 +291,7 @@ Behaviour, in both:
   most 32768 sectors per cluster; volumes outside these limits are rejected.
 - The **format** is recognized by the content of the file, not by its extension.
 - **Names** of ZIP and tar archives are uploaded as Unicode NFC, the same
-  whatever system runs rarftp; RAR, 7z and exFAT names are uploaded as the archive
+  whatever system runs StreamExtract; RAR, 7z and exFAT names are uploaded as the archive
   stores them.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
@@ -324,7 +324,7 @@ To update the project version everywhere (including the GUI and API examples),
 run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
 
 Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
-used when present; otherwise, or with `-DRARFTP_BUNDLED_CURL=ON`, an FTP-only
+used when present; otherwise, or with `-DSTREAMEXTRACT_BUNDLED_CURL=ON`, an FTP-only
 libcurl is built from source). UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
@@ -370,7 +370,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The binary is `build/rarftp`. UnRAR, the LZMA SDK, FatFs and libarchive are always
+The binary is `build/sext`. UnRAR, the LZMA SDK, FatFs and libarchive are always
 linked statically into it.
 
 ### Desktop app
@@ -385,23 +385,23 @@ cargo install tauri-cli --version "^2" --locked
 To build manually, run these commands from the repository root:
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRARFTP_BUILD_LIBRARY=ON
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTREAMEXTRACT_BUILD_LIBRARY=ON
 cmake --build build
 
 cd gui
-cargo tauri build     # macOS: src-tauri/target/release/bundle/macos/rarftp-gui.app
+cargo tauri build     # macOS: src-tauri/target/release/bundle/macos/StreamExtract.app
 cargo tauri dev       # or: run the app without bundling it
 ```
 
-The library is `build/librarftpcore.dylib` (`.so` on Linux, `rarftpcore.dll` on
+The library is `build/libstreamextractcore.dylib` (`.so` on Linux, `streamextractcore.dll` on
 Windows). UnRAR, the LZMA SDK, FatFs, libarchive and {fmt} are linked statically into it, and it exports only the
-`rarftp_*` functions of `src/capi/rarftp.h`; the `rarftp` executable does not use
-it. Add `-DRARFTP_BUNDLED_CURL=ON` to link libcurl statically too, which makes
+`streamextract_*` functions of `src/capi/streamextract.h`; the `sext` executable does not use
+it. Add `-DSTREAMEXTRACT_BUNDLED_CURL=ON` to link libcurl statically too, which makes
 the library self-contained instead of relying on the system's libcurl.
 
 On Linux `cargo tauri build` makes an AppImage; on Windows use
-`cargo tauri build --no-bundle` and keep `rarftpcore.dll` next to
-`src-tauri/target/release/rarftp-gui.exe` (the build copies it there). Linux
+`cargo tauri build --no-bundle` and keep `streamextractcore.dll` next to
+`src-tauri/target/release/StreamExtract.exe` (the build copies it there). Linux
 needs the WebKitGTK development packages that Tauri documents in its
 [prerequisites](https://v2.tauri.app/start/prerequisites/#linux); on
 Debian/Ubuntu, for example:
@@ -412,15 +412,15 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev
 ```
 
 The Rust build looks for the library in `build/` (and `build/Release`); set
-`RARFTP_LIB_DIR` to the directory that holds it to use another build directory.
+`STREAMEXTRACT_LIB_DIR` to the directory that holds it to use another build directory.
 The bundling settings (`gui/src-tauri/tauri.<os>.conf.json`) also name the
 library under `../../build/`, so with another directory override that path too,
 with the Tauri CLI's `--config` (a JSON merge into its configuration, handed to
 the build script as well). On macOS:
 
 ```bash
-RARFTP_LIB_DIR=/path/to/dir cargo tauri build \
-    --config '{"bundle":{"macOS":{"frameworks":["/path/to/dir/librarftpcore.dylib"]}}}'
+STREAMEXTRACT_LIB_DIR=/path/to/dir cargo tauri build \
+    --config '{"bundle":{"macOS":{"frameworks":["/path/to/dir/libstreamextractcore.dylib"]}}}'
 ```
 
 A macOS app built from source is signed ad hoc, not notarized, so Gatekeeper
@@ -428,7 +428,7 @@ blocks it once it has been copied to another Mac. Remove the quarantine
 attribute there to open it:
 
 ```bash
-xattr -dr com.apple.quarantine rarftp-gui.app
+xattr -dr com.apple.quarantine StreamExtract.app
 ```
 
 ### Continuous integration
@@ -457,13 +457,13 @@ need 7-Zip (`7zz`, found in `PATH` or given with `--7z`), Info-ZIP's `zip`, the
 `lz4` command (for `.tar.lz4`) or Python 3.14+ (for Zstandard):
 
 ```bash
-python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar --7z /path/to/7zz
+python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --7z /path/to/7zz
 ```
 
 `--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
 container address is reachable directly; Docker Desktop only publishes ports.
 
-With the library built (`-DRARFTP_BUILD_LIBRARY=ON`), `ctest` also runs a
+With the library built (`-DSTREAMEXTRACT_BUILD_LIBRARY=ON`), `ctest` also runs a
 smoke test of its C API, and `--lib` adds tests that drive the library the way
 the app does (through its C API, with `ctypes`): uploads, re-runs, multi-volume
 and encrypted archives, ZIP, 7z and compressed tar, the password prompt, errors
@@ -471,8 +471,8 @@ and cancelling, checking the JSON state at every poll. They are
 named `lib_*`:
 
 ```bash
-python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar \
-        --lib build/librarftpcore.dylib -k lib_
+python3 tests/integration/run.py --sext build/sext --rar /path/to/rar \
+        --lib build/libstreamextractcore.dylib -k lib_
 ```
 
 The Rust side has its own unit tests, which link the built library:

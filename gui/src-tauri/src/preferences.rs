@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn preferences_persist_separately_from_memory() {
         let dir = std::env::temp_dir().join(format!(
-            "rarftp-preferences-{}-{}",
+            "streamextract-preferences-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

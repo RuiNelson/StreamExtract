@@ -13,17 +13,17 @@
 #include "logger.hpp"
 #include "plan.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 namespace {
-const std::string kImage = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
+const std::string kImage = std::string(STREAMEXTRACT_TEST_FIXTURES) + "/volume.exfat";
 
 struct CopyImage {
   std::filesystem::path directory;
   std::string path;
   explicit CopyImage(const std::string& name = "image.exfat") {
     directory = std::filesystem::temp_directory_path() /
-                ("rarftp-exfat-" + std::to_string(reinterpret_cast<uintptr_t>(this)));
+                ("streamextract-exfat-" + std::to_string(reinterpret_cast<uintptr_t>(this)));
     std::filesystem::create_directories(directory);
     path = (directory / name).string();
     std::filesystem::copy_file(kImage, path);
@@ -151,7 +151,7 @@ TEST_CASE("exFAT refuses truncated and split images and releases failed mounts")
 }
 
 TEST_CASE("exFAT rejects a real hdiutil disk image with a partition table") {
-  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/partitioned.exfat";
+  const std::string path = std::string(STREAMEXTRACT_TEST_FIXTURES) + "/partitioned.exfat";
   CHECK_THROWS_WITH_AS(list(path),
                        "exFAT: expected a single raw exFAT volume; disk images with a partition table, compressed "
                        "or encrypted images are not supported",

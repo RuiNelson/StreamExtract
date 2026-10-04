@@ -29,27 +29,27 @@ jobs:
           - name: linux-x64
             # Oldest hosted image, for the widest glibc compatibility.
             os: ubuntu-22.04
-            exe: rarftp
+            exe: sext
             configure: >-
               -G Ninja
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: linux-arm64
             # Native arm64 runner, same glibc baseline as linux-x64.
             os: ubuntu-22.04-arm
-            exe: rarftp
+            exe: sext
             configure: >-
               -G Ninja
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: macos-universal
             os: macos-latest
-            exe: rarftp
+            exe: sext
             configure: >-
               -G Ninja
               "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
               -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
           - name: windows-x64
             os: windows-latest
-            exe: Release/rarftp.exe
+            exe: Release/sext.exe
             # Static CRT: the binary must not need the VC++ redistributable.
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
@@ -138,7 +138,7 @@ jobs:
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DRARFTP_BUNDLED_CURL=ON
+          -DSTREAMEXTRACT_BUNDLED_CURL=ON
           ${{ matrix.configure }}
 
       - name: Build
@@ -197,7 +197,7 @@ jobs:
           - name: windows-x64
             os: windows-latest
             # Static CRT everywhere: no VC++ redistributable needed. Portable
-            # build: rarftp-gui.exe next to rarftpcore.dll, no installer.
+            # build: StreamExtract.exe next to streamextractcore.dll, no installer.
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
               -DCURL_STATIC_CRT=ON
@@ -313,12 +313,12 @@ jobs:
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DRARFTP_BUNDLED_CURL=ON
-          -DRARFTP_BUILD_LIBRARY=ON
+          -DSTREAMEXTRACT_BUNDLED_CURL=ON
+          -DSTREAMEXTRACT_BUILD_LIBRARY=ON
           ${{ matrix.configure }}
 
       - name: Build the library
-        run: cmake --build build --config Release --target rarftpcore rarftpcore_tests
+        run: cmake --build build --config Release --target streamextractcore streamextractcore_tests
 
       - name: Library tests
         run: ctest --test-dir build --build-config Release --output-on-failure -R capi
@@ -342,22 +342,22 @@ jobs:
           mkdir dist
           case "${{ matrix.name }}" in
             linux-*)
-              cp gui/src-tauri/target/release/bundle/appimage/*.AppImage dist/rarftp-gui.AppImage
-              chmod +x dist/rarftp-gui.AppImage
+              cp gui/src-tauri/target/release/bundle/appimage/*.AppImage dist/StreamExtract.AppImage
+              chmod +x dist/StreamExtract.AppImage
               # The library must be inside the AppImage and resolvable from the executable.
-              (cd dist && ./rarftp-gui.AppImage --appimage-extract >/dev/null)
-              ldd dist/squashfs-root/usr/bin/rarftp-gui | tee /dev/stderr | grep -q "rarftpcore.so => .*squashfs-root"
+              (cd dist && ./StreamExtract.AppImage --appimage-extract >/dev/null)
+              ldd dist/squashfs-root/usr/bin/StreamExtract | tee /dev/stderr | grep -q "streamextractcore.so => .*squashfs-root"
               rm -rf dist/squashfs-root
               ;;
             macos-*)
-              app=gui/src-tauri/target/universal-apple-darwin/release/bundle/macos/rarftp-gui.app
-              otool -L "$app/Contents/MacOS/rarftp-gui" "$app/Contents/Frameworks/librarftpcore.dylib"
-              lipo -info "$app/Contents/MacOS/rarftp-gui" "$app/Contents/Frameworks/librarftpcore.dylib"
+              app=gui/src-tauri/target/universal-apple-darwin/release/bundle/macos/StreamExtract.app
+              otool -L "$app/Contents/MacOS/StreamExtract" "$app/Contents/Frameworks/libstreamextractcore.dylib"
+              lipo -info "$app/Contents/MacOS/StreamExtract" "$app/Contents/Frameworks/libstreamextractcore.dylib"
               codesign --verify --deep --strict "$app"
               cp -R "$app" dist/
               ;;
             windows-*)
-              cp gui/src-tauri/target/release/rarftp-gui.exe build/Release/rarftpcore.dll dist/
+              cp gui/src-tauri/target/release/StreamExtract.exe build/Release/streamextractcore.dll dist/
               ;;
           esac
           cp LICENSE README.md THIRD_PARTY_NOTICES.md dist/
@@ -402,53 +402,53 @@ jobs:
       - name: Create archives
         run: |
           # Artifact download drops the executable bit.
-          chmod +x bin/bin-linux-x64/rarftp bin/bin-linux-arm64/rarftp bin/bin-macos-universal/rarftp
+          chmod +x bin/bin-linux-x64/sext bin/bin-linux-arm64/sext bin/bin-macos-universal/sext
           mkdir out
           for name in linux-x64 linux-arm64 macos-universal windows-x64; do
-            (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-cli-${name}.rar" .)
+            (cd "bin/bin-${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/streamextract-cli-${name}.rar" .)
             mkdir "gui/${name}"
             tar -xf "gui/gui-${name}/gui.tar" -C "gui/${name}"
-            (cd "gui/${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/rarftp-gui-${name}.rar" .)
+            (cd "gui/${name}" && "$GITHUB_WORKSPACE/rar/rar" a -r -m5 -ma5 "$GITHUB_WORKSPACE/out/streamextract-gui-${name}.rar" .)
           done
           ls -l out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-linux-x64
-          path: out/rarftp-cli-linux-x64.rar
+          name: streamextract-linux-x64
+          path: out/streamextract-cli-linux-x64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-linux-arm64
-          path: out/rarftp-cli-linux-arm64.rar
+          name: streamextract-linux-arm64
+          path: out/streamextract-cli-linux-arm64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-macos-universal
-          path: out/rarftp-cli-macos-universal.rar
+          name: streamextract-macos-universal
+          path: out/streamextract-cli-macos-universal.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-windows-x64
-          path: out/rarftp-cli-windows-x64.rar
+          name: streamextract-windows-x64
+          path: out/streamextract-cli-windows-x64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-gui-linux-x64
-          path: out/rarftp-gui-linux-x64.rar
+          name: streamextract-gui-linux-x64
+          path: out/streamextract-gui-linux-x64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-gui-linux-arm64
-          path: out/rarftp-gui-linux-arm64.rar
+          name: streamextract-gui-linux-arm64
+          path: out/streamextract-gui-linux-arm64.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-gui-macos-universal
-          path: out/rarftp-gui-macos-universal.rar
+          name: streamextract-gui-macos-universal
+          path: out/streamextract-gui-macos-universal.rar
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: rarftp-gui-windows-x64
-          path: out/rarftp-gui-windows-x64.rar
+          name: streamextract-gui-windows-x64
+          path: out/streamextract-gui-windows-x64.rar
           if-no-files-found: error

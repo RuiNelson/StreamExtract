@@ -7,7 +7,7 @@
 
 #include "archive.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 // ZIP and tar archives, read with libarchive. (7z archives are recognized with
 // libarchive_format() but read by SevenZipArchive.)
@@ -41,4 +41,4 @@ std::optional<ArchiveFormat> libarchive_format(const std::vector<std::string>& p
 // libarchive version, e.g. "3.8.9".
 std::string libarchive_version();
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -15,7 +15,7 @@
 #include "util/remote_path.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -328,4 +328,4 @@ void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
   plan.recount();
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

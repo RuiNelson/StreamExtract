@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""End-to-end tests for rarftp.
+"""End-to-end tests for streamextract.
 
 Creates archives with RARLAB's `rar`, Python's zipfile and tarfile, 7-Zip
-(`7zz`) and Info-ZIP's `zip`, uploads them with rarftp to vsftpd running in Docker (image
+(`7zz`) and Info-ZIP's `zip`, uploads them with streamextract to vsftpd running in Docker (image
 delfer/alpine-ftp-server) and checks what arrives.
 
-    python3 tests/integration/run.py --rarftp build/rarftp --rar /path/to/rar [--7z PATH] [--big] [--lib PATH]
+    python3 tests/integration/run.py --sext build/sext --rar /path/to/rar [--7z PATH] [--big] [--lib PATH]
 
-With --lib (librarftpcore.dylib / .so / rarftpcore.dll, built with
--DRARFTP_BUILD_LIBRARY=ON) the `lib_*` tests also drive the shared library used
-by rarftp-gui through its C API, with ctypes. Select them with `-k lib_`.
+With --lib (libstreamextractcore.dylib / .so / streamextractcore.dll, built with
+-DSTREAMEXTRACT_BUILD_LIBRARY=ON) the `lib_*` tests also drive the shared library used
+by StreamExtract through its C API, with ctypes. Select them with `-k lib_`.
 
 Needs Python 3.9+ (standard library only), Docker and `rar`. The tests that
 need 7-Zip or Info-ZIP's `zip` are skipped without them; the Zstandard ZIP test
@@ -62,7 +62,7 @@ class Skipped(Exception):
 def check(condition, message, output=None):
     if not condition:
         if output:
-            message += "\n----- rarftp output -----\n" + output.rstrip()[-4000:] + "\n-------------------------"
+            message += "\n----- streamextract output -----\n" + output.rstrip()[-4000:] + "\n-------------------------"
         raise TestFailure(message)
 
 
@@ -151,7 +151,7 @@ class Server:
         for attempt in range(3):  # Retry if Docker finds one of the ports taken.
             pasv = free_port_range(10)
             control = free_port()
-            self.name = f"rarftp-it-{uuid.uuid4().hex[:8]}"
+            self.name = f"streamextract-it-{uuid.uuid4().hex[:8]}"
             proc = subprocess.run(["docker", "run", "-d", "--rm", "--name", self.name,
                                    "-e", f"USERS={user}", "-e", f"MIN_PORT={pasv}", "-e", f"MAX_PORT={pasv + 9}",
                                    "-v", f"{self.data_dir}:{HOME}",
@@ -434,11 +434,11 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
 
 
 # --------------------------------------------------------------------------
-# C API of librarftpcore (src/capi/rarftp.h), through ctypes
+# C API of libstreamextractcore (src/capi/streamextract.h), through ctypes
 
 
-class RarftpJobConfig(ctypes.Structure):
-    """rarftp_job_config: same fields, same order as in rarftp.h."""
+class StreamExtractJobConfig(ctypes.Structure):
+    """streamextract_job_config: same fields, same order as in streamextract.h."""
 
     _fields_ = [
         ("archive", ctypes.c_char_p),
@@ -456,35 +456,35 @@ class RarftpJobConfig(ctypes.Structure):
 
 
 class Library:
-    """librarftpcore loaded with the prototypes of rarftp.h."""
+    """libstreamextractcore loaded with the prototypes of streamextract.h."""
 
     def __init__(self, path):
         self.path = str(path)
         dll = ctypes.CDLL(self.path)
         # The job is an opaque pointer; strings returned by the library are
-        # read through c_void_p so that they can be handed back to rarftp_free.
-        dll.rarftp_version.argtypes = []
-        dll.rarftp_version.restype = ctypes.c_char_p  # Static storage: a copy is fine.
-        dll.rarftp_job_start.argtypes = [ctypes.POINTER(RarftpJobConfig)]
-        dll.rarftp_job_start.restype = ctypes.c_void_p
-        dll.rarftp_job_start_with_units.argtypes = [ctypes.POINTER(RarftpJobConfig), ctypes.c_int]
-        dll.rarftp_job_start_with_units.restype = ctypes.c_void_p
-        dll.rarftp_job_start_with_options.argtypes = [ctypes.POINTER(RarftpJobConfig), ctypes.c_int, ctypes.c_uint]
-        dll.rarftp_job_start_with_options.restype = ctypes.c_void_p
-        dll.rarftp_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
-        dll.rarftp_job_poll.restype = ctypes.c_void_p
-        dll.rarftp_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-        dll.rarftp_job_answer_password.restype = None
-        dll.rarftp_job_cancel.argtypes = [ctypes.c_void_p]
-        dll.rarftp_job_cancel.restype = None
-        dll.rarftp_job_free.argtypes = [ctypes.c_void_p]
-        dll.rarftp_job_free.restype = None
-        dll.rarftp_free.argtypes = [ctypes.c_void_p]
-        dll.rarftp_free.restype = None
+        # read through c_void_p so that they can be handed back to streamextract_free.
+        dll.streamextract_version.argtypes = []
+        dll.streamextract_version.restype = ctypes.c_char_p  # Static storage: a copy is fine.
+        dll.streamextract_job_start.argtypes = [ctypes.POINTER(StreamExtractJobConfig)]
+        dll.streamextract_job_start.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_units.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int]
+        dll.streamextract_job_start_with_units.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_options.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int, ctypes.c_uint]
+        dll.streamextract_job_start_with_options.restype = ctypes.c_void_p
+        dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        dll.streamextract_job_poll.restype = ctypes.c_void_p
+        dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        dll.streamextract_job_answer_password.restype = None
+        dll.streamextract_job_cancel.argtypes = [ctypes.c_void_p]
+        dll.streamextract_job_cancel.restype = None
+        dll.streamextract_job_free.argtypes = [ctypes.c_void_p]
+        dll.streamextract_job_free.restype = None
+        dll.streamextract_free.argtypes = [ctypes.c_void_p]
+        dll.streamextract_free.restype = None
         self.dll = dll
 
     def version(self):
-        return self.dll.rarftp_version().decode("utf-8")
+        return self.dll.streamextract_version().decode("utf-8")
 
 
 LIB_STATE_KEYS = {"phase", "cancelling", "prompt", "archive", "target", "mode", "user", "probe", "progress",
@@ -517,7 +517,7 @@ def is_number(value):
 
 
 class LibJob:
-    """A rarftp_job: polls it (checking the JSON contract at every poll), collects its log through the
+    """A streamextract_job: polls it (checking the JSON contract at every poll), collects its log through the
     cursor and answers the archive password prompt. Use it as a context manager: leaving it frees the
     job, which cancels and waits for it if it is still running."""
 
@@ -526,7 +526,7 @@ class LibJob:
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
         # The library copies the strings when the job starts; every string is UTF-8.
-        self._config = RarftpJobConfig(**{key: value.encode("utf-8") if isinstance(value, str) else value
+        self._config = StreamExtractJobConfig(**{key: value.encode("utf-8") if isinstance(value, str) else value
                                           for key, value in values.items()})
         self.lib = lib
         self.cursor = 0  # Sequence number of the next log line to fetch.
@@ -536,11 +536,11 @@ class LibJob:
         self._phase = 0
         self._had_progress = False
         if retries is not None:
-            self.handle = lib.dll.rarftp_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
+            self.handle = lib.dll.streamextract_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
         else:
-            self.handle = (lib.dll.rarftp_job_start_with_units(ctypes.byref(self._config), 1) if si_units
-                           else lib.dll.rarftp_job_start(ctypes.byref(self._config)))
-        check(self.handle, "rarftp_job_start returned NULL")
+            self.handle = (lib.dll.streamextract_job_start_with_units(ctypes.byref(self._config), 1) if si_units
+                           else lib.dll.streamextract_job_start(ctypes.byref(self._config)))
+        check(self.handle, "streamextract_job_start returned NULL")
 
     def __enter__(self):
         return self
@@ -550,16 +550,16 @@ class LibJob:
 
     def close(self):
         if self.handle:
-            self.lib.dll.rarftp_job_free(self.handle)
+            self.lib.dll.streamextract_job_free(self.handle)
             self.handle = None
 
     def cancel(self):
-        self.lib.dll.rarftp_job_cancel(self.handle)
+        self.lib.dll.streamextract_job_cancel(self.handle)
 
     def answer_password(self, password):
         """None declines the prompt."""
         data = None if password is None else password.encode("utf-8")
-        self.lib.dll.rarftp_job_answer_password(self.handle, data)
+        self.lib.dll.streamextract_job_answer_password(self.handle, data)
 
     @property
     def result(self):
@@ -572,16 +572,16 @@ class LibJob:
         return "last state: " + json.dumps(state, indent=1, ensure_ascii=False) + "\nlog:\n" + "\n".join(lines)
 
     def _fetch(self, cursor):
-        raw = self.lib.dll.rarftp_job_poll(self.handle, cursor)
-        check(raw, "rarftp_job_poll returned NULL")
+        raw = self.lib.dll.streamextract_job_poll(self.handle, cursor)
+        check(raw, "streamextract_job_poll returned NULL")
         try:
             text = ctypes.string_at(raw).decode("utf-8")  # Read, then hand the memory back to the library.
         finally:
-            self.lib.dll.rarftp_free(raw)
+            self.lib.dll.streamextract_free(raw)
         try:
             state = json.loads(text)
         except ValueError as error:
-            raise TestFailure(f"rarftp_job_poll returned invalid JSON ({error}): {text[:500]!r}") from error
+            raise TestFailure(f"streamextract_job_poll returned invalid JSON ({error}): {text[:500]!r}") from error
         check(isinstance(state, dict), f"the state is not a JSON object: {text[:200]!r}")
         return state
 
@@ -757,7 +757,7 @@ def lib_log_text(job):
 
 class Env:
     def __init__(self, args, work):
-        self.rarftp = str(Path(args.rarftp).resolve())
+        self.sext = str(Path(args.sext).resolve())
         self.sevenzip = shutil.which(args.sevenzip) if args.sevenzip else (shutil.which("7zz") or shutil.which("7z"))
         self.infozip = shutil.which("zip")
         self.lz4 = shutil.which("lz4")
@@ -787,7 +787,7 @@ class Env:
         return self.server.data_dir.joinpath(*parts)
 
     def command(self, archive, *args, login=True, host=None, no_tui=True):
-        cmd = [self.rarftp, "--file", self.archive(archive), "--host", host or self.server.host,
+        cmd = [self.sext, "--file", self.archive(archive), "--host", host or self.server.host,
                "--port", str(self.server.port)]
         if login:
             cmd += ["--user", USER, "--password", PASSWORD]
@@ -821,15 +821,15 @@ class Env:
 
 def test_unrar_is_linked_statically(env):
     if sys.platform == "darwin":
-        deps = subprocess.run(["otool", "-L", env.rarftp], capture_output=True, text=True).stdout
+        deps = subprocess.run(["otool", "-L", env.sext], capture_output=True, text=True).stdout
     elif sys.platform.startswith("linux"):
-        deps = subprocess.run(["ldd", env.rarftp], capture_output=True, text=True).stdout
+        deps = subprocess.run(["ldd", env.sext], capture_output=True, text=True).stdout
     else:
         raise Skipped("no otool/ldd")
-    check("unrar" not in deps.lower(), f"rarftp loads UnRAR as a shared library:\n{deps}")
-    symbols = subprocess.run(["nm", env.rarftp], capture_output=True, text=True).stdout
+    check("unrar" not in deps.lower(), f"streamextract loads UnRAR as a shared library:\n{deps}")
+    symbols = subprocess.run(["nm", env.sext], capture_output=True, text=True).stdout
     for name in ("RAROpenArchiveEx", "RARReadHeaderEx", "RARProcessFileW"):
-        check(re.search(rf"\s[Tt]\s_?{name}$", symbols, re.MULTILINE), f"{name} is not defined inside rarftp")
+        check(re.search(rf"\s[Tt]\s_?{name}$", symbols, re.MULTILINE), f"{name} is not defined inside streamextract")
 
 
 def test_basic_upload(env):
@@ -1060,13 +1060,13 @@ def test_encrypted_headers(env):
 
 
 def test_anonymous_login_is_attempted(env):
-    # Without --user rarftp logs in anonymously, which this server refuses.
+    # Without --user streamextract logs in anonymously, which this server refuses.
     out = env.run("tiny.rar", "--directory", "anon", login=False, expect=1)
     check("cannot log in" in out and "530" in out, "anonymous login refusal not reported", out)
 
 
 def test_wrong_ftp_password(env):
-    cmd = [env.rarftp, "--file", env.archive("tiny.rar"), "--host", env.server.host, "--port",
+    cmd = [env.sext, "--file", env.archive("tiny.rar"), "--host", env.server.host, "--port",
            str(env.server.port), "--user", USER, "--password", "not-the-password", "--no-tui"]
     proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
     out = proc.stdout + proc.stderr
@@ -1324,7 +1324,7 @@ def test_7z_rerun_and_repair(env):
 
 
 def test_7z_methods_and_directories(env):
-    # BZip2 and Deflate: rarftp's own decoders (7-Zip's SDK lacks them); BCJ2 has four streams per block.
+    # BZip2 and Deflate: streamextract's own decoders (7-Zip's SDK lacks them); BCJ2 has four streams per block.
     for name, tree, directory in (("bzip2.7z", "main", "bzip2-7z"), ("deflate.7z", "main", "deflate-7z"),
                                   ("ppmd.7z", "main", "ppmd-7z"), ("bcj2.7z", "main", "bcj2-7z"),
                                   ("dirs.7z", "dirs", "dirs-7z")):
@@ -1380,7 +1380,7 @@ def test_7z_encrypted_multivolume(env):
 
 
 def test_7z_encrypted_methods(env):
-    # Methods 7-Zip's SDK lacks, decrypted by it and decoded by rarftp's own decoders.
+    # Methods 7-Zip's SDK lacks, decrypted by it and decoded by streamextract's own decoders.
     for name in ("encrypted-bzip2.7z", "encrypted-deflate.7z"):
         env.require(name)
         directory = "enc-" + name.replace(".", "-")
@@ -1499,10 +1499,10 @@ def answer_with(*passwords):
 def test_lib_version(env):
     require_lib(env)
     version = env.lib.version()
-    check(version.startswith("rarftp "), f"unexpected version string {version!r}")
-    check(re.fullmatch(r"rarftp \d+\.\d+\.\d+\S* \(UnRAR .+, libarchive .+, libcurl .+\)", version),
+    check(version.startswith("StreamExtract "), f"unexpected version string {version!r}")
+    check(re.fullmatch(r"StreamExtract \d+\.\d+\.\d+\S* \(UnRAR .+, libarchive .+, libcurl .+\)", version),
           f"unexpected version string {version!r}")
-    cli = subprocess.run([env.rarftp, "--version"], capture_output=True, text=True, timeout=60)
+    cli = subprocess.run([env.sext, "--version"], capture_output=True, text=True, timeout=60)
     check(cli.stdout.split()[:2] == version.split()[:2],
           f"library {version!r} and command line {cli.stdout.strip()!r} have different versions")
 
@@ -1881,18 +1881,18 @@ TESTS = [
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--rarftp", required=True, help="path to the rarftp binary")
+    parser.add_argument("--sext", required=True, help="path to the sext binary")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
     parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")
     parser.add_argument("--big", action="store_true", help="also test a 4.5 GiB file")
-    parser.add_argument("--lib", help="path to librarftpcore (.dylib/.so/.dll): also test its C API (lib_* tests)")
+    parser.add_argument("--lib", help="path to libstreamextractcore (.dylib/.so/.dll): also test its C API (lib_* tests)")
     parser.add_argument("--keep", action="store_true", help="keep the work directory")
     parser.add_argument("-k", dest="filter", default="", help="only run tests whose name contains this")
     args = parser.parse_args()
     if args.lib and not Path(args.lib).is_file():
         parser.error(f"--lib: {args.lib} is not a file")
 
-    work = Path(tempfile.mkdtemp(prefix="rarftp-it-"))
+    work = Path(tempfile.mkdtemp(prefix="streamextract-it-"))
     print(f"work directory: {work}")
     failures = 0
     env = None

@@ -1,4 +1,4 @@
-//! Links `librarftpcore` (built from the C++ sources in the repository root) and
+//! Links `libstreamextractcore` (built from the C++ sources in the repository root) and
 //! makes the dynamic loader find it: next to the executable or in the bundle
 //! for installed builds, and in the CMake build directory for development builds.
 
@@ -7,22 +7,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const BUILD_HINT: &str =
-    "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DRARFTP_BUILD_LIBRARY=ON \
+    "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTREAMEXTRACT_BUILD_LIBRARY=ON \
 && cmake --build build";
 
 /// File name of the shared library on the target platform.
 fn library_file_name(target_os: &str) -> &'static str {
     match target_os {
-        "windows" => "rarftpcore.dll",
-        "macos" => "librarftpcore.dylib",
-        _ => "librarftpcore.so",
+        "windows" => "streamextractcore.dll",
+        "macos" => "libstreamextractcore.dylib",
+        _ => "libstreamextractcore.so",
     }
 }
 
-/// Directory holding the library: `RARFTP_LIB_DIR`, or the CMake build directory of the repository
+/// Directory holding the library: `STREAMEXTRACT_LIB_DIR`, or the CMake build directory of the repository
 /// (`build/`, and `build/Release` for multi-config generators on Windows).
 fn find_library_dir(manifest_dir: &Path, file_name: &str) -> PathBuf {
-    let candidates: Vec<PathBuf> = match env::var_os("RARFTP_LIB_DIR") {
+    let candidates: Vec<PathBuf> = match env::var_os("STREAMEXTRACT_LIB_DIR") {
         Some(dir) if !dir.is_empty() => vec![PathBuf::from(dir)],
         _ => {
             let build = manifest_dir.join("..").join("..").join("build");
@@ -37,9 +37,9 @@ fn find_library_dir(manifest_dir: &Path, file_name: &str) -> PathBuf {
         .map(|dir| dir.display().to_string())
         .collect();
     panic!(
-        "\n\nThe rarftp shared library `{file_name}` was not found (looked in: {}).\n\
+        "\n\nThe streamextract shared library `{file_name}` was not found (looked in: {}).\n\
          Build it first, from the repository root:\n\n    {BUILD_HINT}\n\n\
-         or set RARFTP_LIB_DIR to the directory that contains it.\n",
+         or set STREAMEXTRACT_LIB_DIR to the directory that contains it.\n",
         searched.join(", ")
     );
 }
@@ -56,7 +56,7 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let debug = env::var("PROFILE").is_ok_and(|profile| profile == "debug");
 
-    println!("cargo:rerun-if-env-changed=RARFTP_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=STREAMEXTRACT_LIB_DIR");
     println!("cargo:rerun-if-changed=build.rs");
 
     // Checked before `tauri_build`, which also looks at the bundled library and would fail less clearly.
@@ -68,7 +68,7 @@ fn main() {
     tauri_build::build();
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=dylib=rarftpcore");
+    println!("cargo:rustc-link-lib=dylib=streamextractcore");
 
     match target_os.as_str() {
         "macos" => {
@@ -95,8 +95,8 @@ fn main() {
             }
         }
         _ => {
-            // .deb and AppImage: the library lives in <prefix>/lib/rarftp-gui, the executable in <prefix>/bin.
-            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/../lib/rarftp-gui");
+            // .deb and AppImage: the library lives in <prefix>/lib/streamextract, the executable in <prefix>/bin.
+            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/../lib/streamextract");
             if debug {
                 println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
             }

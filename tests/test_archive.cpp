@@ -17,7 +17,7 @@
 #include "archive.hpp"
 #include "archive_fixtures.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 namespace {
 
@@ -27,7 +27,7 @@ class TempDir {
   TempDir() {
     static int counter = 0;
     path_ = std::filesystem::temp_directory_path() /
-            ("rarftp-test-archive-" + std::to_string(reinterpret_cast<uintptr_t>(this)) + "-" +
+            ("streamextract-test-archive-" + std::to_string(reinterpret_cast<uintptr_t>(this)) + "-" +
              std::to_string(++counter));
     std::filesystem::create_directories(path_);
   }
@@ -63,7 +63,7 @@ struct Read {
   ArchiveFlags flags;
 };
 
-// Lists the archive, then tests every entry in a second pass, like rarftp does.
+// Lists the archive, then tests every entry in a second pass, like streamextract does.
 Read read_all(const std::string& path, std::optional<std::string> password = std::nullopt,
               int* prompts = nullptr) {
   ArchiveCallbacks callbacks;
@@ -274,7 +274,7 @@ TEST_CASE("7z compression methods and filters") {
     size_t size;
     const char* password;
   };
-  // BZip2, Deflate and Zstandard are not in 7-Zip's SDK: rarftp's own decoders.
+  // BZip2, Deflate and Zstandard are not in 7-Zip's SDK: streamextract's own decoders.
   for (const Case& c : {Case{"ppmd.7z", fixtures::kPpmd7z, sizeof(fixtures::kPpmd7z), nullptr},
                         Case{"delta.7z", fixtures::kDelta7z, sizeof(fixtures::kDelta7z), nullptr},
                         Case{"arm64.7z", fixtures::kArm647z, sizeof(fixtures::kArm647z), nullptr},

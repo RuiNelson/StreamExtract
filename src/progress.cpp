@@ -1,6 +1,6 @@
 #include "progress.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 Progress::Progress() : start_(std::chrono::steady_clock::now()) {}
 
@@ -128,4 +128,4 @@ double eta_seconds(uint64_t remaining, double rate) {
   return static_cast<double>(remaining) / rate;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

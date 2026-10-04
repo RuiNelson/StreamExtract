@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace rarftp {
+namespace streamextract {
 
 enum class ArchiveFormat { Rar, Zip, SevenZip, Tar, Exfat };
 
@@ -47,7 +47,7 @@ struct ArchiveFlags {
   // Compressed tar: "gzip", "bzip2", "xz", "lzma", "zstd" or "lz4"; empty otherwise.
   std::string compression;
   // The entries can only be reached by decompressing everything before them
-  // (compressed tar): rarftp reads such an archive once, planning each file
+  // (compressed tar): streamextract reads such an archive once, planning each file
   // as it comes, instead of listing it first.
   bool stream_only = false;
   // Bytes of the archive (all its parts), to measure progress with
@@ -125,4 +125,4 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
 std::vector<std::string> split_archive_parts(const std::string& path,
                                              const std::function<bool(const std::string&)>& exists);
 
-}  // namespace rarftp
+}  // namespace streamextract

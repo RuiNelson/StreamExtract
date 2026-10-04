@@ -15,7 +15,7 @@
 #include "archive.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 class FtpClient;
 class Logger;
@@ -147,4 +147,4 @@ class RemoteProbe {
 void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
                   const std::function<void(size_t, size_t)>& on_progress);
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -1,7 +1,7 @@
-// C API of librarftpcore (see rarftp.h). Every function catches everything:
+// C API of libstreamextractcore (see streamextract.h). Every function catches everything:
 // no exception ever crosses the C boundary.
 
-#include "capi/rarftp.h"
+#include "capi/streamextract.h"
 
 #include <clocale>
 #include <cstdlib>
@@ -13,16 +13,16 @@
 #include "app_version.hpp"
 #include "capi/job.hpp"
 
-struct rarftp_job {
-  explicit rarftp_job(rarftp::JobConfig config) : job(std::move(config)) {}
-  rarftp::Job job;
+struct streamextract_job {
+  explicit streamextract_job(streamextract::JobConfig config) : job(std::move(config)) {}
+  streamextract::Job job;
 };
 
 namespace {
 
 std::string copy_string(const char* text) { return text != nullptr ? std::string(text) : std::string(); }
 
-// malloc(), so that rarftp_free() is a plain free() whatever the allocator of
+// malloc(), so that streamextract_free() is a plain free() whatever the allocator of
 // the caller's language.
 char* duplicate(const std::string& text) {
   char* copy = static_cast<char*>(std::malloc(text.size() + 1));
@@ -36,24 +36,24 @@ char* duplicate(const std::string& text) {
 
 extern "C" {
 
-const char* rarftp_version(void) {
+const char* streamextract_version(void) {
   try {
-    static const std::string version = rarftp::version_string();
+    static const std::string version = streamextract::version_string();
     return version.c_str();
   } catch (...) {
-    return "rarftp";
+    return "StreamExtract";
   }
 }
 
-rarftp_job* rarftp_job_start(const rarftp_job_config* config) {
-  return rarftp_job_start_with_units(config, 0);
+streamextract_job* streamextract_job_start(const streamextract_job_config* config) {
+  return streamextract_job_start_with_units(config, 0);
 }
 
-rarftp_job* rarftp_job_start_with_units(const rarftp_job_config* config, int si_units) {
-  return rarftp_job_start_with_options(config, si_units, 0);
+streamextract_job* streamextract_job_start_with_units(const streamextract_job_config* config, int si_units) {
+  return streamextract_job_start_with_options(config, si_units, 0);
 }
 
-rarftp_job* rarftp_job_start_with_options(const rarftp_job_config* config, int si_units, unsigned retries) {
+streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units, unsigned retries) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -61,7 +61,7 @@ rarftp_job* rarftp_job_start_with_options(const rarftp_job_config* config, int s
     static std::once_flag locale_once;
     std::call_once(locale_once, [] { std::setlocale(LC_CTYPE, ""); });  // UnRAR converts some names with it.
 
-    rarftp::JobConfig copy;
+    streamextract::JobConfig copy;
     copy.archive = copy_string(config->archive);
     if (config->archive_password != nullptr) {
       copy.archive_password = std::string(config->archive_password);
@@ -76,14 +76,14 @@ rarftp_job* rarftp_job_start_with_options(const rarftp_job_config* config, int s
     copy.verbose = config->verbose != 0;
     copy.buffer_mib = config->buffer_mib;
     copy.retries = retries == 0 ? 3 : retries;
-    copy.units = si_units != 0 ? rarftp::ByteUnits::Si : rarftp::ByteUnits::Binary;
-    return new rarftp_job(std::move(copy));
+    copy.units = si_units != 0 ? streamextract::ByteUnits::Si : streamextract::ByteUnits::Binary;
+    return new streamextract_job(std::move(copy));
   } catch (...) {
     return nullptr;
   }
 }
 
-char* rarftp_job_poll(rarftp_job* job, uint64_t log_cursor) {
+char* streamextract_job_poll(streamextract_job* job, uint64_t log_cursor) {
   if (job == nullptr) {
     return nullptr;
   }
@@ -94,7 +94,7 @@ char* rarftp_job_poll(rarftp_job* job, uint64_t log_cursor) {
   }
 }
 
-void rarftp_job_answer_password(rarftp_job* job, const char* password) {
+void streamextract_job_answer_password(streamextract_job* job, const char* password) {
   if (job == nullptr) {
     return;
   }
@@ -108,7 +108,7 @@ void rarftp_job_answer_password(rarftp_job* job, const char* password) {
   }
 }
 
-void rarftp_job_cancel(rarftp_job* job) {
+void streamextract_job_cancel(streamextract_job* job) {
   if (job == nullptr) {
     return;
   }
@@ -118,13 +118,13 @@ void rarftp_job_cancel(rarftp_job* job) {
   }
 }
 
-void rarftp_job_free(rarftp_job* job) {
+void streamextract_job_free(streamextract_job* job) {
   try {
     delete job;
   } catch (...) {
   }
 }
 
-void rarftp_free(char* string) { std::free(string); }
+void streamextract_free(char* string) { std::free(string); }
 
 }  // extern "C"

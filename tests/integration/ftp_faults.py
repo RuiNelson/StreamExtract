@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local FTP resume and fault tests; no Docker or external archivers required.
 
-python3 tests/integration/ftp_faults.py --rarftp build/rarftp --lib build/librarftpcore.dylib
+python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
 """
 
 import argparse
@@ -197,7 +197,7 @@ class FtpFaultTests(unittest.TestCase):
         cls.lib = Library(ARGS.lib)
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="rarftp-ftp-faults-")
+        self.temp = tempfile.TemporaryDirectory(prefix="streamextract-ftp-faults-")
         self.addCleanup(self.temp.cleanup)
 
     def archive(self, entries, *, streamed=False):
@@ -248,7 +248,7 @@ class FtpFaultTests(unittest.TestCase):
                         self.assertEqual(job.result["status"], "failed", job.describe())
                         self.assertEqual(job.result["files_uploaded"], 0)
                 else:
-                    result = subprocess.run([ARGS.rarftp, "--file", archive, "--host", "127.0.0.1",
+                    result = subprocess.run([ARGS.sext, "--file", archive, "--host", "127.0.0.1",
                                              "--port", str(server.server_address[1]), "--directory", "/upload",
                                              "--no-tui"], capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -258,7 +258,7 @@ class FtpFaultTests(unittest.TestCase):
                 self.assertEqual(attempts, ["APPE"] * 3)
 
     def cli(self, archive, server, *options):
-        return subprocess.run([ARGS.rarftp, "--file", archive, "--host", "127.0.0.1",
+        return subprocess.run([ARGS.sext, "--file", archive, "--host", "127.0.0.1",
                                "--port", str(server.server_address[1]), "--directory", "/upload",
                                "--no-tui", "--buffer", "1", *options],
                               capture_output=True, text=True, timeout=15)
@@ -618,9 +618,9 @@ class FtpFaultTests(unittest.TestCase):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rarftp", required=True)
+    parser.add_argument("--sext", required=True)
     parser.add_argument("--lib", required=True)
     ARGS, remaining = parser.parse_known_args()
-    ARGS.rarftp = str(Path(ARGS.rarftp).resolve())
+    ARGS.sext = str(Path(ARGS.sext).resolve())
     ARGS.lib = str(Path(ARGS.lib).resolve())
     unittest.main(argv=[__file__, *remaining])

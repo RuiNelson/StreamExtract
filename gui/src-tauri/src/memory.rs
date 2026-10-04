@@ -1,11 +1,11 @@
 //! "Memory": the server settings the user chose to keep, in a plain-text INI file at
-//! `<home>/.config/rarftp-gui/memory.ini` (on every OS). The archive password is never stored.
+//! `<home>/.config/streamextract/memory.ini` (on every OS). The archive password is never stored.
 //!
 //! Everything here takes the file path as an argument so it can be tested without touching
 //! the real home directory. Format (contract section B):
 //!
 //! ```ini
-//! # rarftp-gui memory: plain text, written by Memory Save
+//! # StreamExtract memory: plain text, written by Memory Save
 //! [server]
 //! host=ftp.example.com
 //! port=21
@@ -35,9 +35,9 @@ pub const CONSENT_REQUIRED: &str = "credentials consent required";
 
 const DEFAULT_PORT: u32 = 21;
 
-/// `<home>/.config/rarftp-gui/memory.ini`
+/// `<home>/.config/streamextract/memory.ini`
 pub fn memory_path(home: &Path) -> PathBuf {
-    home.join(".config").join("rarftp-gui").join("memory.ini")
+    home.join(".config").join("streamextract").join("memory.ini")
 }
 
 /// Result of `memory_status`.
@@ -171,7 +171,7 @@ pub fn save(
         return Err("The port must be between 1 and 65535".to_string());
     }
     let mut text = String::new();
-    text.push_str("# rarftp-gui memory: plain text, written by Memory Save\n[server]\n");
+    text.push_str("# StreamExtract memory: plain text, written by Memory Save\n[server]\n");
     push_value(&mut text, "host", &server.host)?;
     text.push_str(&format!(
         "port={}\nmode={}\n",
@@ -237,7 +237,7 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let dir = std::env::temp_dir().join(format!(
-                "rarftp-gui-test-{}-{}-{nanos}",
+                "streamextract-test-{}-{}-{nanos}",
                 process::id(),
                 COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn path_is_under_dot_config_of_home() {
         let path = memory_path(Path::new("/Users/x"));
-        assert_eq!(path, Path::new("/Users/x/.config/rarftp-gui/memory.ini"));
+        assert_eq!(path, Path::new("/Users/x/.config/streamextract/memory.ini"));
     }
 
     #[test]

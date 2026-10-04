@@ -6,7 +6,7 @@
 
 #include "util/json.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 TEST_CASE("json strings are escaped") {
   CHECK(json_quote("plain") == "\"plain\"");

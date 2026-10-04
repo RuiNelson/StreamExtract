@@ -6,7 +6,7 @@
 
 #include "archive.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 // 7z archives, read with 7-Zip's own code (LZMA SDK) and, for the methods the
 // SDK lacks, the decoders of sevenzip_methods.hpp.
@@ -41,4 +41,4 @@ class SevenZipArchive final : public Archive {
 // LZMA SDK version, e.g. "26.03".
 std::string lzma_sdk_version();
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -17,7 +17,7 @@
 #include "util/terminal.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -81,7 +81,7 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
     const double average = s.elapsed > 0.0 ? static_cast<double>(s.sent_bytes) / s.elapsed : 0.0;
 
     Element title = hbox({
-        text(" rarftp ") | bold | inverted,
+        text(" StreamExtract ") | bold | inverted,
         text(fmt::format(" {} → {}  ({}, {})", header.archive, header.target, header.mode, header.user)),
     });
 
@@ -185,4 +185,4 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
   }
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -211,4 +211,4 @@ std::string ftp_url(std::string_view base_url, std::string_view absolute_path, b
   return url;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

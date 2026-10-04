@@ -5,7 +5,7 @@
 
 #include "util/text.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 TEST_CASE("UTF-8 round trip through wide strings") {
   const std::string text = "ação – 日本語 😀";

@@ -52,7 +52,7 @@ list(APPEND _lzmasdk_sources "${PROJECT_SOURCE_DIR}/src/sevenzip_codecs.cpp")
 
 # Always a static library, like UnRAR.
 add_library(lzmasdk STATIC ${_lzmasdk_sources})
-add_library(rarftp::lzmasdk ALIAS lzmasdk)
+add_library(streamextract::lzmasdk ALIAS lzmasdk)
 
 # SYSTEM keeps the SDK's headers out of our warnings.
 target_include_directories(lzmasdk SYSTEM PUBLIC "${LZMASDK_SOURCE_DIR}/CPP")
@@ -83,4 +83,4 @@ endif()
 file(STRINGS "${LZMASDK_SOURCE_DIR}/C/7zVersion.h" _lzmasdk_version_line REGEX "#define MY_VERSION_NUMBERS ")
 string(REGEX MATCH "\"([^\"]+)\"" _lzmasdk_version_match "${_lzmasdk_version_line}")
 set(LZMASDK_VERSION_STRING "${CMAKE_MATCH_1}")
-message(STATUS "rarftp: LZMA SDK ${LZMASDK_VERSION_STRING} from ${LZMASDK_SOURCE_DIR}")
+message(STATUS "streamextract: LZMA SDK ${LZMASDK_VERSION_STRING} from ${LZMASDK_SOURCE_DIR}")

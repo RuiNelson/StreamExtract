@@ -13,7 +13,7 @@
 
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 enum class LogLevel { Debug, Info, Warn, Error };
 
@@ -81,4 +81,4 @@ class Logger {
   Sink sink_;
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

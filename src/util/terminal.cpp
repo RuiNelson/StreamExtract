@@ -20,7 +20,7 @@
 #include <tuple>
 #endif
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -136,4 +136,4 @@ void setup_console() {}
 
 #endif
 
-}  // namespace rarftp
+}  // namespace streamextract

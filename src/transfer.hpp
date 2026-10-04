@@ -15,7 +15,7 @@
 #include "pipe.hpp"
 #include "plan.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 class FtpClient;
 class Logger;
@@ -115,4 +115,4 @@ class Transfer {
   bool timestamp_warning_shown_ = false;
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

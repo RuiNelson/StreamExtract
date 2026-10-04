@@ -41,7 +41,7 @@ foreach(_name IN LISTS _unrar_names)
 endforeach()
 
 # Always a static library, whatever BUILD_SHARED_LIBS says: UnRAR is linked
-# into the rarftp executable, which never loads an UnRAR shared library.
+# into the streamextract executable, which never loads an UnRAR shared library.
 add_library(unrar STATIC ${_unrar_sources})
 add_library(unrar::unrar ALIAS unrar)
 
@@ -80,4 +80,4 @@ set(UNRAR_VERSION_STRING "${_unrar_ver_MAJOR}.${_unrar_ver_MINOR}")
 if(_unrar_ver_BETA AND NOT _unrar_ver_BETA EQUAL 0)
   string(APPEND UNRAR_VERSION_STRING " beta ${_unrar_ver_BETA}")
 endif()
-message(STATUS "rarftp: UnRAR ${UNRAR_VERSION_STRING} from ${UNRAR_SOURCE_DIR}")
+message(STATUS "streamextract: UnRAR ${UNRAR_VERSION_STRING} from ${UNRAR_SOURCE_DIR}")

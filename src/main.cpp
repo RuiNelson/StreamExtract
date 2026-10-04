@@ -1,4 +1,4 @@
-// rarftp: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server
+// streamextract: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server
 // without extracting it to disk.
 
 #include <algorithm>
@@ -22,7 +22,7 @@
 #include "util/terminal.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -214,19 +214,19 @@ int run(const Options& options) {
 
 }  // namespace
 
-}  // namespace rarftp
+}  // namespace streamextract
 
 int main(int argc, char** argv) {
   std::setlocale(LC_CTYPE, "");  // UnRAR converts some names with the locale.
-  rarftp::setup_console();
-  const rarftp::ParsedOptions parsed = rarftp::parse_options(argc, argv);
+  streamextract::setup_console();
+  const streamextract::ParsedOptions parsed = streamextract::parse_options(argc, argv);
   if (!parsed.options) {
     return parsed.exit_code;
   }
   try {
-    return rarftp::run(*parsed.options);
+    return streamextract::run(*parsed.options);
   } catch (const std::exception& error) {
-    std::fprintf(stderr, "rarftp: %s\n", error.what());
+    std::fprintf(stderr, "StreamExtract: %s\n", error.what());
     return 1;
   }
 }

@@ -5,7 +5,7 @@
 
 #include "archive.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 // A single, uncompressed exFAT volume image, read through FatFs. Disk images
 // with a partition table are rejected; no OS mount or temporary files are used.
@@ -29,4 +29,4 @@ class ExfatArchive final : public Archive {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

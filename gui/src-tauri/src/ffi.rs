@@ -1,4 +1,4 @@
-//! Bindings to `librarftpcore` (`src/capi/rarftp.h`) and a safe wrapper around a transfer job.
+//! Bindings to `libstreamextractcore` (`src/capi/streamextract.h`) and a safe wrapper around a transfer job.
 
 use std::ffi::{c_char, c_int, c_uint, CStr, CString};
 use std::marker::{PhantomData, PhantomPinned};
@@ -8,16 +8,16 @@ use serde_json::Value;
 
 use crate::{Mode, TransferConfig};
 
-/// Opaque `rarftp_job`.
+/// Opaque `streamextract_job`.
 #[repr(C)]
-pub struct RarftpJob {
+pub struct StreamExtractJob {
     _data: [u8; 0],
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
-/// Mirror of `rarftp_job_config`; the field order and types must match the header exactly.
+/// Mirror of `streamextract_job_config`; the field order and types must match the header exactly.
 #[repr(C)]
-pub struct RarftpJobConfig {
+pub struct StreamExtractJobConfig {
     pub archive: *const c_char,
     pub archive_password: *const c_char,
     pub host: *const c_char,
@@ -33,23 +33,23 @@ pub struct RarftpJobConfig {
 
 // The library is linked by build.rs.
 extern "C" {
-    pub fn rarftp_version() -> *const c_char;
-    pub fn rarftp_job_start_with_options(
-        config: *const RarftpJobConfig,
+    pub fn streamextract_version() -> *const c_char;
+    pub fn streamextract_job_start_with_options(
+        config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
-    ) -> *mut RarftpJob;
-    pub fn rarftp_job_poll(job: *mut RarftpJob, log_cursor: u64) -> *mut c_char;
-    pub fn rarftp_job_answer_password(job: *mut RarftpJob, password: *const c_char);
-    pub fn rarftp_job_cancel(job: *mut RarftpJob);
-    pub fn rarftp_job_free(job: *mut RarftpJob);
-    pub fn rarftp_free(string: *mut c_char);
+    ) -> *mut StreamExtractJob;
+    pub fn streamextract_job_poll(job: *mut StreamExtractJob, log_cursor: u64) -> *mut c_char;
+    pub fn streamextract_job_answer_password(job: *mut StreamExtractJob, password: *const c_char);
+    pub fn streamextract_job_cancel(job: *mut StreamExtractJob);
+    pub fn streamextract_job_free(job: *mut StreamExtractJob);
+    pub fn streamextract_free(string: *mut c_char);
 }
 
-/// `"rarftp 2.4.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
+/// `"StreamExtract 2.4.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
-    unsafe { CStr::from_ptr(rarftp_version()) }
+    unsafe { CStr::from_ptr(streamextract_version()) }
         .to_string_lossy()
         .into_owned()
 }
@@ -61,7 +61,7 @@ fn c_string(what: &str, value: &str) -> Result<CString, String> {
 /// A running (or finished) transfer. Dropping it cancels the job if needed, waits for it
 /// (so the partial remote file is deleted) and frees it.
 pub struct Job {
-    raw: NonNull<RarftpJob>,
+    raw: NonNull<StreamExtractJob>,
 }
 
 // SAFETY: the C API documents that every function is thread-safe for a given job, and the
@@ -92,7 +92,7 @@ impl Job {
         let retries = c_uint::try_from(config.retries)
             .map_err(|_| "The upload attempt count is out of range".to_string())?;
 
-        let raw_config = RarftpJobConfig {
+        let raw_config = StreamExtractJobConfig {
             archive: archive.as_ptr(),
             archive_password: archive_password
                 .as_ref()
@@ -109,7 +109,7 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            rarftp_job_start_with_options(
+            streamextract_job_start_with_options(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
@@ -123,14 +123,14 @@ impl Job {
     /// Current state (contract section A), with the log lines numbered `cursor` and later.
     pub fn poll(&self, cursor: u64) -> Result<Value, String> {
         // SAFETY: `self.raw` is a live job.
-        let text = unsafe { rarftp_job_poll(self.raw.as_ptr(), cursor) };
+        let text = unsafe { streamextract_job_poll(self.raw.as_ptr(), cursor) };
         if text.is_null() {
             return Err("The library returned no state".to_string());
         }
-        // SAFETY: a non-NULL result is a NUL-terminated string that we own until `rarftp_free`.
+        // SAFETY: a non-NULL result is a NUL-terminated string that we own until `streamextract_free`.
         let parsed = serde_json::from_str(&unsafe { CStr::from_ptr(text) }.to_string_lossy());
-        // SAFETY: `text` came from `rarftp_job_poll` and is not used afterwards.
-        unsafe { rarftp_free(text) };
+        // SAFETY: `text` came from `streamextract_job_poll` and is not used afterwards.
+        unsafe { streamextract_free(text) };
         parsed.map_err(|error| format!("The library returned invalid state: {error}"))
     }
 
@@ -143,21 +143,21 @@ impl Job {
             .as_ref()
             .map_or(ptr::null(), |password| password.as_ptr());
         // SAFETY: `self.raw` is live and `password` is NULL or valid for the call.
-        unsafe { rarftp_job_answer_password(self.raw.as_ptr(), password) };
+        unsafe { streamextract_job_answer_password(self.raw.as_ptr(), password) };
         Ok(())
     }
 
     /// Asks the job to stop; returns immediately.
     pub fn cancel(&self) {
         // SAFETY: `self.raw` is a live job.
-        unsafe { rarftp_job_cancel(self.raw.as_ptr()) };
+        unsafe { streamextract_job_cancel(self.raw.as_ptr()) };
     }
 }
 
 impl Drop for Job {
     fn drop(&mut self) {
         // SAFETY: `self.raw` is live and never used again; this cancels, waits and frees.
-        unsafe { rarftp_job_free(self.raw.as_ptr()) };
+        unsafe { streamextract_job_free(self.raw.as_ptr()) };
     }
 }
 
@@ -167,7 +167,7 @@ mod tests {
 
     fn config() -> TransferConfig {
         TransferConfig {
-            archive: "/nonexistent/rarftp-gui-test.rar".to_string(),
+            archive: "/nonexistent/streamextract-test.rar".to_string(),
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 21,
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn library_reports_its_version() {
-        assert!(version().starts_with("rarftp "), "{}", version());
+        assert!(version().starts_with("StreamExtract "), "{}", version());
     }
 
     #[test]

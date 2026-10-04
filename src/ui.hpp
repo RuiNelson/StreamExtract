@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace rarftp {
+namespace streamextract {
 
 class Logger;
 class Progress;
@@ -24,4 +24,4 @@ void run_tui(Transfer& transfer, Progress& progress, Logger& log, const UiHeader
 // plus a progress line every few seconds.
 void run_plain(Transfer& transfer, Progress& progress);
 
-}  // namespace rarftp
+}  // namespace streamextract

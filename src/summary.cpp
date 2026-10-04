@@ -4,7 +4,7 @@
 
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 std::vector<std::string> summary_lines(const TransferResult& result, ByteUnits units) {
   std::vector<std::string> lines;
@@ -38,4 +38,4 @@ std::vector<std::string> summary_lines(const TransferResult& result, ByteUnits u
   return lines;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

@@ -4,7 +4,7 @@
 
 #include <CLI/CLI.hpp>
 
-namespace rarftp {
+namespace streamextract {
 
 ParsedOptions parse_options(int argc, char** argv) {
   Options o;
@@ -18,7 +18,7 @@ ParsedOptions parse_options(int argc, char** argv) {
       "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume image, straight to an FTP "
       "server, without extracting it "
       "to disk.",
-      "rarftp"};
+      "sext"};
   argv = app.ensure_utf8(argv);
   app.set_version_flag("--version", version_string());
   app.get_formatter()->column_width(28);
@@ -103,4 +103,4 @@ ParsedOptions parse_options(int argc, char** argv) {
   return {o, 0};
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

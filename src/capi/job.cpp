@@ -14,7 +14,7 @@
 #include "util/remote_path.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -612,4 +612,4 @@ Job::Result Job::pipeline() {
   return result;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

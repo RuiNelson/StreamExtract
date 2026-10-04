@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace rarftp {
+namespace streamextract {
 
 // Minimal streaming JSON writer. Commas are inserted automatically; inside an
 // object every value is preceded by key(). Strings are escaped as RFC 8259
@@ -58,4 +58,4 @@ class JsonWriter {
 // `text` as a quoted JSON string.
 std::string json_quote(std::string_view text);
 
-}  // namespace rarftp
+}  // namespace streamextract

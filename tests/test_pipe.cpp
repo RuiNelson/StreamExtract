@@ -6,7 +6,7 @@
 
 #include "pipe.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 namespace {
 

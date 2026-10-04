@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * rarftp-gui frontend. Plain JS, no dependencies. Talks to the Rust backend through
+ * StreamExtract frontend. Plain JS, no dependencies. Talks to the Rust backend through
  * window.__TAURI__ (app.withGlobalTauri). See the contract: poll JSON (A), commands (B),
  * window / close flow / drag and drop (C).
  */
@@ -432,7 +432,7 @@
     setHidden(els.archiveList, count === 0);
     const unusual = paths.some((path) => !new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(path));
     setText(els.archiveHint, unusual
-      ? "Some files do not look like archives or exFAT images. rarftp will still try to read them." : "");
+      ? "Some files do not look like archives or exFAT images. StreamExtract will still try to read them." : "");
     setHidden(els.archiveHint, !unusual);
     updateSubmitState();
   }
@@ -1451,7 +1451,7 @@
 
   async function init() {
     if (!tauri || !tauri.core) {
-      toast("The Tauri API is not available, so this page cannot talk to rarftp.", "error");
+      toast("The Tauri API is not available, so this page cannot talk to StreamExtract.", "error");
       els.btnChoose.disabled = true;
       els.btnUpload.disabled = true;
       return;

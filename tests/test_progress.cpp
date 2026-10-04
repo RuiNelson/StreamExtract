@@ -2,7 +2,7 @@
 
 #include "progress.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 TEST_CASE("speed meter follows the recent window") {
   SpeedMeter meter(5.0);

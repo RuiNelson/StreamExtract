@@ -6,7 +6,7 @@
 
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -137,4 +137,4 @@ std::string json_quote(std::string_view text) {
   return writer.str();
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

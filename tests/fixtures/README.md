@@ -8,13 +8,13 @@ no mount or formatter on the test machine.
 The commands used to create the images were:
 
 ```bash
-hdiutil create -size 32m -srcfolder /tmp/rarftp-exfat-fixture-tree \
+hdiutil create -size 32m -srcfolder /tmp/streamextract-exfat-fixture-tree \
   -fs ExFAT -fsargs '-b 4096' -layout NONE -format UDRW \
-  -volname RARFTP_TEST /tmp/rarftp-fixture-512.dmg
+  -volname STREAMEXTRACT_TEST /tmp/streamextract-fixture-512.dmg
 
-hdiutil create -size 32m -srcfolder /tmp/rarftp-exfat-fixture-tree \
+hdiutil create -size 32m -srcfolder /tmp/streamextract-exfat-fixture-tree \
   -fs ExFAT -layout MBRSPUD -format UDRW \
-  -volname RARFTP_TEST /tmp/rarftp-fixture-disk.dmg
+  -volname STREAMEXTRACT_TEST /tmp/streamextract-fixture-disk.dmg
 ```
 
 The images are stored as `volume.exfat` and `partitioned.exfat`. The first

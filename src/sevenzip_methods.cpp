@@ -23,7 +23,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -394,4 +394,4 @@ void register_sevenzip_methods() {
   });
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

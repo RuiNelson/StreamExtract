@@ -34,7 +34,7 @@
 #include <dll.hpp>
 #include <version.hpp>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -304,4 +304,4 @@ void RarArchive::skip() {
 
 bool RarArchive::aborted_by_callback() const { return impl_->aborted; }
 
-}  // namespace rarftp
+}  // namespace streamextract

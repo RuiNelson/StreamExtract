@@ -19,7 +19,7 @@
 #endif
 #include <locale.h>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -475,4 +475,4 @@ std::string libarchive_version() {
   return fmt::format("{}.{}.{}", number / 1000000, number / 1000 % 1000, number % 1000);
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

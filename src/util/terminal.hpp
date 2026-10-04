@@ -3,7 +3,7 @@
 #include <optional>
 #include <string>
 
-namespace rarftp {
+namespace streamextract {
 
 bool stdin_is_terminal();
 bool stdout_is_terminal();
@@ -20,4 +20,4 @@ void setup_console();
 void install_interrupt_handler();
 bool interrupt_requested();
 
-}  // namespace rarftp
+}  // namespace streamextract

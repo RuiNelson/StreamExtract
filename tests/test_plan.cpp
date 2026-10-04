@@ -5,7 +5,7 @@
 
 #include "plan.hpp"
 
-using namespace rarftp;
+using namespace streamextract;
 
 TEST_CASE("password source asks once") {
   int calls = 0;

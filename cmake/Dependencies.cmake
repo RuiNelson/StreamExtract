@@ -32,25 +32,25 @@ set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(FTXUI_QUIET ON CACHE BOOL "" FORCE)
 
-# These libraries are only used by rarftp: link them statically, like UnRAR,
+# These libraries are only used by streamextract: link them statically, like UnRAR,
 # even when the parent project builds shared libraries.
-set(_rarftp_build_shared "${BUILD_SHARED_LIBS}")
+set(_streamextract_build_shared "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(fmt CLI11 ftxui)
-set(BUILD_SHARED_LIBS "${_rarftp_build_shared}")
+set(BUILD_SHARED_LIBS "${_streamextract_build_shared}")
 
 # --- libcurl (curl license, MIT-like) ----------------------------------------
-if(NOT RARFTP_BUNDLED_CURL)
+if(NOT STREAMEXTRACT_BUNDLED_CURL)
   find_package(CURL 7.73 QUIET)
   if(CURL_FOUND)
-    message(STATUS "rarftp: using system libcurl ${CURL_VERSION_STRING}")
+    message(STATUS "streamextract: using system libcurl ${CURL_VERSION_STRING}")
   else()
-    message(STATUS "rarftp: system libcurl not found, building the bundled one")
+    message(STATUS "streamextract: system libcurl not found, building the bundled one")
   endif()
 endif()
 
-if(RARFTP_BUNDLED_CURL OR NOT CURL_FOUND)
-  message(STATUS "rarftp: using bundled libcurl 8.22.0 (FTP only)")
+if(STREAMEXTRACT_BUNDLED_CURL OR NOT CURL_FOUND)
+  message(STATUS "streamextract: using bundled libcurl 8.22.0 (FTP only)")
   FetchContent_Declare(curl
     URL https://github.com/curl/curl/releases/download/curl-8_22_0/curl-8.22.0.tar.xz
     URL_HASH SHA256=f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7

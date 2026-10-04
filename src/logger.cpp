@@ -2,7 +2,7 @@
 
 #include <ctime>
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -90,4 +90,4 @@ size_t Logger::problems_dropped() const {
   return problems_dropped_;
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

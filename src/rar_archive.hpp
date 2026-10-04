@@ -5,7 +5,7 @@
 
 #include "archive.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 // UnRAR library version, e.g. "7.30 beta 1" (from version.hpp at build time).
 std::string unrar_version();
@@ -34,4 +34,4 @@ class RarArchive final : public Archive {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

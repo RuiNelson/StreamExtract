@@ -10,7 +10,7 @@
 #include "util/terminal.hpp"
 #include "util/text.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 namespace {
 
@@ -67,4 +67,4 @@ void run_plain(Transfer& transfer, Progress& progress) {
   }
 }
 
-}  // namespace rarftp
+}  // namespace streamextract

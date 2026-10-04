@@ -17,7 +17,7 @@
 #include "progress.hpp"
 #include "transfer.hpp"
 
-namespace rarftp {
+namespace streamextract {
 
 struct JobConfig {
   std::string archive;
@@ -138,4 +138,4 @@ class Job {
   std::thread thread_;  // Last: started by the constructor.
 };
 
-}  // namespace rarftp
+}  // namespace streamextract

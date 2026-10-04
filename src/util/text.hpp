@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-namespace rarftp {
+namespace streamextract {
 
 // UTF-8 <-> wchar_t strings (UTF-16 on Windows, UTF-32 elsewhere).
 // Invalid input sequences are replaced by U+FFFD.
@@ -44,4 +44,4 @@ std::string format_ftp_timestamp(int64_t unix_seconds);
 // seconds.
 int64_t filetime_to_unix(uint64_t filetime);
 
-}  // namespace rarftp
+}  // namespace streamextract

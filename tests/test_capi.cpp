@@ -1,4 +1,4 @@
-// Smoke test of the C API through the shared library, using only rarftp.h.
+// Smoke test of the C API through the shared library, using only streamextract.h.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
@@ -21,7 +21,7 @@
 #include <unistd.h>
 #endif
 
-#include "capi/rarftp.h"
+#include "capi/streamextract.h"
 #include "archive_fixtures.hpp"
 
 namespace {
@@ -63,8 +63,8 @@ class TempFile {
   std::filesystem::path path_;
 };
 
-rarftp_job_config make_config(const std::string& archive, int port = 21) {
-  rarftp_job_config config{};
+streamextract_job_config make_config(const std::string& archive, int port = 21) {
+  streamextract_job_config config{};
   config.archive = archive.c_str();
   config.host = "127.0.0.1";
   config.port = port;
@@ -72,16 +72,16 @@ rarftp_job_config make_config(const std::string& archive, int port = 21) {
   return config;
 }
 
-std::string poll(rarftp_job* job, uint64_t cursor = 0) {
-  char* raw = rarftp_job_poll(job, cursor);
+std::string poll(streamextract_job* job, uint64_t cursor = 0) {
+  char* raw = streamextract_job_poll(job, cursor);
   REQUIRE(raw != nullptr);
   std::string json(raw);
-  rarftp_free(raw);
+  streamextract_free(raw);
   return json;
 }
 
 // Polls until `json` contains `needle`; returns the last state either way.
-std::string wait_for(rarftp_job* job, const std::string& needle, std::chrono::milliseconds timeout = 10s) {
+std::string wait_for(streamextract_job* job, const std::string& needle, std::chrono::milliseconds timeout = 10s) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   std::string json = poll(job);
   while (json.find(needle) == std::string::npos && std::chrono::steady_clock::now() < deadline) {
@@ -115,27 +115,27 @@ uint64_t log_next(const std::string& json) {
 }  // namespace
 
 TEST_CASE("version string") {
-  const char* version = rarftp_version();
+  const char* version = streamextract_version();
   REQUIRE(version != nullptr);
   CHECK(std::strlen(version) > 0);
-  CHECK(std::strncmp(version, "rarftp ", 7) == 0);
-  CHECK(rarftp_version() == version);  // Static storage.
+  CHECK(std::strncmp(version, "StreamExtract ", 14) == 0);
+  CHECK(streamextract_version() == version);  // Static storage.
 }
 
 TEST_CASE("a missing config is refused and NULL handles are ignored") {
-  CHECK(rarftp_job_start(nullptr) == nullptr);
-  CHECK(rarftp_job_start_with_options(nullptr, 1, 5) == nullptr);
-  CHECK(rarftp_job_poll(nullptr, 0) == nullptr);
-  rarftp_job_answer_password(nullptr, "x");
-  rarftp_job_cancel(nullptr);
-  rarftp_job_free(nullptr);
-  rarftp_free(nullptr);
+  CHECK(streamextract_job_start(nullptr) == nullptr);
+  CHECK(streamextract_job_start_with_options(nullptr, 1, 5) == nullptr);
+  CHECK(streamextract_job_poll(nullptr, 0) == nullptr);
+  streamextract_job_answer_password(nullptr, "x");
+  streamextract_job_cancel(nullptr);
+  streamextract_job_free(nullptr);
+  streamextract_free(nullptr);
 }
 
 TEST_CASE("a missing archive ends as failed") {
-  const std::string archive = (std::filesystem::temp_directory_path() / "rarftpcore-no-such.rar").string();
-  rarftp_job_config config = make_config(archive);
-  rarftp_job* job = rarftp_job_start(&config);
+  const std::string archive = (std::filesystem::temp_directory_path() / "streamextractcore-no-such.rar").string();
+  streamextract_job_config config = make_config(archive);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
@@ -169,20 +169,20 @@ TEST_CASE("a missing archive ends as failed") {
   CHECK(tail_seqs.front() == 1);
 
   CHECK(contains(poll(job, 1000000), "\"lines\":[]"));  // A cursor from the future.
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("a refused connection ends as failed after reading the archive") {
-  const TempFile archive("rarftpcore-tiny.rar", kTinyRar, sizeof(kTinyRar));
+  const TempFile archive("streamextractcore-tiny.rar", kTinyRar, sizeof(kTinyRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);  // Nobody listens on port 1.
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);  // Nobody listens on port 1.
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  CHECK(contains(json, "\"archive\":{\"name\":\"rarftpcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
+  CHECK(contains(json, "\"archive\":{\"name\":\"streamextractcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
   CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
   CHECK(contains(json, "\"bytes_text\":\"6 B\",\"volumes\":1,\"solid\":false,\"encrypted\":false}"));
   CHECK(contains(json, "\"target\":null"));
@@ -191,38 +191,38 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   CHECK(contains(json, "after 3 attempt(s)"));
   CHECK(contains(json, "attempt 2/3"));
   CHECK(contains(json, "attempt 3/3"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("ZIP, 7z and tar archives are read too") {
-  const TempFile zip("rarftpcore-tiny.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip));
-  const TempFile seven_zip("rarftpcore-tiny.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z));
-  const TempFile tar("rarftpcore-tiny.tar", fixtures::kTinyTar, sizeof(fixtures::kTinyTar));
+  const TempFile zip("streamextractcore-tiny.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip));
+  const TempFile seven_zip("streamextractcore-tiny.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z));
+  const TempFile tar("streamextractcore-tiny.tar", fixtures::kTinyTar, sizeof(fixtures::kTinyTar));
   struct Case {
     std::string path;
     std::string name;
     std::string format;
   };
-  for (const Case& c : {Case{zip.path(), "rarftpcore-tiny.zip", "ZIP"},
-                        Case{seven_zip.path(), "rarftpcore-tiny.7z", "7z"},
-                        Case{tar.path(), "rarftpcore-tiny.tar", "tar"}}) {
+  for (const Case& c : {Case{zip.path(), "streamextractcore-tiny.zip", "ZIP"},
+                        Case{seven_zip.path(), "streamextractcore-tiny.7z", "7z"},
+                        Case{tar.path(), "streamextractcore-tiny.tar", "tar"}}) {
     CAPTURE(c.name);
-    rarftp_job_config config = make_config(c.path, 1);
-    rarftp_job* job = rarftp_job_start(&config);
+    streamextract_job_config config = make_config(c.path, 1);
+    streamextract_job* job = streamextract_job_start(&config);
     REQUIRE(job != nullptr);
     const std::string json = wait_for(job, "\"phase\":\"finished\"");
     CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the FTP login.
     const std::string archive = "\"archive\":{\"name\":\"" + c.name + "\",\"format\":\"" + c.format + "\",";
     CHECK(contains(json, archive.c_str()));
     CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
-    rarftp_job_free(job);
+    streamextract_job_free(job);
   }
 }
 
 TEST_CASE("a real exFAT image is reported through the GUI's JSON contract") {
-  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  const std::string path = std::string(STREAMEXTRACT_TEST_FIXTURES) + "/volume.exfat";
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
@@ -230,14 +230,14 @@ TEST_CASE("a real exFAT image is reported through the GUI's JSON contract") {
   CHECK(contains(json, "\"volumes\":1,\"solid\":false,\"encrypted\":false"));
   CHECK(contains(json, "no checksum of the file contents"));
   CHECK(contains(json, "\"prompt\":null"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("a compressed tar archive is read as it is uploaded") {
-  const TempFile archive("rarftpcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
+  const TempFile archive("streamextractcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
@@ -245,127 +245,127 @@ TEST_CASE("a compressed tar archive is read as it is uploaded") {
   CHECK(contains(json, "\"format\":\"tar\",\"compression\":\"gzip\",\"files\":null,\"bytes\":null,"
                        "\"bytes_text\":null,"));
   CHECK(contains(json, "read as it is uploaded"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("a wrong ZIP password is noticed while reading the archive") {
-  const TempFile archive("rarftpcore-aes.zip", fixtures::kAesZip, sizeof(fixtures::kAesZip));
+  const TempFile archive("streamextractcore-aes.zip", fixtures::kAesZip, sizeof(fixtures::kAesZip));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   const char* first =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-aes.zip\",\"error\":null}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-aes.zip\",\"error\":null}";
   const char* again =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-aes.zip\",\"error\":\"Wrong password\"}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-aes.zip\",\"error\":\"Wrong password\"}";
   REQUIRE(contains(wait_for(job, first), first));
-  rarftp_job_answer_password(job, "wrong");
+  streamextract_job_answer_password(job, "wrong");
   REQUIRE(contains(wait_for(job, again), again));
-  rarftp_job_answer_password(job, "secret");
+  streamextract_job_answer_password(job, "secret");
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"format\":\"ZIP\""));
   CHECK(contains(json, "\"encrypted\":true}"));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("the password prompt is asked again until it is right") {
-  const TempFile archive("rarftpcore-enc.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  const TempFile archive("streamextractcore-enc.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   const char* first =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":null}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-enc.rar\",\"error\":null}";
   const char* again =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"rarftpcore-enc.rar\",\"error\":\"Wrong password\"}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-enc.rar\",\"error\":\"Wrong password\"}";
   std::string json = wait_for(job, first);
   REQUIRE(contains(json, first));
   CHECK(contains(json, "\"phase\":\"reading\""));
 
-  rarftp_job_answer_password(job, "wrong");
+  streamextract_job_answer_password(job, "wrong");
   json = wait_for(job, again);
   REQUIRE(contains(json, again));
 
-  rarftp_job_answer_password(job, "secret");
+  streamextract_job_answer_password(job, "secret");
   json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"prompt\":null"));
   CHECK(contains(json, "\"encrypted\":true}"));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the FTP login.
 
-  rarftp_job_answer_password(job, "ignored");  // No prompt pending any more.
-  rarftp_job_free(job);
+  streamextract_job_answer_password(job, "ignored");  // No prompt pending any more.
+  streamextract_job_free(job);
 }
 
 TEST_CASE("declining the password prompt fails the job") {
-  const TempFile archive("rarftpcore-enc-declined.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  const TempFile archive("streamextractcore-enc-declined.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
-  rarftp_job_answer_password(job, nullptr);
+  streamextract_job_answer_password(job, nullptr);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
   CHECK(contains(json, "\"error\":\"the archive is encrypted and no password was entered\""));
   CHECK(contains(json, "\"archive\":null"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("a configured password is used without asking") {
-  const TempFile archive("rarftpcore-enc-given.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  const TempFile archive("streamextractcore-enc-given.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
+  streamextract_job_config config = make_config(path, 1);
   config.archive_password = "secret";
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"prompt\":null"));
   CHECK(contains(json, "\"encrypted\":true}"));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("cancelling while the password prompt is open") {
-  const TempFile archive("rarftpcore-enc-cancel.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  const TempFile archive("streamextractcore-enc-cancel.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
-  rarftp_job_cancel(job);
+  streamextract_job_cancel(job);
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"cancelled\""));
   CHECK(contains(json, "\"prompt\":null"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("freeing a job that waits for a password does not hang") {
-  const TempFile archive("rarftpcore-enc-free.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  const TempFile archive("streamextractcore-enc-free.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
   REQUIRE(contains(wait_for(job, "\"prompt\":{"), "\"kind\":\"archive_password\""));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
 }
 
 TEST_CASE("cancelling a running job and freeing it does not hang") {
-  const TempFile archive("rarftpcore-tiny-cancel.rar", kTinyRar, sizeof(kTinyRar));
+  const TempFile archive("streamextractcore-tiny-cancel.rar", kTinyRar, sizeof(kTinyRar));
   const std::string path = archive.path();
   for (int i = 0; i < 20; ++i) {
-    rarftp_job_config config = make_config(path, 1);
-    rarftp_job* job = rarftp_job_start(&config);
+    streamextract_job_config config = make_config(path, 1);
+    streamextract_job* job = streamextract_job_start(&config);
     REQUIRE(job != nullptr);
     std::this_thread::sleep_for(std::chrono::milliseconds(i));
-    rarftp_job_cancel(job);
-    rarftp_job_cancel(job);
-    rarftp_job_free(job);  // Must return: it waits for the controller thread.
+    streamextract_job_cancel(job);
+    streamextract_job_cancel(job);
+    streamextract_job_free(job);  // Must return: it waits for the controller thread.
   }
 }
 
@@ -384,16 +384,16 @@ TEST_CASE("cancelling while the server stays silent") {
   REQUIRE(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0);
   const int port = ntohs(address.sin_port);
 
-  const TempFile archive("rarftpcore-tiny-silent.rar", kTinyRar, sizeof(kTinyRar));
+  const TempFile archive("streamextractcore-tiny-silent.rar", kTinyRar, sizeof(kTinyRar));
   const std::string path = archive.path();
-  rarftp_job_config config = make_config(path, port);
-  rarftp_job* job = rarftp_job_start(&config);
+  streamextract_job_config config = make_config(path, port);
+  streamextract_job* job = streamextract_job_start(&config);
   REQUIRE(job != nullptr);
 
   std::string json = wait_for(job, "Connecting to 127.0.0.1:");
   REQUIRE(contains(json, "\"phase\":\"connecting\""));
   std::this_thread::sleep_for(300ms);
-  rarftp_job_cancel(job);
+  streamextract_job_cancel(job);
   CHECK(contains(poll(job), "\"cancelling\":true"));
 
   json = wait_for(job, "\"phase\":\"finished\"", 15s);  // libcurl polls our check about once a second.
@@ -401,18 +401,18 @@ TEST_CASE("cancelling while the server stays silent") {
   CHECK(contains(json, "\"status\":\"cancelled\""));
   CHECK(contains(json, "\"summary\":[\"Cancelled: 0 file(s), 0 B uploaded.\"]"));
   CHECK(contains(json, "\"cancelling\":false"));
-  rarftp_job_free(job);
+  streamextract_job_free(job);
   ::close(listener);
 }
 #endif
 
 TEST_CASE("display units are selected per job while the original C API stays binary") {
-  CHECK(rarftp_job_start_with_units(nullptr, 1) == nullptr);
-  const std::string path = std::string(RARFTP_TEST_FIXTURES) + "/volume.exfat";
-  rarftp_job_config config = make_config(path, 1);
-  rarftp_job* si = rarftp_job_start_with_units(&config, 1);
-  rarftp_job* binary = rarftp_job_start(&config);
-  rarftp_job* explicit_binary = rarftp_job_start_with_units(&config, 0);
+  CHECK(streamextract_job_start_with_units(nullptr, 1) == nullptr);
+  const std::string path = std::string(STREAMEXTRACT_TEST_FIXTURES) + "/volume.exfat";
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* si = streamextract_job_start_with_units(&config, 1);
+  streamextract_job* binary = streamextract_job_start(&config);
+  streamextract_job* explicit_binary = streamextract_job_start_with_units(&config, 0);
   REQUIRE(si != nullptr);
   REQUIRE(binary != nullptr);
   REQUIRE(explicit_binary != nullptr);
@@ -424,7 +424,7 @@ TEST_CASE("display units are selected per job while the original C API stays bin
   CHECK(contains(binary_json, "\"bytes\":6484635,\"bytes_text\":\"6.18 MiB\""));
   CHECK(contains(binary_json, "Archive: exFAT, 19 file(s), 6.18 MiB"));
   CHECK(contains(explicit_json, "Archive: exFAT, 19 file(s), 6.18 MiB"));
-  rarftp_job_free(si);
-  rarftp_job_free(binary);
-  rarftp_job_free(explicit_binary);
+  streamextract_job_free(si);
+  streamextract_job_free(binary);
+  streamextract_job_free(explicit_binary);
 }

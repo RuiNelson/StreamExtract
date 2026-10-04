@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace rarftp {
+namespace streamextract {
 
 struct SanitizedPath {
   std::string path;            // Relative, '/'-separated. Empty: nothing usable left.
@@ -54,4 +54,4 @@ std::string ftp_base_url(std::string_view host, int port);
 // component as a file.
 std::string ftp_url(std::string_view base_url, std::string_view absolute_path, bool directory);
 
-}  // namespace rarftp
+}  // namespace streamextract

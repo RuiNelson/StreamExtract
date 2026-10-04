@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace rarftp {
+namespace streamextract {
 
 class Logger;
 
@@ -104,4 +104,4 @@ class FtpClient {
 // libcurl version string, for --version.
 std::string curl_version_string();
 
-}  // namespace rarftp
+}  // namespace streamextract
