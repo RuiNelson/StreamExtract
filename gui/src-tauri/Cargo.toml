@@ -1,6 +1,6 @@
 [package]
 name = "rarftp-gui"
-version = "2.3.1"
+version = "2.4.0"
 description = "Desktop front-end for rarftp: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
 authors = ["Rui Nelson"]
 license = "MIT"

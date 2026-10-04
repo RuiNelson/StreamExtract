@@ -6,7 +6,7 @@ if(POLICY CMP0135)
 endif()
 
 project(rarftp
-  VERSION 2.3.1
+  VERSION 2.4.0
   DESCRIPTION "Uploads archives and exFAT volume images to an FTP server without extracting them to disk"
   LANGUAGES C CXX)
 
