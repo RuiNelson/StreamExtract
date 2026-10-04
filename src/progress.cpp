@@ -34,22 +34,24 @@ void Progress::set_buffer_capacity(uint64_t capacity) { buffer_capacity_ = capac
 
 void Progress::set_buffer_used(uint64_t used) { buffer_used_ = used; }
 
-void Progress::begin_file(uint64_t number, std::string name, uint64_t size) {
+void Progress::begin_file(uint64_t number, std::string name, uint64_t size, uint64_t resume_offset) {
   std::lock_guard lock(mutex_);
   current_number_ = number;
   current_file_ = std::move(name);
   current_size_ = size;
-  current_sent_ = 0;
+  current_resume_offset_ = resume_offset;
+  current_sent_ = resume_offset;
 }
 
 void Progress::file_progress(uint64_t sent) { current_sent_ = sent; }
 
 void Progress::end_file() {
   std::lock_guard lock(mutex_);
-  done_bytes_ += current_size_;
+  done_bytes_ += current_size_ - current_resume_offset_;
   ++files_done_;
   current_sent_ = 0;
   current_size_ = 0;
+  current_resume_offset_ = 0;
   current_file_.clear();
 }
 
@@ -69,7 +71,7 @@ Progress::Snapshot Progress::snapshot() const {
     s.current_size = current_size_;
     s.activity = activity_;
     s.current_sent = current_sent_;
-    s.sent_bytes = done_bytes_ + s.current_sent;
+    s.sent_bytes = done_bytes_ + s.current_sent - current_resume_offset_;
     s.files_done = files_done_;
   }
   s.total_files = total_files_;

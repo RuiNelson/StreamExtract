@@ -40,6 +40,7 @@ struct RemoteFile {
 
 struct UploadResult {
   bool ok = false;
+  bool remote_started = false;     // The server accepted STOR/APPE: a partial file may need deleting.
   bool aborted_by_source = false;  // The read function aborted the transfer.
   bool timestamp_failed = false;   // Uploaded, but the modification time was not set.
   uint64_t bytes_sent = 0;
@@ -82,9 +83,10 @@ class FtpClient {
 
   // Uploads `size` bytes pulled from `read` to `path`, creating missing
   // directories. If `mtime` (Unix seconds) is non-zero the remote modification
-  // time is set afterwards (MFMT, or MDTM as used by vsftpd).
+  // time is set afterwards (MFMT, or MDTM as used by vsftpd). With `append`,
+  // `read` supplies only the remaining bytes, which are appended with APPE.
   UploadResult upload(const std::string& path, uint64_t size, int64_t mtime, const ReadFn& read,
-                      const ProgressFn& progress);
+                      const ProgressFn& progress, bool append = false);
 
   // True once the server is known not to support setting file times.
   bool timestamps_unsupported() const;

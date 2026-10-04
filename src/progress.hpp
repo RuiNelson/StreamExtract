@@ -17,12 +17,12 @@ class Progress {
     // Files that will be uploaded (skipped ones excluded). Without
     // totals_known, those met so far: the rest of the archive is still unread.
     uint64_t total_files = 0;
-    uint64_t total_bytes = 0;
+    uint64_t total_bytes = 0;  // Bytes to send in this run; resumed prefixes are excluded.
     bool totals_known = true;
     // Streamed archives: how much of the archive file(s) was read, of how much.
     uint64_t archive_read = 0;
     uint64_t archive_size = 0;
-    uint64_t sent_bytes = 0;  // Completed files plus the current file's progress.
+    uint64_t sent_bytes = 0;  // Bytes sent in this run; resumed prefixes are excluded.
     uint64_t unpacked_bytes = 0;
     uint64_t files_done = 0;
     uint64_t files_skipped = 0;
@@ -53,7 +53,7 @@ class Progress {
   void set_buffer_used(uint64_t used);
 
   // Uploader side.
-  void begin_file(uint64_t number, std::string name, uint64_t size);
+  void begin_file(uint64_t number, std::string name, uint64_t size, uint64_t resume_offset = 0);
   void file_progress(uint64_t sent);
   void end_file();
 
@@ -84,6 +84,7 @@ class Progress {
   uint64_t current_number_ = 0;
   std::string current_file_;
   uint64_t current_size_ = 0;
+  uint64_t current_resume_offset_ = 0;
   std::string activity_;
 };
 

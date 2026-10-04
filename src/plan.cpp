@@ -137,7 +137,7 @@ void TransferPlan::recount() {
     switch (e.action) {
       case PlannedEntry::Action::Upload:
         ++upload_files;
-        upload_bytes += e.entry.size;
+        upload_bytes += e.entry.size - e.resume_offset;
         break;
       case PlannedEntry::Action::Skip:
         ++skip_files;
@@ -206,7 +206,8 @@ PlannedEntry Planner::plan(const ArchiveEntry& entry) {
   }
 
   if (planned.action == PlannedEntry::Action::Upload && !files_seen_.insert(planned.relative).second) {
-    log_.warn("\"{}\" appears more than once in the archive; the last copy wins", planned.relative);
+    log_.warn("\"{}\" appears more than once in the archive; copies are processed in archive order",
+              planned.relative);
   }
   if (planned.action != PlannedEntry::Action::Ignore) {
     const auto [it, inserted] = folded_.emplace(ascii_lower(planned.relative), planned.relative);
@@ -250,7 +251,7 @@ bool RemoteProbe::under_missing(std::string dir) const {
   }
 }
 
-bool RemoteProbe::same_size(const PlannedEntry& planned) {
+RemoteFile RemoteProbe::stat(const PlannedEntry& planned) {
   const std::string dir = remote_parent(planned.remote);
   auto it = directories_.find(dir);
   if (it == directories_.end()) {
@@ -267,24 +268,41 @@ bool RemoteProbe::same_size(const PlannedEntry& planned) {
   }
   const Directory& directory = it->second;
   if (!directory.exists) {
-    return false;
+    return {};
   }
   const std::string name = remote_basename(planned.remote);
   // NLST can omit dotfiles even though SIZE can query them. Keep the listing
   // shortcut for ordinary names, but ask for hidden files individually.
   const bool hidden = !name.empty() && name.front() == '.';
   if (directory.names && !hidden && directory.names->count(name) == 0) {
-    return false;
+    return {};
   }
-  const RemoteFile remote = ftp_.stat_file(planned.remote);
-  if (remote.exists && remote.size && *remote.size == planned.entry.size) {
+  return ftp_.stat_file(planned.remote);
+}
+
+void RemoteProbe::check(PlannedEntry& planned) {
+  planned.action = PlannedEntry::Action::Upload;
+  planned.resume_offset = 0;
+  planned.delete_before_upload = false;
+  const auto previous = expected_sizes_.find(planned.remote);
+  const RemoteFile remote = previous == expected_sizes_.end() ? stat(planned) : RemoteFile{true, previous->second};
+  expected_sizes_[planned.remote] = planned.entry.size;
+  if (!remote.exists) {
+    return;
+  }
+  if (remote.size && *remote.size == planned.entry.size) {
+    planned.action = PlannedEntry::Action::Skip;
     log_.debug(fmt::format("already on the server: {}", planned.relative));
-    return true;
-  }
-  if (remote.exists && !remote.size) {
+  } else if (remote.size && *remote.size < planned.entry.size) {
+    planned.resume_offset = *remote.size;
+    log_.debug(
+        fmt::format("incomplete on the server, will resume at byte {}: {}", *remote.size, planned.relative));
+  } else if (remote.size) {
+    planned.delete_before_upload = true;
+    log_.debug(fmt::format("larger on the server, will delete before uploading: {}", planned.relative));
+  } else {
     log_.debug(fmt::format("remote size unknown, will overwrite: {}", planned.relative));
   }
-  return false;
 }
 
 void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
@@ -303,9 +321,7 @@ void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
   size_t done = 0;
   for (const auto& [dir, indices] : by_dir) {
     for (const size_t i : indices) {
-      if (probe.same_size(plan.entries[i])) {
-        plan.entries[i].action = PlannedEntry::Action::Skip;
-      }
+      probe.check(plan.entries[i]);
       on_progress(++done, total);
     }
   }

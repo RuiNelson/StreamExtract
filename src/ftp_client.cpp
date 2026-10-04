@@ -87,6 +87,7 @@ struct FtpClient::Impl {
   std::function<bool()> cancel_check;
   std::string* listing = nullptr;
   bool source_aborted = false;
+  bool upload_started = false;
   uint64_t sent = 0;
 
   Impl(FtpConfig c, Logger& l, bool v) : config(std::move(c)), log(l), verbose(v) {}
@@ -96,6 +97,9 @@ struct FtpClient::Impl {
     const std::string_view line = trim_eol(std::string_view(buffer, size * nitems));
     if (is_reply_line(line)) {
       self->last_reply.assign(line);
+      if (self->read != nullptr && (line.substr(0, 3) == "125" || line.substr(0, 3) == "150")) {
+        self->upload_started = true;
+      }
     }
     return size * nitems;
   }
@@ -134,6 +138,7 @@ struct FtpClient::Impl {
     }
     if (!n) {
       self->source_aborted = true;
+      curl_easy_setopt(self->curl, CURLOPT_FORBID_REUSE, 1L);
       return CURL_READFUNC_ABORT;
     }
     return *n;
@@ -143,9 +148,13 @@ struct FtpClient::Impl {
     auto* self = static_cast<Impl*>(user);
     self->sent = static_cast<uint64_t>(ulnow);
     if (self->progress != nullptr && !(*self->progress)(self->sent)) {
+      // A pending FTP reply (e.g. 226) must not be mistaken for the reply to
+      // the cleanup command on the next request.
+      curl_easy_setopt(self->curl, CURLOPT_FORBID_REUSE, 1L);
       return 1;  // CURLE_ABORTED_BY_CALLBACK.
     }
     if (self->cancel_check && self->cancel_check()) {
+      curl_easy_setopt(self->curl, CURLOPT_FORBID_REUSE, 1L);
       return 1;
     }
     return 0;
@@ -168,6 +177,7 @@ struct FtpClient::Impl {
     progress = nullptr;
     listing = nullptr;
     source_aborted = false;
+    upload_started = false;
     sent = 0;
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -396,7 +406,7 @@ bool FtpClient::delete_file(const std::string& path) {
 }
 
 UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t mtime, const ReadFn& read,
-                               const ProgressFn& progress) {
+                               const ProgressFn& progress, bool append) {
   using Timestamps = Impl::Timestamps;
   Impl& d = *impl_;
   d.prepare(ftp_url(d.base_url, path, false));
@@ -405,6 +415,7 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
 
   CURL* curl = d.curl;
   curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+  curl_easy_setopt(curl, CURLOPT_APPEND, append ? 1L : 0L);
   curl_easy_setopt(curl, CURLOPT_READFUNCTION, &Impl::on_read);
   curl_easy_setopt(curl, CURLOPT_READDATA, &d);
   curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(size));
@@ -427,6 +438,7 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
 
   const CURLcode code = d.perform();
   UploadResult result;
+  result.remote_started = d.upload_started || code == CURLE_OK || (code == CURLE_QUOTE_ERROR && want_time);
   result.bytes_sent = d.sent;
   result.curl_code = static_cast<int>(code);
   const bool source_aborted = d.source_aborted;

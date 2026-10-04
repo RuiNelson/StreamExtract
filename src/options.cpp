@@ -60,8 +60,8 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->capture_default_str()
       ->type_name("MIB");
   app.footer(
-      "Anonymous login is used when no --user is given. Files already on the server with the same size are "
-      "skipped; files with a different size are overwritten.");
+      "Anonymous login is used when no --user is given. Equal-size remote files are skipped; smaller files "
+      "are resumed; larger files are deleted before uploading from the beginning.");
 
   try {
     app.parse(argc, argv);
