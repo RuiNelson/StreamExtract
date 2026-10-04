@@ -37,8 +37,8 @@ Keka, `unrar`, ...).
 
 <table>
 <tr>
-<td><img src="docs/shot.webp" alt="Main window" width="501" /></td>
-<td><img src="docs/upload.webp" alt="Transfer in progress" width="501" /></td>
+<td><img src="docs/shot.webp" alt="Main window" width="765" /></td>
+<td><img src="docs/upload.webp" alt="Transfer in progress" width="765" /></td>
 </tr>
 </table>
 
