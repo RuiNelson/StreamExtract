@@ -1,0 +1,58 @@
+name: Download source archive
+description: Cache a pinned source archive and verify its SHA-256 on every use.
+inputs:
+  url:
+    description: Source archive URL
+    required: true
+  sha256:
+    description: Expected SHA-256 of the archive
+    required: true
+outputs:
+  archive:
+    description: Path of the verified source archive
+    value: ${{ steps.path.outputs.archive }}
+runs:
+  using: composite
+  steps:
+    - name: Locate archive
+      id: path
+      shell: bash
+      env:
+        SOURCE_URL: ${{ inputs.url }}
+      run: |
+        filename="${SOURCE_URL##*/}"
+        [[ "$filename" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid archive filename"; exit 1; }
+        mkdir -p .ci-downloads
+        echo "archive=.ci-downloads/${filename}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore source archive
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.path.outputs.archive }}
+        key: source-download-v1-${{ runner.os }}-${{ inputs.sha256 }}
+
+    - name: Download source archive
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        SOURCE_URL: ${{ inputs.url }}
+        SOURCE_ARCHIVE: ${{ steps.path.outputs.archive }}
+      run: curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 "${SOURCE_URL}" -o "${SOURCE_ARCHIVE}"
+
+    - name: Verify source archive
+      shell: bash
+      env:
+        SOURCE_SHA256: ${{ inputs.sha256 }}
+        SOURCE_ARCHIVE: ${{ steps.path.outputs.archive }}
+      run: |
+        actual="$(cmake -E sha256sum "$SOURCE_ARCHIVE" | cut -d' ' -f1)"
+        test "$actual" = "$SOURCE_SHA256" || { echo "Source checksum mismatch: $SOURCE_ARCHIVE ($actual)"; exit 1; }
+
+    # Save the verified download even if a later build or test fails.
+    - name: Save source archive
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.path.outputs.archive }}
+        key: source-download-v1-${{ runner.os }}-${{ inputs.sha256 }}

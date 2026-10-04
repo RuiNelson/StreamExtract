@@ -70,21 +70,32 @@ jobs:
 
       # The UnRAR sources are not part of the repository (see README).
       - name: Fetch UnRAR sources
+        id: unrar-source
+        uses: ./.github/actions/download-source
+        with:
+          url: https://www.rarlab.com/rar/unrarsrc-${{ env.UNRAR_VERSION }}.tar.gz
+          sha256: ${{ env.UNRAR_SHA256 }}
+
+      - name: Extract UnRAR sources
+        env:
+          SOURCE_ARCHIVE: ${{ steps.unrar-source.outputs.archive }}
         run: |
-          curl -fsSLO "https://www.rarlab.com/rar/unrarsrc-${UNRAR_VERSION}.tar.gz"
-          actual="$(cmake -E sha256sum "unrarsrc-${UNRAR_VERSION}.tar.gz" | cut -d' ' -f1)"
-          test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
           mkdir unrarsrc
-          tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+          tar -xzf "$SOURCE_ARCHIVE" -C unrarsrc --strip-components=1
 
       # 7-Zip's LZMA SDK is not part of the repository either (see README). It is a
       # .7z: bsdtar extracts it on macOS, 7-Zip elsewhere.
       - name: Fetch the LZMA SDK
+        id: lzma-source
+        uses: ./.github/actions/download-source
+        with:
+          url: ${{ env.LZMASDK_URL }}
+          sha256: ${{ env.LZMASDK_SHA256 }}
+
+      - name: Extract the LZMA SDK
+        env:
+          archive: ${{ steps.lzma-source.outputs.archive }}
         run: |
-          curl -fsSLO "${LZMASDK_URL}"
-          archive="${LZMASDK_URL##*/}"
-          actual="$(cmake -E sha256sum "${archive}" | cut -d' ' -f1)"
-          test "$actual" = "$LZMASDK_SHA256" || { echo "LZMA SDK checksum mismatch: $actual"; exit 1; }
           mkdir lzmasdk
           if [ "$RUNNER_OS" = macOS ]; then
             tar -xf "${archive}" -C lzmasdk
@@ -97,16 +108,31 @@ jobs:
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs
+        id: fatfs-source
+        uses: ./.github/actions/download-source
+        with:
+          url: ${{ env.FATFS_URL }}
+          sha256: ${{ env.FATFS_SHA256 }}
+
+      - name: Extract FatFs
+        env:
+          SOURCE_ARCHIVE: ${{ steps.fatfs-source.outputs.archive }}
         run: |
-          curl -fsSL "${FATFS_URL}" -o ff16.zip
-          actual="$(cmake -E sha256sum ff16.zip | cut -d' ' -f1)"
-          test "$actual" = "$FATFS_SHA256" || { echo "FatFs checksum mismatch: $actual"; exit 1; }
           mkdir fatfs
           if [ "$RUNNER_OS" = Windows ]; then
-            7z x -bso0 -bsp0 -ofatfs ff16.zip
+            7z x -bso0 -bsp0 -ofatfs "$SOURCE_ARCHIVE"
           else
-            unzip -q ff16.zip -d fatfs
+            unzip -q "$SOURCE_ARCHIVE" -d fatfs
           fi
+
+      # Keep only downloaded archives; CMake verifies and extracts them afresh.
+      - name: Cache CMake source archives
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
+            build/_ext/*/src/*.tar.*
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
 
       - name: Configure
         run: >
@@ -211,21 +237,32 @@ jobs:
         run: cargo install tauri-cli --version "${TAURI_CLI_VERSION}" --locked
 
       - name: Fetch UnRAR sources
+        id: unrar-source
+        uses: ./.github/actions/download-source
+        with:
+          url: https://www.rarlab.com/rar/unrarsrc-${{ env.UNRAR_VERSION }}.tar.gz
+          sha256: ${{ env.UNRAR_SHA256 }}
+
+      - name: Extract UnRAR sources
+        env:
+          SOURCE_ARCHIVE: ${{ steps.unrar-source.outputs.archive }}
         run: |
-          curl -fsSLO "https://www.rarlab.com/rar/unrarsrc-${UNRAR_VERSION}.tar.gz"
-          actual="$(cmake -E sha256sum "unrarsrc-${UNRAR_VERSION}.tar.gz" | cut -d' ' -f1)"
-          test "$actual" = "$UNRAR_SHA256" || { echo "UnRAR checksum mismatch: $actual"; exit 1; }
           mkdir unrarsrc
-          tar -xzf "unrarsrc-${UNRAR_VERSION}.tar.gz" -C unrarsrc --strip-components=1
+          tar -xzf "$SOURCE_ARCHIVE" -C unrarsrc --strip-components=1
 
       # 7-Zip's LZMA SDK is not part of the repository either (see README). It is a
       # .7z: bsdtar extracts it on macOS, 7-Zip elsewhere.
       - name: Fetch the LZMA SDK
+        id: lzma-source
+        uses: ./.github/actions/download-source
+        with:
+          url: ${{ env.LZMASDK_URL }}
+          sha256: ${{ env.LZMASDK_SHA256 }}
+
+      - name: Extract the LZMA SDK
+        env:
+          archive: ${{ steps.lzma-source.outputs.archive }}
         run: |
-          curl -fsSLO "${LZMASDK_URL}"
-          archive="${LZMASDK_URL##*/}"
-          actual="$(cmake -E sha256sum "${archive}" | cut -d' ' -f1)"
-          test "$actual" = "$LZMASDK_SHA256" || { echo "LZMA SDK checksum mismatch: $actual"; exit 1; }
           mkdir lzmasdk
           if [ "$RUNNER_OS" = macOS ]; then
             tar -xf "${archive}" -C lzmasdk
@@ -236,16 +273,31 @@ jobs:
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs
+        id: fatfs-source
+        uses: ./.github/actions/download-source
+        with:
+          url: ${{ env.FATFS_URL }}
+          sha256: ${{ env.FATFS_SHA256 }}
+
+      - name: Extract FatFs
+        env:
+          SOURCE_ARCHIVE: ${{ steps.fatfs-source.outputs.archive }}
         run: |
-          curl -fsSL "${FATFS_URL}" -o ff16.zip
-          actual="$(cmake -E sha256sum ff16.zip | cut -d' ' -f1)"
-          test "$actual" = "$FATFS_SHA256" || { echo "FatFs checksum mismatch: $actual"; exit 1; }
           mkdir fatfs
           if [ "$RUNNER_OS" = Windows ]; then
-            7z x -bso0 -bsp0 -ofatfs ff16.zip
+            7z x -bso0 -bsp0 -ofatfs "$SOURCE_ARCHIVE"
           else
-            unzip -q ff16.zip -d fatfs
+            unzip -q "$SOURCE_ARCHIVE" -d fatfs
           fi
+
+      # Keep only downloaded archives; CMake verifies and extracts them afresh.
+      - name: Cache CMake source archives
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
+            build/_ext/*/src/*.tar.*
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
 
       - name: Configure the library
         run: >
@@ -313,6 +365,8 @@ jobs:
     needs: [build, gui]
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: bin-*
@@ -324,10 +378,16 @@ jobs:
           path: gui
 
       - name: Get the RAR archiver
-        run: |
-          curl -fsSLO "https://www.rarlab.com/rar/${RAR_ARCHIVE}"
-          echo "${RAR_SHA256}  ${RAR_ARCHIVE}" | sha256sum -c -
-          tar -xzf "${RAR_ARCHIVE}"
+        id: rar-source
+        uses: ./.github/actions/download-source
+        with:
+          url: https://www.rarlab.com/rar/${{ env.RAR_ARCHIVE }}
+          sha256: ${{ env.RAR_SHA256 }}
+
+      - name: Extract the RAR archiver
+        env:
+          SOURCE_ARCHIVE: ${{ steps.rar-source.outputs.archive }}
+        run: tar -xzf "$SOURCE_ARCHIVE"
 
       - name: Create archives
         run: |
