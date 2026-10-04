@@ -12,7 +12,7 @@
         "label": "main",
         "title": "StreamExtract",
         "width": 640,
-        "height": 800,
+        "height": 840,
         "minWidth": 560,
         "minHeight": 640,
         "resizable": true,
