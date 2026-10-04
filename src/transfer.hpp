@@ -26,9 +26,9 @@ struct TransferResult {
   Status status = Status::Success;
   std::string error;
   uint64_t files_uploaded = 0;
-  uint64_t bytes_uploaded = 0;
+  uint64_t bytes_uploaded = 0;  // Bytes sent for completed files; resumed prefixes are excluded.
   double seconds = 0.0;
-  uint64_t skipped_files = 0;  // Already on the server with the same size.
+  uint64_t skipped_files = 0;  // Same name and size on the server.
   uint64_t skipped_bytes = 0;
   uint64_t ignored = 0;  // Links, special files, unusable names.
 };
@@ -62,7 +62,7 @@ class Transfer {
   const PlannedEntry& entry(size_t index);
   void run_uploader();
   void upload_loop();
-  bool upload_file(size_t index, uint64_t number);
+  bool upload_file(const PlannedEntry& planned, uint64_t number);
   bool await_file_end(const PlannedEntry& planned);
   bool discard_file();
   void remove_partial(const PlannedEntry& planned, uint64_t bytes_sent);
@@ -93,6 +93,7 @@ class Transfer {
   std::deque<PlannedEntry> streamed_;
   std::unique_ptr<RemoteProbe> probe_;
   const Archive* reading_ = nullptr;  // Extractor only: for the position in the archive.
+  uint64_t unpacking_size_ = 0;       // Extractor only: sizes buffers for the current file.
   uint64_t files_uploaded_ = 0;
   uint64_t bytes_uploaded_ = 0;
   uint64_t skipped_files_ = 0;  // Streamed plans; otherwise the plan's counts.

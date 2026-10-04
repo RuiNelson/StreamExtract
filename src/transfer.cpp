@@ -10,10 +10,10 @@
 
 #include <fmt/format.h>
 
+#include "archive.hpp"
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "progress.hpp"
-#include "archive.hpp"
 #include "util/text.hpp"
 
 namespace rarftp {
@@ -21,6 +21,7 @@ namespace rarftp {
 namespace {
 
 constexpr size_t kBlockSize = 1 << 20;
+constexpr size_t kMinBlockCapacity = 4096;
 
 std::string file_name_of(const std::string& path) {
   const size_t slash = path.find_last_of("/\\");
@@ -43,6 +44,8 @@ Transfer::~Transfer() {
 }
 
 void Transfer::start() {
+  // Directory creation and streamed probes also wait for FTP replies.
+  ftp_.set_cancel_check([this] { return cancel_requested_.load(); });
   progress_.set_totals(plan_.upload_files, plan_.upload_bytes, plan_.skip_files, plan_.skip_bytes);
   if (plan_.streamed) {
     progress_.set_streamed();
@@ -69,6 +72,7 @@ TransferResult Transfer::wait() {
   if (uploader_.joinable()) {
     uploader_.join();
   }
+  ftp_.set_cancel_check(nullptr);  // The callback must not outlive this Transfer.
   std::lock_guard lock(mutex_);
   TransferResult result;
   result.files_uploaded = files_uploaded_;
@@ -167,7 +171,15 @@ void Transfer::extract() {
     }
     while (size > 0) {
       if (block.capacity() == 0) {
-        block = pipe_.acquire_buffer(kBlockSize);
+        // A tiny file must not retain a 1 MiB allocation while it waits for
+        // FTP. The queue bounds payload bytes, so thousands of small files
+        // can be waiting at once. Size from the file header, not this callback,
+        // keeps large files from repeatedly growing buffers for small chunks.
+        size_t capacity = kMinBlockCapacity;
+        while (capacity < unpacking_size_ && capacity < kBlockSize) {
+          capacity *= 2;
+        }
+        block = pipe_.acquire_buffer(capacity);
       }
       const size_t take = std::min(size, kBlockSize - block.size());
       block.insert(block.end(), data, data + take);
@@ -236,6 +248,7 @@ void Transfer::extract() {
             break;
           }
           case PlannedEntry::Action::Upload: {
+            unpacking_size_ = planned.entry.size;
             progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
             PipeMessage begin;
             begin.kind = PipeMessage::Kind::FileBegin;
@@ -259,9 +272,9 @@ void Transfer::extract() {
             if (plan_.skip_decompresses) {
               // It has to be decompressed anyway. test() (instead of skip())
               // keeps cancellation responsive.
-              progress_.set_activity(fmt::format(
-                  "Skipping {} (already on the server), decompressing it to reach the next files",
-                  planned.relative));
+              progress_.set_activity(
+                  fmt::format("Skipping {} (already on the server), decompressing it to reach the next files",
+                              planned.relative));
               discard = true;
               archive->test();
               discard = false;
@@ -345,6 +358,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
           break;
         }
         case PlannedEntry::Action::Upload: {
+          unpacking_size_ = planned.entry.size;
           // The uploader checks the server first, and drops the data of a file
           // that is already there: it has to be decompressed anyway.
           progress_.set_activity(fmt::format("Unpacking {}", planned.relative));
@@ -418,13 +432,14 @@ void Transfer::upload_loop() {
       case PipeMessage::Kind::EnsureDir:
         ftp_.ensure_directory(entry(message->entry).remote);
         break;
-      case PipeMessage::Kind::FileBegin:
+      case PipeMessage::Kind::FileBegin: {
+        PlannedEntry planned = entry(message->entry);
         if (plan_.streamed) {
-          const PlannedEntry& planned = entry(message->entry);
           if (!probe_) {
             probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_);
           }
-          if (probe_->same_size(planned)) {
+          probe_->check(planned);
+          if (planned.action == PlannedEntry::Action::Skip) {
             progress_.add_skipped(planned.entry.size);
             progress_.set_activity(fmt::format("Skipping {} (already on the server)", planned.relative));
             {
@@ -437,12 +452,13 @@ void Transfer::upload_loop() {
             }
             break;
           }
-          progress_.add_upload(planned.entry.size);
+          progress_.add_upload(planned.entry.size - planned.resume_offset);
         }
-        if (!upload_file(message->entry, ++number)) {
+        if (!upload_file(planned, ++number)) {
           return;
         }
         break;
+      }
       case PipeMessage::Kind::End:
         progress_.set_totals_known();
         return;
@@ -453,17 +469,44 @@ void Transfer::upload_loop() {
   }
 }
 
-bool Transfer::upload_file(size_t index, uint64_t number) {
-  const PlannedEntry& planned = entry(index);
+bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   const uint64_t size = planned.entry.size;
-  progress_.begin_file(number, planned.relative, size);
+  const uint64_t remaining = size - planned.resume_offset;
+  if (cancel_requested_ || pipe_.aborted()) {
+    return false;
+  }
+  if (planned.delete_before_upload) {
+    if (!ftp_.delete_file(planned.remote)) {
+      fail(fmt::format("cannot delete the larger remote file {}", planned.relative));
+      return false;
+    }
+    log_.info("Removed the larger remote file {}", planned.remote);
+  }
+  if (planned.resume_offset > 0) {
+    log_.info("Resuming {} at byte {} ({} remaining)", planned.relative, planned.resume_offset,
+              format_bytes(remaining, log_.units()));
+  }
+  progress_.begin_file(number, planned.relative, size, planned.resume_offset);
 
   std::vector<uint8_t> block;
   size_t offset = 0;
   bool complete = false;  // FileEnd seen: the whole file was verified.
+  uint64_t discard = planned.resume_offset;
 
   const FtpClient::ReadFn read = [&](char* buffer, size_t capacity) -> std::optional<size_t> {
-    while (offset >= block.size()) {
+    while (true) {
+      if (offset < block.size()) {
+        if (discard > 0) {
+          const size_t take = static_cast<size_t>(std::min<uint64_t>(discard, block.size() - offset));
+          offset += take;
+          discard -= take;
+          continue;
+        }
+        const size_t n = std::min(capacity, block.size() - offset);
+        std::memcpy(buffer, block.data() + offset, n);
+        offset += n;
+        return n;
+      }
       if (complete) {
         return 0;
       }
@@ -486,18 +529,15 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
         return std::nullopt;
       }
     }
-    const size_t n = std::min(capacity, block.size() - offset);
-    std::memcpy(buffer, block.data() + offset, n);
-    offset += n;
-    return n;
   };
   const FtpClient::ProgressFn on_progress = [&](uint64_t sent) {
-    progress_.file_progress(std::min(sent, size));
+    progress_.file_progress(planned.resume_offset + std::min(sent, remaining));
     return !cancel_requested_.load();
   };
 
   const auto started = std::chrono::steady_clock::now();
-  UploadResult result = ftp_.upload(planned.remote, size, planned.entry.mtime, read, on_progress);
+  UploadResult result =
+      ftp_.upload(planned.remote, remaining, planned.entry.mtime, read, on_progress, planned.resume_offset > 0);
   const bool unsent_data = offset < block.size();  // libcurl took only the announced size.
   if (block.capacity() > 0) {
     pipe_.release_buffer(std::move(block));
@@ -510,7 +550,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
 
   // libcurl stops reading once it has the announced size, so the end marker,
   // which the archive's checksum verification gates, is usually still queued.
-  if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= size)) {
+  if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= remaining)) {
     complete = await_file_end(planned);
     if (!complete) {
       result.ok = false;
@@ -518,7 +558,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
     }
   }
 
-  if (!result.ok && complete && result.bytes_sent >= size && !cancel_requested_ && !pipe_.aborted()) {
+  if (!result.ok && complete && result.bytes_sent >= remaining && !cancel_requested_ && !pipe_.aborted()) {
     // Everything was sent but the confirmation never came (typical of control
     // connections dropped by NAT during very long transfers). Check what the
     // server has.
@@ -538,14 +578,16 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
       fail(fmt::format("upload of {} failed: {}", planned.relative, result.error));
     }
     pipe_.abort();
-    remove_partial(planned, result.bytes_sent);
+    if (result.remote_started) {
+      remove_partial(planned, result.bytes_sent);
+    }
     return false;
   }
 
   progress_.end_file();
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(size, log_.units()),
-            format_speed(seconds > 0.0 ? static_cast<double>(size) / seconds : 0.0, log_.units()));
+  log_.info("Uploaded {} ({}, {})", planned.relative, format_bytes(remaining, log_.units()),
+            format_speed(seconds > 0.0 ? static_cast<double>(remaining) / seconds : 0.0, log_.units()));
   if (result.timestamp_failed) {
     if (!ftp_.timestamps_unsupported()) {
       log_.warn("could not set the modification time of {}", planned.relative);
@@ -556,7 +598,7 @@ bool Transfer::upload_file(size_t index, uint64_t number) {
   }
   std::lock_guard lock(mutex_);
   ++files_uploaded_;
-  bytes_uploaded_ += size;
+  bytes_uploaded_ += remaining;
   return true;
 }
 
@@ -605,6 +647,8 @@ bool Transfer::discard_file() {
 }
 
 void Transfer::remove_partial(const PlannedEntry& planned, uint64_t bytes_sent) {
+  // Cleanup must still run after the cancellation/error that stopped the upload.
+  ftp_.set_cancel_check(nullptr);
   if (ftp_.delete_file(planned.remote)) {
     log_.info("Removed the incomplete remote file {}", planned.remote);
   } else if (bytes_sent > 0) {

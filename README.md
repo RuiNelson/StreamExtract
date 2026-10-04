@@ -201,7 +201,7 @@ flowchart LR
     end
     buf[("bounded buffer<br/>(64 MiB by default)")]
     subgraph uploader["uploader thread"]
-        stor["libcurl STOR<br/>(one control connection)"]
+        stor["libcurl STOR / APPE<br/>(one control connection)"]
     end
     dec -->|"1 MiB blocks"| buf --> stor
 ```
@@ -218,9 +218,14 @@ shared library (`librarftpcore`, C API in `src/capi/rarftp.h`).
 
 Behaviour, in both:
 
-- **Files already on the server** with the same size are skipped; with a
-  different size they are overwritten. Re-running after a failure only sends
-  what is missing or incomplete.
+- **Files already on the server** are checked by name and size. A larger
+  remote file is deleted before uploading the archive member from the beginning.
+  An equal-size file is considered uploaded and skipped. A smaller remote file
+  is considered incomplete: its existing bytes are kept and only the remaining
+  bytes are appended. Existing contents are trusted without comparison. Missing
+  files are uploaded from the beginning; if the server cannot report a file's
+  size, it is overwritten from the beginning. Progress and upload totals count
+  only the bytes sent in this run.
 - **Directories** of the archive, including empty ones, are created.
 - **Modification times** are preserved with `MFMT` (or vsftpd's `MDTM` form)
   when the server allows it.
@@ -252,8 +257,9 @@ Behaviour, in both:
 - **Compressed tar is read once, as it is uploaded.** Its files can only be
   reached by decompressing everything before them, so instead of listing the
   archive first, rarftp plans each file when it reaches it and checks the
-  server just before sending it (a file already there with the same size is
-  decompressed and dropped). There are no totals until the end: the progress
+  server just before sending it, using the same size rules. Complete files and
+  existing prefixes of incomplete files are decompressed and dropped; only the
+  remaining bytes are sent. There are no totals until the end: the progress
   and the ETA of the whole archive come from how much of the archive file has
   been read.
 - **exFAT**: a single raw volume image (`.exfat`), such as one formatted with
@@ -280,7 +286,7 @@ Behaviour, in both:
 
 ### Not supported yet
 
-FTPS, resuming or retrying a file after a network failure, extracting only
+FTPS, automatic retries after a network failure, extracting only
 some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.

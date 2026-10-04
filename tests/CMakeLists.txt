@@ -45,4 +45,13 @@ if(TARGET rarftpcore)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rarftpcore> $<TARGET_FILE_DIR:rarftpcore_tests>)
   endif()
   add_test(NAME capi COMMAND rarftpcore_tests)
+
+  # FTP resume, failures and cancellation against a local server, using only Python's stdlib.
+  find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME ftp_faults COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftp_faults.py"
+      --rarftp $<TARGET_FILE:rarftp> --lib $<TARGET_FILE:rarftpcore>)
+    set_tests_properties(ftp_faults PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endif()
 endif()

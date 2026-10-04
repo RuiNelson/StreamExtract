@@ -292,6 +292,23 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     write_tree(dirs_tree, dirs_files, dirs=["empty-top", "a/b/empty-nested", "a/b/c/d/e/empty-deep",
                                             "many/030/empty-leaf"])
 
+    small_tree = trees / "small"
+    small_files = {"000-large.bin": rnd.randbytes((2 << 20) + 1), "empty.dat": b""}
+    small_files.update({f"files/{i:04}.txt": f"file {i}\n".encode() for i in range(1000)})
+    small_files.update({f"deep/a/b/{i % 2}/file {i} %.txt": bytes([i]) for i in range(40)})
+    write_tree(small_tree, small_files)
+
+    hidden_tree = trees / "hidden"
+    write_tree(hidden_tree, {
+        "visible.txt": b"visible\n",
+        ".hidden": b"hidden\n",
+        ".empty": b"",
+        ".config/preferences.json": b"{}\n",
+        "sub/visible.txt": b"visible in subdirectory\n",
+        "sub/.settings": b"hidden in subdirectory\n",
+        "sub/.metadata": b"metadata\n",
+    })
+
     links_tree = trees / "links" / "tree"
     shared = rnd.randbytes(200_000)
     write_tree(links_tree, {"original.bin": shared, "zz-identical-copy.bin": shared, "plain.txt": b"plain\n"},
@@ -323,6 +340,7 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     rar_a("encrypted-headers.rar", main_parent, f"-hp{ARCHIVE_PASSWORD}")
     rar_a("dirs.rar", dirs_tree, "-m3", what="*")
     rar_a("dirs-solid-multivolume.rar", dirs_tree, "-s", "-m5", "-v20k", what="*")
+    rar_a("small.rar", small_tree, "-m3", what="*")
     rar_a("links.rar", trees / "links", "-ol", "-oi")
     rar_a("tiny.rar", trees / "tiny")
     rar_a("slow.rar", trees / "slow", "-m1")
@@ -335,6 +353,8 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     if hasattr(zipfile, "ZIP_ZSTANDARD"):  # Python 3.14+.
         zip_tree(archives / "zstd.zip", main_parent, compression=zipfile.ZIP_ZSTANDARD)
     zip_tree(archives / "dirs.zip", dirs_tree, what="*")
+    zip_tree(archives / "small.zip", small_tree, what="*")
+    zip_tree(archives / "hidden.zip", hidden_tree, what="*")
     zip_tree(archives / "links.zip", trees / "links")
     zip_tree(archives / "tiny.zip", trees / "tiny")
 
@@ -342,6 +362,12 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
     # .lzma format and lz4 by hand), and split into parts.
     with tarfile.open(archives / "basic.tar", "w") as tar:
         tar.add(main_tree, arcname="tree")
+    with tarfile.open(archives / "small.tar.gz", "w:gz") as tar:
+        for child in sorted(small_tree.iterdir()):
+            tar.add(child, arcname=child.name)
+    with tarfile.open(archives / "hidden.tar.gz", "w:gz") as tar:
+        for child in sorted(hidden_tree.iterdir()):
+            tar.add(child, arcname=child.name)
     for suffix, mode in (("gz", "w:gz"), ("bz2", "w:bz2"), ("xz", "w:xz"), ("zst", "w:zst")):
         if mode == "w:zst" and sys.version_info < (3, 14):
             continue
@@ -377,6 +403,7 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
         sz_a("deflate64.7z", main_parent, "-m0=Deflate64")
         sz_a("ppmd.7z", main_parent, "-m0=PPMd")
         sz_a("dirs.7z", dirs_tree, what="*")
+        sz_a("small.7z", small_tree, what="*")
         sz_a("bcj2.7z", main_parent, "-mf=BCJ2")
         sz_a("encrypted.7z", main_parent, f"-p{ARCHIVE_PASSWORD}")
         sz_a("encrypted-headers.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-mhe=on")
@@ -401,7 +428,8 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
         rar_a("big.rar", trees / "big", "-m1")
         zip_tree(archives / "big.zip", trees / "big")  # Zip64: a file over 4 GiB.
 
-    return {"main": main_tree, "dirs": dirs_tree, "links": links_tree, "tiny": tiny_tree,
+    return {"main": main_tree, "dirs": dirs_tree, "small": small_tree, "hidden": hidden_tree,
+            "links": links_tree, "tiny": tiny_tree,
             "slow": slow_tree, "big": big_tree, "archives": archives}
 
 
@@ -814,13 +842,34 @@ def test_rerun_skips_identical_files(env):
     check("Skipped 8 file(s)" in out, "skipped count missing", out)
 
 
-def test_changed_size_is_uploaded_again(env):
+def test_larger_remote_file_is_uploaded_again(env):
     with open(env.remote("basic", "tree", "random-5M.bin"), "r+b") as f:
-        f.truncate(1234)
+        f.truncate((5 << 20) + 1)
     time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
-    out = env.run("basic.rar", "--directory", "basic")
+    out = env.run("basic.rar", "--directory", "basic", "--verbose")
     check("To upload: 1 file(s)" in out, "expected exactly one upload", out)
+    check("Removed the larger remote file" in out, "larger file was not deleted first", out)
+    check(out.index("DEBUG > DELE ") < out.index("DEBUG > STOR "), "upload preceded deletion", out)
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
+
+
+def test_smaller_remote_files_are_resumed(env):
+    for archive in ("basic.rar", "solid.rar", "basic.zip", "basic.7z", "basic.tar", "basic.tar.gz"):
+        env.require(archive)
+        directory = "smaller-" + archive.replace(".", "-")
+        env.run(archive, "--directory", directory, "--mkdir")
+        root = env.remote(directory, "tree")
+        (root / "small.txt").write_bytes(b"")
+        offset = (2 << 20) + 19  # Cross both pipe blocks and curl read-buffer boundaries.
+        with open(root / "random-5M.bin", "r+b") as target:
+            target.truncate(offset)
+        time.sleep(1)  # Let Docker's bind mount see the changes.
+        out = env.run(archive, "--directory", directory, "--verbose", "--buffer", "1")
+        check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "incomplete files were not resumed", out)
+        check(f"Resuming tree/random-5M.bin at byte {offset}" in out, "resume offset was not used", out)
+        check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
+        check("DEBUG > DELE " not in out, "an incomplete file was deleted", out)
+        compare_trees(env.fixtures["main"], root, out)
 
 
 def test_solid(env):
@@ -867,15 +916,115 @@ def test_many_directories_rerun_and_repair(env):
     check("To upload: 0 file(s)" in out, "files were uploaded again", out)
     check("Skipped 69 file(s)" in out, "skipped count missing", out)
     # Damage the remote copy: drop a whole subtree (with a file several levels
-    # below it), an empty directory and a leaf file; shorten another file.
+    # below it), an empty directory and a leaf file; enlarge another file.
     shutil.rmtree(env.remote("dirs", "a", "b", "c"))
     shutil.rmtree(env.remote("dirs", "empty-top"))
     env.remote("dirs", "many", "059", "f.txt").unlink()
     with open(env.remote("dirs", "dir with spaces", "sub dir #2", "file 2.txt"), "r+b") as f:
-        f.truncate(1)
+        f.truncate(f.seek(0, os.SEEK_END) + 1)
     out = env.run("dirs.rar", "--directory", "dirs")
     check("To upload: 4 file(s)" in out, "expected exactly the four damaged files", out)
     compare_trees(env.fixtures["dirs"], env.remote("dirs"), out)
+
+
+def check_small_files(env, archive, directory):
+    expected = env.fixtures["small"]
+    count = sum(value != "dir" for value in tree_snapshot(expected).values())
+    out = env.run(archive, "--directory", directory, "--mkdir", "--buffer", "1")
+    compare_trees(expected, env.remote(directory), out)
+    compare_mtimes(expected, env.remote(directory), out)
+    check(f"Done: {count} file(s)" in out, "wrong uploaded count", out)
+
+    out = env.run(archive, "--directory", directory, "--verbose", "--buffer", "1")
+    check("Done: 0 file(s)" in out and f"Skipped {count} file(s)" in out, "files were uploaded again", out)
+    check("DEBUG > STOR " not in out, "a skipped file was sent", out)
+
+    # Repair a larger remote file, a missing deep file and an empty file.
+    env.remote(directory, "files", "0000.txt").write_bytes(b"larger remote contents")
+    env.remote(directory, "deep", "a", "b", "1", "file 1 %.txt").unlink()
+    env.remote(directory, "empty.dat").unlink()
+    time.sleep(1)  # Let Docker's bind mount see the changes.
+    out = env.run(archive, "--directory", directory, "--buffer", "1")
+    check("Done: 3 file(s)" in out and f"Skipped {count - 3} file(s)" in out, "wrong repair count", out)
+    compare_trees(expected, env.remote(directory), out)
+    compare_mtimes(expected, env.remote(directory), out)
+
+
+def test_small_files_rar(env):
+    check_small_files(env, "small.rar", "small-rar")
+
+
+def test_small_files_zip(env):
+    check_small_files(env, "small.zip", "small-zip")
+
+
+def test_small_files_7z(env):
+    env.require("small.7z")
+    check_small_files(env, "small.7z", "small-7z")
+
+
+def test_small_files_streamed_tar(env):
+    check_small_files(env, "small.tar.gz", "small-tar")
+
+
+def test_small_files_directory_navigation(env):
+    # Alternate existing deep directories, with no directory entries in the
+    # ZIP. Count commands instead of asserting a machine-dependent duration.
+    source = env.work / "navigation"
+    files = {f"a/b/c/{i % 2}/f{i:03}.txt": f"file {i}\n".encode() for i in range(40)}
+    write_tree(source, files)
+    archive = "navigation.zip"
+    with zipfile.ZipFile(env.archive(archive), "w", zipfile.ZIP_DEFLATED) as z:
+        for name in files:
+            z.write(source / name, name)
+    destination = env.remote("small-navigation")
+    for branch in ("0", "1"):
+        (destination / "a" / "b" / "c" / branch).mkdir(parents=True)
+    time.sleep(1)
+    started = time.monotonic()
+    out = env.run(archive, "--directory", "small-navigation", "--verbose")
+    cwd_count = out.count("DEBUG > CWD ")
+    print(f"    {len(files)} small files: {cwd_count} CWD commands, {time.monotonic() - started:.3f} s")
+    check(0 < cwd_count < 100, f"too many directory traversal commands: {cwd_count}", out)
+    compare_trees(source, destination, out)
+    compare_mtimes(source, destination, out)
+
+    # A file-only ZIP must also create missing parents, using the fallback.
+    out = env.run(archive, "--directory", "small-navigation-missing", "--mkdir", "--buffer", "1")
+    compare_trees(source, env.remote("small-navigation-missing"), out)
+    compare_mtimes(source, env.remote("small-navigation-missing"), out)
+
+
+def check_hidden_files(env, archive, directory):
+    expected = env.fixtures["hidden"]
+    count = sum(value != "dir" for value in tree_snapshot(expected).values())
+    out = env.run(archive, "--directory", directory, "--mkdir")
+    compare_trees(expected, env.remote(directory), out)
+    compare_mtimes(expected, env.remote(directory), out)
+
+    out = env.run(archive, "--directory", directory, "--verbose")
+    check("Done: 0 file(s)" in out and f"Skipped {count} file(s)" in out, "hidden files were uploaded again", out)
+    check("DEBUG > STOR " not in out, "a skipped file was sent", out)
+    check("DEBUG > SIZE .hidden" in out, "the hidden file was not checked with SIZE", out)
+
+    # Omitted names still need their size checked, including zero-byte files.
+    env.remote(directory, ".hidden").unlink()
+    env.remote(directory, ".empty").unlink()
+    env.remote(directory, "sub", ".settings").write_bytes(b"larger remote contents" * 2)
+    env.remote(directory, "sub", "visible.txt").write_bytes(b"larger remote contents" * 2)
+    time.sleep(1)
+    out = env.run(archive, "--directory", directory)
+    check("Done: 4 file(s)" in out and f"Skipped {count - 4} file(s)" in out, "wrong hidden-file repair count", out)
+    compare_trees(expected, env.remote(directory), out)
+    compare_mtimes(expected, env.remote(directory), out)
+
+
+def test_hidden_files_zip(env):
+    check_hidden_files(env, "hidden.zip", "hidden-zip")
+
+
+def test_hidden_files_streamed_tar(env):
+    check_hidden_files(env, "hidden.tar.gz", "hidden-tar")
 
 
 def test_rar4_format(env):
@@ -1162,7 +1311,7 @@ def test_7z_rerun_and_repair(env):
     # Files before and after the damaged ones are skipped, decompressing what the solid block needs.
     env.remote("sevenzip-repair", "tree", "sub", "dir", "deep.bin").unlink()
     with open(env.remote("sevenzip-repair", "tree", "small.txt"), "r+b") as f:
-        f.truncate(1)
+        f.truncate(f.seek(0, os.SEEK_END) + 1)
     time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
     out = env.run("basic.7z", "--directory", "sevenzip-repair")
     check("To upload: 2 file(s)" in out, "expected exactly the two damaged files", out)
@@ -1248,9 +1397,17 @@ def test_exfat_basic(env):
     check("exFAT images have no checksum of the file contents" in out, "no verification warning", out)
     out = env.run("basic.exfat", "--directory", "exfat")
     check("To upload: 0 file(s)" in out and "Skipped 19 file(s)" in out, "files were uploaded again", out)
-    (env.remote("exfat") / "fragmented.bin").write_bytes(b"incomplete")
+    with open(env.remote("exfat", "fragmented.bin"), "r+b") as f:
+        f.truncate(f.seek(0, os.SEEK_END) + 1)
     out = env.run("basic.exfat", "--directory", "exfat")
-    check("To upload: 1 file(s)" in out, "changed-size file was not repaired", out)
+    check("To upload: 1 file(s)" in out, "larger remote file was not repaired", out)
+    check_exfat_tree(env.remote("exfat"), out)
+    with open(env.remote("exfat", "fragmented.bin"), "r+b") as f:
+        f.truncate(1000)
+    time.sleep(1)  # Let Docker's bind mount see the incomplete file.
+    out = env.run("basic.exfat", "--directory", "exfat", "--verbose")
+    check("Resuming fragmented.bin at byte 1000" in out, "exFAT file was not resumed", out)
+    check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
     check_exfat_tree(env.remote("exfat"), out)
 
 
@@ -1290,7 +1447,7 @@ def test_tar_gz_is_read_as_it_is_uploaded(env):
     # Damaged: only those two are sent.
     env.remote("tgz", "tree", "sub", "dir", "deep.bin").unlink()
     with open(env.remote("tgz", "tree", "small.txt"), "r+b") as f:
-        f.truncate(1)
+        f.truncate(f.seek(0, os.SEEK_END) + 1)
     time.sleep(1)  # Docker Desktop and OrbStack bind mounts can show the container a stale view for a moment.
     out = env.run("basic.tar.gz", "--directory", "tgz")
     check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "expected exactly the two damaged files", out)
@@ -1411,6 +1568,24 @@ def test_lib_rerun_skips_identical_files(env):
     check(job.state["progress"]["total_files"] == 0, "files were going to be uploaded again", out)
     check("To upload: 0 file(s)" in lib_log_text(job), "files were uploaded again", out)
     compare_trees(env.fixtures["main"], env.remote("lib-rerun", "tree"), out)
+
+
+def test_lib_small_files(env):
+    require_lib(env)
+    files, size = tree_totals(env.fixtures["small"])
+    for archive in ("small.rar", "small.zip", "small.tar.gz", "small.7z"):
+        if not Path(env.archive(archive)).exists():
+            continue
+        directory = "lib-" + archive.replace(".", "-")
+        job = env.lib_run(archive, directory=directory, mkdir=1, buffer_mib=1)
+        out = job.describe()
+        check(has_fields(job.result, files_uploaded=files, bytes_uploaded=size, skipped_files=0),
+              "wrong small-file upload counters", out)
+        compare_trees(env.fixtures["small"], env.remote(directory), out)
+        compare_mtimes(env.fixtures["small"], env.remote(directory), out)
+        job = env.lib_run(archive, directory=directory, buffer_mib=1)
+        check(has_fields(job.result, files_uploaded=0, bytes_uploaded=0, skipped_files=files, skipped_bytes=size),
+              "wrong small-file re-run counters", job.describe())
 
 
 def test_lib_multivolume(env):
@@ -1621,7 +1796,8 @@ TESTS = [
     test_unrar_is_linked_statically,
     test_basic_upload,
     test_rerun_skips_identical_files,
-    test_changed_size_is_uploaded_again,
+    test_larger_remote_file_is_uploaded_again,
+    test_smaller_remote_files_are_resumed,
     test_solid,
     test_active_mode,
     test_multivolume,
@@ -1629,6 +1805,13 @@ TESTS = [
     test_many_directories,
     test_many_directories_solid_multivolume,
     test_many_directories_rerun_and_repair,
+    test_small_files_rar,
+    test_small_files_zip,
+    test_small_files_7z,
+    test_small_files_streamed_tar,
+    test_small_files_directory_navigation,
+    test_hidden_files_zip,
+    test_hidden_files_streamed_tar,
     test_rar4_format,
     test_encrypted_files,
     test_encrypted_headers,
@@ -1673,6 +1856,7 @@ TESTS = [
     test_lib_si_units,
     test_lib_basic_upload,
     test_lib_rerun_skips_identical_files,
+    test_lib_small_files,
     test_lib_multivolume,
     test_lib_encrypted_headers,
     test_lib_encrypted_files,

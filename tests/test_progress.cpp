@@ -50,3 +50,26 @@ TEST_CASE("progress snapshots") {
   CHECK(s.files_done == 1);
   CHECK(s.current_file.empty());
 }
+
+TEST_CASE("resumed file progress includes the prefix but upload totals exclude it") {
+  Progress progress;
+  progress.set_totals(2, 250, 0, 0);
+  progress.begin_file(1, "partial.bin", 100, 50);
+  auto snapshot = progress.snapshot();
+  CHECK(snapshot.current_size == 100);
+  CHECK(snapshot.current_sent == 50);
+  CHECK(snapshot.sent_bytes == 0);
+  progress.file_progress(75);
+  CHECK(progress.snapshot().sent_bytes == 25);
+  progress.end_file();
+  snapshot = progress.snapshot();
+  CHECK(snapshot.sent_bytes == 50);
+  CHECK(snapshot.files_done == 1);
+  CHECK(snapshot.current_sent == 0);
+  progress.begin_file(2, "new.bin", 200);
+  progress.file_progress(150);
+  CHECK(progress.snapshot().sent_bytes == 200);
+  progress.end_file();
+  CHECK(progress.snapshot().sent_bytes == 250);
+  CHECK(progress.snapshot().files_done == 2);
+}

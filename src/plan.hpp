@@ -19,6 +19,7 @@ namespace rarftp {
 
 class FtpClient;
 class Logger;
+struct RemoteFile;
 
 // Supplies the archive password: the one given up front, or the answer to
 // `prompt` (asked at most once, e.g. on the terminal or in a dialog).
@@ -62,7 +63,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
 struct PlannedEntry {
   enum class Action {
     Upload,
-    Skip,  // Already on the server with the same size.
+    Skip,  // Same name and size on the server.
     MakeDir,
     Ignore,  // Links, file references, special files, unusable names.
   };
@@ -71,6 +72,8 @@ struct PlannedEntry {
   std::string relative;  // Sanitized, '/'-separated.
   std::string remote;    // Absolute remote path.
   Action action = Action::Upload;
+  uint64_t resume_offset = 0;         // Discard this prefix locally, then append the remaining bytes.
+  bool delete_before_upload = false;  // The remote file is larger than the archive entry.
 };
 
 struct TransferPlan {
@@ -84,7 +87,7 @@ struct TransferPlan {
   std::vector<PlannedEntry> entries;  // Same order as ArchiveListing::entries.
 
   uint64_t upload_files = 0;
-  uint64_t upload_bytes = 0;
+  uint64_t upload_bytes = 0;  // Bytes still to send; existing prefixes are excluded.
   uint64_t skip_files = 0;
   uint64_t skip_bytes = 0;
   uint64_t ignored = 0;
@@ -113,13 +116,13 @@ class Planner {
 TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& listing,
                         const std::string& remote_root, Logger& log);
 
-// Tells whether files are already on the server with a given size, one at a
-// time: one existence check and one listing per directory, then SIZE only for
-// the names that are there.
+// Plans skips, resumes and replacements, one file at a time: one existence
+// check and one listing per directory, then SIZE only for
+// the listed names and dotfiles (which some servers omit from NLST).
 class RemoteProbe {
  public:
   RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log);
-  bool same_size(const PlannedEntry& planned);
+  void check(PlannedEntry& planned);
 
  private:
   struct Directory {
@@ -127,15 +130,19 @@ class RemoteProbe {
     std::optional<std::unordered_set<std::string>> names;  // std::nullopt: no listing, ask for every file.
   };
   bool under_missing(std::string dir) const;
+  RemoteFile stat(const PlannedEntry& planned);
 
   FtpClient& ftp_;
   std::string remote_root_;
   Logger& log_;
   std::set<std::string> missing_;
   std::map<std::string, Directory> directories_;
+  // A successful transfer leaves each checked path at this size. Later copies
+  // of the same name must use it, rather than the size before the first copy.
+  std::unordered_map<std::string, uint64_t> expected_sizes_;
 };
 
-// Marks files already present on the server with the same size as Skip.
+// Skips equal-size files, resumes smaller ones, and replaces larger ones.
 // `on_progress(done, total)` is called after each checked file.
 void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
                   const std::function<void(size_t, size_t)>& on_progress);

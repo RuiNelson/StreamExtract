@@ -95,9 +95,19 @@ class Pipe {
   std::vector<uint8_t> acquire_buffer(size_t capacity) {
     {
       std::lock_guard lock(mutex_);
-      if (!free_.empty()) {
-        std::vector<uint8_t> buffer = std::move(free_.back());
-        free_.pop_back();
+      auto best = free_.end();
+      for (auto it = free_.begin(); it != free_.end(); ++it) {
+        const size_t available = it->capacity();
+        // Reuse similarly sized buffers: a large file's recycled block must
+        // not turn every subsequent tiny file into a large allocation.
+        if (available >= capacity && available - capacity <= capacity &&
+            (best == free_.end() || available < best->capacity())) {
+          best = it;
+        }
+      }
+      if (best != free_.end()) {
+        std::vector<uint8_t> buffer = std::move(*best);
+        free_.erase(best);
         buffer.clear();
         return buffer;
       }
