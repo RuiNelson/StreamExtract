@@ -86,7 +86,7 @@ The app offers:
 | Platform | Asset | Contents |
 |---|---|---|
 | Windows 10/11 (x64) | `rarftp-gui-windows-x64.rar` | `rarftp-gui.exe` and `rarftpcore.dll` |
-| macOS 12+ (Intel and Apple Silicon) | `rarftp-gui-macos-universal.rar` | `rarftp-gui.app` |
+| macOS 12+ (Intel and Apple Silicon) | `rarftp-gui-macos-universal.zip` | `rarftp-gui.app` |
 | Linux (x64, glibc 2.35+) | `rarftp-gui-linux-x64.rar` | `rarftp-gui.AppImage` |
 | Linux (arm64, glibc 2.35+) | `rarftp-gui-linux-arm64.rar` | `rarftp-gui.AppImage` |
 
