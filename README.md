@@ -323,9 +323,9 @@ Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 To update the project version everywhere (including the GUI and API examples),
 run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
 
-Requirements: a C++17 compiler, CMake 3.21+, and libcurl (the system one is
-used when present; otherwise, or with `-DSTREAMEXTRACT_BUNDLED_CURL=ON`, an FTP-only
-libcurl is built from source). UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
+Requirements: a C++17 compiler and CMake 3.21+. An FTP-only libcurl is always
+built from pinned sources and linked statically, so its features are consistent
+across platforms. UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
 LZ4 and, on Linux, mbed TLS) are built from source as static libraries during the
@@ -370,7 +370,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-The binary is `build/sext`. UnRAR, the LZMA SDK, FatFs and libarchive are always
+The binary is `build/sext`. UnRAR, the LZMA SDK, FatFs, libarchive and libcurl are always
 linked statically into it.
 
 ### Desktop app
@@ -394,10 +394,10 @@ cargo tauri dev       # or: run the app without bundling it
 ```
 
 The library is `build/libstreamextractcore.dylib` (`.so` on Linux, `streamextractcore.dll` on
-Windows). UnRAR, the LZMA SDK, FatFs, libarchive and {fmt} are linked statically into it, and it exports only the
-`streamextract_*` functions of `src/capi/streamextract.h`; the `sext` executable does not use
-it. Add `-DSTREAMEXTRACT_BUNDLED_CURL=ON` to link libcurl statically too, which makes
-the library self-contained instead of relying on the system's libcurl.
+Windows). UnRAR, the LZMA SDK, FatFs, libarchive, libcurl and {fmt} are linked
+statically into it, and it exports only the `streamextract_*` functions of
+`src/capi/streamextract.h`; the `sext` executable does not use it. The GUI's core
+library includes libcurl and does not depend on a system libcurl.
 
 On Linux `cargo tauri build` makes an AppImage; on Windows use
 `cargo tauri build --no-bundle` and keep `streamextractcore.dll` next to
