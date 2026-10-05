@@ -6,13 +6,16 @@ mod ffi;
 mod ini;
 mod memory;
 mod preferences;
+mod updates;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 use batch::Batch;
 
@@ -73,6 +76,14 @@ pub struct ServerSettings {
 #[derive(Default)]
 struct AppState {
     job: Mutex<Option<Batch>>,
+}
+
+/// At most one release lookup per launch, after consent. Separate from the transfer lock.
+#[derive(Default)]
+struct UpdateState {
+    checked: AtomicBool,
+    consent: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+    version: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -160,6 +171,155 @@ async fn preferences_save(
     )
 }
 
+#[tauri::command]
+async fn ask_update_consent(app: AppHandle, state: State<'_, UpdateState>) -> Result<bool, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    {
+        let mut consent = state.consent.lock().unwrap_or_else(PoisonError::into_inner);
+        if consent.is_some() {
+            return Err("The update consent window is already open".to_string());
+        }
+        *consent = Some(sender);
+    }
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        "update-consent",
+        tauri::WebviewUrl::App("updates.html?kind=consent".into()),
+    )
+    .title("StreamExtract — Update checks")
+    .inner_size(460.0, 240.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .build();
+    match window {
+        Ok(window) => {
+            let handle = app.clone();
+            window.on_window_event(move |event| {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    let state = handle.state::<UpdateState>();
+                    let sender = state
+                        .consent
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    if let Some(sender) = sender {
+                        let _ = sender.send(false);
+                    }
+                }
+            });
+        }
+        Err(error) => {
+            state
+                .consent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            return Err(error.to_string());
+        }
+    }
+    Ok(receiver.await.unwrap_or(false))
+}
+
+#[tauri::command]
+async fn answer_update_consent(state: State<'_, UpdateState>, enabled: bool) -> Result<(), String> {
+    if let Some(sender) = state
+        .consent
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        let _ = sender.send(enabled);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn update_version(state: State<'_, UpdateState>) -> Result<Option<String>, String> {
+    Ok(state
+        .version
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone())
+}
+
+#[tauri::command]
+async fn show_update_available(
+    app: AppHandle,
+    state: State<'_, UpdateState>,
+) -> Result<(), String> {
+    if preferences::load(&memory_file(&app)?.with_file_name("preferences.ini"))?.check_updates
+        != Some(true)
+        || state
+            .version
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none()
+        || app.get_webview_window("update-available").is_some()
+    {
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "update-available",
+        tauri::WebviewUrl::App("updates.html?kind=release".into()),
+    )
+    .title("StreamExtract — New version")
+    .inner_size(460.0, 220.0)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .focused(false) // A background result must not take focus from a transfer or another app.
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn dismiss_update_prompt(app: AppHandle) -> Result<(), String> {
+    close_update_windows(&app)
+}
+
+fn close_update_windows(app: &AppHandle) -> Result<(), String> {
+    for label in ["update-consent", "update-available"] {
+        if let Some(window) = app.get_webview_window(label) {
+            window.destroy().map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_for_updates(
+    app: AppHandle,
+    state: State<'_, UpdateState>,
+) -> Result<Option<String>, String> {
+    let path = memory_file(&app)?.with_file_name("preferences.ini");
+    if preferences::load(&path)?.check_updates != Some(true)
+        || state.checked.swap(true, Ordering::Relaxed)
+    {
+        return Ok(None);
+    }
+    // github_release_check uses blocking HTTP; never hold a job lock or run it on the UI thread.
+    let result = tauri::async_runtime::spawn_blocking(updates::check)
+        .await
+        .map_err(|error| error.to_string())??;
+    // The user may have disabled checks while the request was in flight.
+    if preferences::load(&path)?.check_updates == Some(true) {
+        *state.version.lock().unwrap_or_else(PoisonError::into_inner) = result.clone();
+        Ok(result)
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn open_releases(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(updates::RELEASES_URL, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 async fn start_transfer(
     state: State<'_, AppState>,
@@ -228,11 +388,29 @@ async fn memory_clear(app: AppHandle) -> Result<(), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .manage(AppState::default())
+        .manage(UpdateState::default())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let _ = close_update_windows(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             preferences_load,
             preferences_save,
+            check_for_updates,
+            ask_update_consent,
+            answer_update_consent,
+            update_version,
+            show_update_available,
+            dismiss_update_prompt,
+            open_releases,
             start_transfer,
             poll_transfer,
             answer_password,

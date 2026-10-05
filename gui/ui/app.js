@@ -24,6 +24,7 @@
     version: $("app-version"),
     unitsGroup: document.querySelectorAll('input[name="units"]'),
     completionSound: $("completion-sound"),
+    checkUpdates: $("check-updates"),
     passwordVisibility: [$("archive-password-visible"), $("password-visible"), $("pw-input-visible")],
     // setup
     setupView: $("setup-view"),
@@ -125,6 +126,9 @@
     retries: 3,
     completionSound: true,
     showPasswords: false,
+    checkUpdates: null, // no GitHub request until the user chooses
+    preferencesLoaded: false,
+    updateCheckStarted: false,
     preferencesBusy: true,
     starting: false,
     quitting: false,
@@ -156,6 +160,8 @@
     els.retries.disabled = state.preferencesBusy;
     els.completionSound.disabled = state.preferencesBusy;
     els.completionSound.checked = state.completionSound;
+    els.checkUpdates.disabled = state.preferencesBusy;
+    els.checkUpdates.checked = state.checkUpdates === true;
     els.buffer.value = String(state.bufferMib);
     validateBuffer();
     els.retries.value = String(state.retries);
@@ -171,6 +177,8 @@
       state.retries = preferences.retries ?? 3;
       state.completionSound = preferences.completion_sound ?? true;
       state.showPasswords = preferences.show_passwords ?? false;
+      state.checkUpdates = preferences.check_updates ?? null;
+      state.preferencesLoaded = true;
     } catch (e) {
       toastError("Could not read preferences", e);
     } finally {
@@ -180,27 +188,31 @@
   }
 
   async function savePreferences(units, bufferMib, completionSound = state.completionSound,
-    showPasswords = state.showPasswords, retries = state.retries) {
-    if (state.preferencesBusy) return;
+    showPasswords = state.showPasswords, retries = state.retries, checkUpdates = state.checkUpdates) {
+    if (state.preferencesBusy) return false;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
     els.retries.disabled = true;
     els.completionSound.disabled = true;
+    els.checkUpdates.disabled = true;
     for (const input of els.passwordVisibility) input.disabled = true;
     try {
       await invoke("preferences_save", { preferences: {
         units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
-        retries,
+        retries, check_updates: checkUpdates,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
       state.retries = retries;
       state.completionSound = completionSound;
       state.showPasswords = showPasswords;
+      state.checkUpdates = checkUpdates;
+      return true;
     } catch (e) {
       toastError("Could not save preferences", e);
+      return false;
     } finally {
       state.preferencesBusy = false;
       syncPreferences();
@@ -229,6 +241,53 @@
 
   function savePasswordVisibility(event) {
     return savePreferences(state.units, state.bufferMib, state.completionSound, event.target.checked);
+  }
+
+  /* --------------------------------------------------------- release checks */
+
+  async function saveUpdateChecks() {
+    const saved = await savePreferences(state.units, state.bufferMib, state.completionSound,
+      state.showPasswords, state.retries, els.checkUpdates.checked);
+    if (!saved) return;
+    try {
+      await invoke("dismiss_update_prompt");
+    } catch (error) {
+      console.warn("Could not close the update window", error);
+    }
+    if (state.checkUpdates) void checkForUpdates();
+  }
+
+  async function initUpdateChecks() {
+    // An unreadable file is not consent to contact GitHub or overwrite a saved choice.
+    if (!state.preferencesLoaded) return;
+    try {
+      if (state.checkUpdates === null) {
+        const enabled = await invoke("ask_update_consent");
+        // The separate window leaves Advanced usable. Preserve any choice made there,
+        // and wait for an in-flight preference save before saving the consent answer.
+        while (state.preferencesBusy && !state.quitting) await sleep(20);
+        if (state.quitting) return;
+        if (state.checkUpdates === null) {
+          await savePreferences(state.units, state.bufferMib, state.completionSound,
+            state.showPasswords, state.retries, enabled);
+        }
+      }
+      void checkForUpdates();
+    } catch (error) {
+      console.warn("Could not ask about update checks", error);
+    }
+  }
+
+  async function checkForUpdates() {
+    if (state.checkUpdates !== true || state.updateCheckStarted) return;
+    state.updateCheckStarted = true;
+    try {
+      const version = await invoke("check_for_updates");
+      if (!version || state.checkUpdates !== true || state.quitting) return;
+      await invoke("show_update_available");
+    } catch (error) {
+      console.warn("Could not check for updates", error);
+    }
   }
 
   let completionAudioContext = null;
@@ -1413,6 +1472,7 @@
     els.btnChoose.addEventListener("click", chooseArchive);
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
     els.completionSound.addEventListener("change", saveCompletionSound);
+    els.checkUpdates.addEventListener("change", saveUpdateChecks);
     for (const input of els.passwordVisibility) input.addEventListener("change", savePasswordVisibility);
 
     els.memSave.addEventListener("click", () => runMemoryAction(memorySave));
@@ -1493,6 +1553,7 @@
     initDragDrop();
     initCloseHandler();
     await Promise.all([loadAppInfo(), refreshMemory(), loadPreferences()]);
+    void initUpdateChecks();
   }
 
   init();

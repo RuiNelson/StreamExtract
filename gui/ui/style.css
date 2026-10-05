@@ -1011,6 +1011,25 @@ input[type="checkbox"] {
 
 /* ---------------------------------------------------------- toasts, dialogs */
 
+.update-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 22px;
+  gap: 12px;
+  overflow: auto;
+  background: var(--surface);
+}
+
+.update-window h1 {
+  font-size: 17px;
+}
+
+.update-window .dialog-actions {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
 .toasts {
   position: fixed;
   top: 12px;

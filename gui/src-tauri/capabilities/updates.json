@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updates",
+  "description": "Close the separate update consent and release windows",
+  "windows": ["update-consent", "update-available"],
+  "permissions": ["core:default", "core:window:allow-close"]
+}

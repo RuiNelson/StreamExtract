@@ -246,10 +246,10 @@ Source: <https://github.com/Mbed-TLS/mbedtls>.
 
 The app is built with [Tauri](https://tauri.app) 2 (Copyright (c) 2017 - present
 Tauri Apps Contributors: <https://github.com/tauri-apps/tauri>) and its
-`tauri-plugin-dialog` plugin, serde and serde_json (by Erick Tryzelaar, David
+`tauri-plugin-dialog` and `tauri-plugin-opener` plugins, serde and serde_json (by Erick Tryzelaar, David
 Tolnay and contributors: <https://github.com/serde-rs/serde>,
-<https://github.com/serde-rs/json>), and with some 240 Rust crates that these
-depend on. Tauri, its plugin, serde and serde_json are licensed under MIT or
+<https://github.com/serde-rs/json>), and with the Rust crates that these
+depend on. Tauri, its plugins, serde and serde_json are licensed under MIT or
 Apache-2.0, at your option. The crates and versions are pinned in `gui/src-tauri/Cargo.lock`; each
 crate's license is stated in its `Cargo.toml` and on <https://crates.io>.
 
@@ -262,6 +262,47 @@ BSD-3-Clause with MIT (the brotli and alloc-stdlib crates) and Zlib (`foldhash`,
 2.0 (<https://www.mozilla.org/MPL/2.0/>), which applies to their own files; they
 are used unmodified and their source is on <https://crates.io>. The crates that
 only the Windows and Linux builds pull in have not been reviewed yet.
+
+
+### Release checks and browser opening (GUI only)
+
+Release checks use `github_release_check` 0.2.1, Copyright (c) 2022 Matt Boulanger
+(<https://github.com/Celeo/github_release_check>), under MIT or Apache-2.0.
+`semver`, by David Tolnay and contributors (<https://github.com/dtolnay/semver>),
+compares versions, and `tokio`, by the Tokio contributors (<https://tokio.rs>),
+passes the separate window's consent answer asynchronously; both are MIT or
+Apache-2.0. `tauri-plugin-opener`, by the Tauri contributors
+(<https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/opener>), is
+MIT or Apache-2.0 and opens the fixed GitHub releases URL in the default browser.
+
+The added transitive crates are listed below (including platform-specific
+ones); their exact versions and sources are in `gui/src-tauri/Cargo.lock`, and
+their license texts and copyright notices are in the crate distributions on
+<https://crates.io>. OpenSSL bindings use the system OpenSSL libraries on Linux;
+TLS uses the platform libraries on macOS and Windows.
+
+| License choices | Added crates |
+| --- | --- |
+| (Apache-2.0 OR MIT) AND BSD-3-Clause | `encoding_rs` |
+| Apache-2.0 | `openssl`, `sync_wrapper` |
+| Apache-2.0 OR BSL-1.0 | `ryu` |
+| Apache-2.0 OR ISC OR MIT | `rustls-pemfile` |
+| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | `linux-raw-sys`, `rustix` |
+| MIT | `endi`, `h2`, `http-body`, `hyper`, `is-docker`, `is-wsl`, `open`, `openssl-sys`, `schannel`, `tokio-native-tls`, `tracing-attributes`, `uds_windows`, `winreg`, `zbus`, `zbus_macros`, `zbus_names`, `zcheapstr`, `zvariant`, `zvariant_derive`, `zvariant_utils` |
+| MIT or Apache-2.0 | `async-broadcast`, `async-channel`, `async-executor`, `async-io`, `async-lock`, `async-process`, `async-recursion`, `async-signal`, `async-task`, `async-trait`, `blocking`, `concurrent-queue`, `core-foundation`, `core_detect`, `enumflags2`, `enumflags2_derive`, `errno`, `event-listener`, `event-listener-strategy`, `foreign-types`, `foreign-types-shared`, `futures-lite`, `hermit-abi`, `http`, `httpdate`, `hyper-tls`, `multiversion_no_op`, `native-tls`, `openssl-macros`, `openssl-probe`, `ordered-stream`, `parking`, `piper`, `polling`, `reqwest`, `security-framework`, `security-framework-sys`, `serde_urlencoded`, `signal-hook-registry`, `simdutf8`, `socket2`, `system-configuration`, `system-configuration-sys`, `tempfile`, `vcpkg`, `windows-sys`, `windows-targets`, `windows_aarch64_gnullvm`, `windows_aarch64_msvc`, `windows_i686_gnu`, `windows_i686_msvc`, `windows_x86_64_gnu`, `windows_x86_64_gnullvm`, `windows_x86_64_msvc` |
+
+MIT license for `github_release_check`:
+
+```
+The MIT License (MIT)
+Copyright (c) 2022 Matt Boulanger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ## doctest (tests only)
 

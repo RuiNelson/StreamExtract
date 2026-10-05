@@ -6,6 +6,7 @@ const vm = require("node:vm");
 function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completion_sound: true }), windowApi = {}, tauriApi = {}) {
   const inputs = ["si", "binary"].map((value) => ({ value, disabled: true, checked: value === "si" }));
   const sounds = [];
+  const warnings = [];
   const soundUnlocks = [];
   class AudioContext {
     async resume() {}
@@ -40,7 +41,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
       assert.equal(path, "assets/audio/completed.mp3");
       return { ok: true, arrayBuffer: async () => new ArrayBuffer(1) };
     },
-    console,
+    console: { ...console, warn: (...args) => warnings.push(args) },
     document: {
       getElementById: node,
       querySelectorAll: (selector) => selector.includes('"units"') ? inputs : [],
@@ -57,13 +58,13 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
   node("buffer").value = "64";
   node("retries").value = "3";
-  return { ...context.api, inputs, node, sounds, soundUnlocks };
+  return { ...context.api, inputs, node, sounds, soundUnlocks, warnings };
 }
 
 test("progress uses the engine text for ordinary and streamed archives", () => {
@@ -172,7 +173,7 @@ test("the sound preference loads and saves without changing units or buffer", as
   app.node("completion-sound").checked = true;
   await app.saveCompletionSound();
   assert.deepEqual({ ...calls[1].args.preferences }, {
-    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3,
+    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3, check_updates: null,
   });
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").disabled, false);
@@ -206,7 +207,7 @@ test("password visibility is shared, persists across preference changes, and kee
   assert.equal(calls[1].args.preferences.show_passwords, true);
   await app.savePasswordVisibility({ target: { checked: false } });
   assert.deepEqual({ ...calls[2].args.preferences }, {
-    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3,
+    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3, check_updates: null,
   });
   for (const id of fields) {
     assert.equal(app.node(id).type, "password");
@@ -462,4 +463,176 @@ test("a failed attempt count save restores the previous value", async () => {
   assert.equal(app.state.retries, 3);
   assert.equal(app.node("retries").value, "3");
   assert.equal(app.node("retries").disabled, false);
+});
+
+
+test("first-launch consent uses a separate window and is saved before GitHub is checked", async () => {
+  const calls = [];
+  let answer;
+  let saved = { units: "si", buffer_mib: 64, retries: 3, check_updates: null };
+  const invoke = async (command, args) => {
+    calls.push(command);
+    if (command === "preferences_load") return saved;
+    if (command === "preferences_save") saved = { ...args.preferences };
+    if (command === "ask_update_consent") return new Promise((resolve) => { answer = resolve; });
+    if (command === "check_for_updates") {
+      assert.equal(saved.check_updates, true);
+      return null;
+    }
+  };
+  const app = frontend(invoke);
+  await app.loadPreferences();
+  const consent = app.initUpdateChecks();
+  assert.deepEqual(calls, ["preferences_load", "ask_update_consent"]);
+  assert.equal(app.state.preferencesBusy, false);
+  answer(true);
+  await consent;
+  assert.deepEqual(calls, ["preferences_load", "ask_update_consent", "preferences_save", "check_for_updates"]);
+  assert.equal(app.node("check-updates").checked, true);
+  const relaunched = frontend(invoke);
+  await relaunched.loadPreferences();
+  await relaunched.initUpdateChecks();
+  assert.equal(calls.filter((command) => command === "ask_update_consent").length, 1);
+  assert.equal(calls.filter((command) => command === "check_for_updates").length, 2);
+});
+
+test("declining consent persists no, suppresses later questions and never contacts GitHub", async () => {
+  const calls = [];
+  let saved = { units: "si", buffer_mib: 64 };
+  const invoke = async (command, args) => {
+    calls.push(command);
+    if (command === "preferences_load") return saved;
+    if (command === "preferences_save") saved = { ...args.preferences };
+    if (command === "ask_update_consent") return false;
+  };
+  const app = frontend(invoke);
+  await app.loadPreferences();
+  await app.initUpdateChecks();
+  assert.equal(saved.check_updates, false);
+  assert.equal(app.node("check-updates").checked, false);
+  const relaunched = frontend(invoke);
+  await relaunched.loadPreferences();
+  await relaunched.initUpdateChecks();
+  assert.equal(calls.filter((command) => command === "ask_update_consent").length, 1);
+  assert.equal(calls.includes("check_for_updates"), false);
+});
+
+test("unreadable preferences and failed consent saves never trigger a GitHub request", async () => {
+  const calls = [];
+  const app = frontend(async (command) => {
+    calls.push(command);
+    if (command === "ask_update_consent") return true;
+    throw new Error("unreadable preferences");
+  });
+  await app.loadPreferences();
+  await app.initUpdateChecks();
+  assert.deepEqual(calls, ["preferences_load"]);
+  app.state.preferencesLoaded = true;
+  await app.initUpdateChecks();
+  assert.equal(app.state.checkUpdates, null);
+  assert.deepEqual(calls, ["preferences_load", "ask_update_consent", "preferences_save"]);
+});
+
+test("update requests run once per launch and open a separate window without changing a transfer", async () => {
+  const calls = [];
+  let complete;
+  const app = frontend(async (command) => {
+    calls.push(command);
+    if (command === "check_for_updates") return new Promise((resolve) => { complete = resolve; });
+  });
+  app.state.checkUpdates = true;
+  app.state.job = { finished: false };
+  app.state.view = "transfer";
+  const job = app.state.job;
+  const check = app.checkForUpdates();
+  await app.checkForUpdates();
+  assert.deepEqual(calls, ["check_for_updates"]);
+  assert.equal(app.state.preferencesBusy, false);
+  complete("2.10.0");
+  await check;
+  assert.equal(app.state.job, job);
+  assert.equal(app.state.view, "transfer");
+  assert.equal(app.node("btn-cancel").disabled, undefined);
+  assert.equal(app.node("toasts").children.length, 0);
+  assert.deepEqual(calls, ["check_for_updates", "show_update_available"]);
+});
+
+test("current versions and network errors are silent; disabling suppresses an in-flight result", async () => {
+  for (const result of [null, new Error("offline"), new Error("GitHub rate limit")]) {
+    const calls = [];
+    const app = frontend(async (command) => {
+      calls.push(command);
+      if (result instanceof Error) throw result;
+      return result;
+    });
+    app.state.checkUpdates = true;
+    await app.checkForUpdates();
+    assert.deepEqual(calls, ["check_for_updates"]);
+    assert.equal(app.node("toasts").children.length, 0);
+    assert.equal(app.warnings.length, result instanceof Error ? 1 : 0);
+  }
+  const calls = [];
+  let complete;
+  const app = frontend(async (command) => {
+    calls.push(command);
+    if (command === "check_for_updates") return new Promise((resolve) => { complete = resolve; });
+  });
+  app.state.checkUpdates = true;
+  const check = app.checkForUpdates();
+  app.node("check-updates").checked = false;
+  await app.saveUpdateChecks();
+  complete("9.0.0");
+  await check;
+  assert.equal(calls.includes("show_update_available"), false);
+  assert.equal(calls.includes("dismiss_update_prompt"), true);
+  assert.equal(app.state.checkUpdates, false);
+});
+
+test("Advanced persists update checks across other preferences and rolls back failed changes", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "preferences_load") return { units: "binary", buffer_mib: 128, check_updates: false };
+  });
+  await app.loadPreferences();
+  await app.saveUnits({ target: { value: "si" } });
+  assert.equal(calls.at(-1).args.preferences.check_updates, false);
+  app.node("check-updates").checked = true;
+  await app.saveUpdateChecks();
+  assert.equal(app.state.checkUpdates, true);
+  const enabled = calls.find((call) => call.command === "preferences_save" && call.args.preferences.check_updates);
+  assert.equal(enabled.args.preferences.buffer_mib, 128);
+  assert.equal(calls.at(-1).command, "check_for_updates");
+  await app.saveCompletionSound();
+  assert.equal(calls.at(-1).args.preferences.check_updates, true);
+  app.node("check-updates").checked = false;
+  await app.saveUpdateChecks();
+  assert.equal(app.state.checkUpdates, false);
+  assert.equal(calls.at(-1).command, "dismiss_update_prompt");
+
+  const failed = frontend(async () => { throw new Error("read-only directory"); });
+  failed.state.checkUpdates = true;
+  failed.node("check-updates").checked = false;
+  await failed.saveUpdateChecks();
+  assert.equal(failed.state.checkUpdates, true);
+  assert.equal(failed.node("check-updates").checked, true);
+  assert.equal(failed.node("check-updates").disabled, false);
+});
+
+test("an Advanced choice made while the consent window is open takes precedence", async () => {
+  let answer;
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "ask_update_consent") return new Promise((resolve) => { answer = resolve; });
+  });
+  app.state.preferencesLoaded = true;
+  const consent = app.initUpdateChecks();
+  app.node("check-updates").checked = true;
+  await app.saveUpdateChecks();
+  answer(false); // closing the consent window must not overwrite Advanced's choice
+  await consent;
+  assert.equal(app.state.checkUpdates, true);
+  assert.equal(calls.filter((call) => call.command === "preferences_save").length, 1);
+  assert.equal(calls.filter((call) => call.command === "check_for_updates").length, 1);
 });
