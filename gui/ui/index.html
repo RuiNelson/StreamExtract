@@ -129,26 +129,27 @@
                 <label for="units-binary">Binary (1024)</label>
               </div>
             </div>
-            <p id="units-hint" class="hint muted">SI: 1000 MB = 1 GB. Binary: 1024 MiB = 1 GiB. Saved automatically.</p>
+            <p id="units-hint" class="hint muted">SI: 1000 MB = 1 GB. Binary: 1024 MiB = 1 GiB.</p>
             <div class="field narrow">
               <label for="buffer">Buffer (MiB)</label>
               <input id="buffer" type="text" inputmode="numeric" autocomplete="off" value="64" disabled
                      aria-describedby="buffer-hint buffer-error">
             </div>
-            <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB). Saved automatically.</p>
+            <p id="buffer-hint" class="hint muted">Memory between unpacking and uploading (1–4096 MiB).</p>
             <p id="buffer-error" class="error-text" role="alert" hidden></p>
             <div class="field narrow">
               <label for="retries">Upload attempts</label>
               <input id="retries" type="text" inputmode="numeric" autocomplete="off" value="3" disabled
                      aria-describedby="retries-hint retries-error">
             </div>
-            <p id="retries-hint" class="hint muted">Total attempts for connection/login and each file upload, including the first. 1 disables retries. Saved automatically.</p>
+            <p id="retries-hint" class="hint muted">Total attempts for connection/login and each file upload, including the first. 1 disables retries.</p>
             <p id="retries-error" class="error-text" role="alert" hidden></p>
             <label class="check">
               <input type="checkbox" id="completion-sound" checked disabled>
               <span>Play a sound when the upload completes successfully</span>
             </label>
-            <p class="hint muted">Saved automatically. Free SFX by SoundShelfStudio.</p>
+            <p class="hint muted">Free SFX by SoundShelfStudio.</p>
+            <p class="hint muted">Display, buffer, retry and sound settings are saved automatically.</p>
             <label class="check">
               <input type="checkbox" id="verbose">
               <span>Verbose log (every FTP command)</span>
