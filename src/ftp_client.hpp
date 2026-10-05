@@ -14,11 +14,16 @@ namespace streamextract {
 class Logger;
 
 enum class FtpMode { Passive, Active };
+enum class FtpProtocol { Ftp, Ftps };
+enum class FtpsMode { Explicit, Implicit };
 
 struct FtpConfig {
   std::string host;
   int port = 21;
   FtpMode mode = FtpMode::Passive;
+  FtpProtocol protocol = FtpProtocol::Ftp;
+  FtpsMode ftps_mode = FtpsMode::Explicit;
+  std::optional<std::string> ca_certificate;
   std::string user;  // Empty: anonymous login.
   std::string password;
   bool mention_flags = true;  // Hints in error messages name command-line options ("--mode active").

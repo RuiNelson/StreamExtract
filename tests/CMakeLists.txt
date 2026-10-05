@@ -18,6 +18,8 @@ file(ARCHIVE_EXTRACT INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip" DEST
 
 add_executable(streamextract_tests
   test_main.cpp
+  test_options.cpp
+  ../src/options.cpp
   test_archive.cpp
   test_exfat.cpp
   test_json.cpp
@@ -27,10 +29,18 @@ add_executable(streamextract_tests
   test_remote_path.cpp
   test_summary.cpp
   test_text.cpp)
-target_link_libraries(streamextract_tests PRIVATE streamextract_core doctest::doctest)
+target_link_libraries(streamextract_tests PRIVATE streamextract_core doctest::doctest CLI11::CLI11)
 target_compile_definitions(streamextract_tests PRIVATE STREAMEXTRACT_TEST_FIXTURES="${_test_fixtures}")
 
 add_test(NAME unit COMMAND streamextract_tests)
+
+# CLI FTP/FTPS tests run without the GUI library, Docker or external archivers.
+find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext>)
+  set_tests_properties(ftps PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()
 
 if(TARGET streamextractcore)
   # C-ABI smoke test: only the public header and the shared library, exactly

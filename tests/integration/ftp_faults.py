@@ -5,11 +5,13 @@ python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreame
 """
 
 import argparse
+import contextlib
 import io
 import posixpath
 import re
 import socket
 import socketserver
+import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -27,6 +29,29 @@ class FtpHandler(socketserver.StreamRequestHandler):
     def handle(self):
         cwd = "/"
         passive = None
+        active = None
+        protected = False
+
+        def start_tls():
+            self.rfile.close()
+            self.wfile.close()
+            self.connection = self.server.tls_context.wrap_socket(self.connection, server_side=True)
+            self.rfile = self.connection.makefile("rb")
+            self.wfile = self.connection.makefile("wb")
+
+        @contextlib.contextmanager
+        def accept_data():
+            data = passive.accept()[0] if passive is not None else socket.create_connection(active, timeout=10)
+            try:
+                if protected:
+                    data = self.server.tls_context.wrap_socket(data, server_side=True)
+                    self.server.tls_data_connections += 1
+                yield data
+                if protected:
+                    # A clean TLS EOF, as real FTPS servers send after the data.
+                    data = data.unwrap()
+            finally:
+                data.close()
 
         def reply(text):
             self.wfile.write((text + "\r\n").encode("utf-8"))
@@ -35,12 +60,28 @@ class FtpHandler(socketserver.StreamRequestHandler):
         def path(arg):
             return posixpath.normpath(arg if arg.startswith("/") else cwd + "/" + arg)
 
-        reply("220 Local test server")
         try:
-            for line in self.rfile:
+            if self.server.implicit_tls:
+                start_tls()
+            reply("220 Local test server")
+            while True:
+                line = self.rfile.readline()
+                if not line:
+                    break
                 command, _, arg = line.decode("utf-8").rstrip("\r\n").partition(" ")
                 self.server.commands.append((command, arg))
-                if command == "USER":
+                if command == "AUTH" and self.server.tls_context:
+                    reply("234 Start TLS")
+                    start_tls()
+                elif command == "PBSZ":
+                    reply("200 OK")
+                elif command == "PROT":
+                    protected = arg == "P" and not self.server.reject_private_data
+                    reply("200 OK" if protected else "534 Private data required")
+                elif command == "USER":
+                    if self.server.tls_context and not isinstance(self.connection, ssl.SSLSocket):
+                        reply("530 TLS required")
+                        return
                     reply("331 Password required")
                 elif command == "PASS":
                     self.server.login_attempts += 1
@@ -75,14 +116,19 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     passive.bind(("127.0.0.1", 0))
                     passive.listen()
                     reply(f"229 Extended Passive Mode (|||{passive.getsockname()[1]}|)")
+                elif command == "EPRT":
+                    _, _, host, port, _ = arg.split(arg[0])
+                    active = (host, int(port))
+                    reply("200 Active endpoint accepted")
                 elif command == "NLST":
                     if self.server.stall_listing:
                         self.server.pause()
                     reply("150 Listing")
-                    with passive.accept()[0] as data:
+                    with accept_data() as data:
                         names = [posixpath.basename(p) for p in self.server.files if posixpath.dirname(p) == cwd]
                         data.sendall("".join(name + "\r\n" for name in names).encode("utf-8"))
-                    passive.close()
+                    if passive is not None:
+                        passive.close()
                     passive = None
                     reply("226 Listing complete")
                 elif command in ("STOR", "APPE"):
@@ -91,17 +137,17 @@ class FtpHandler(socketserver.StreamRequestHandler):
                                    (self.server.fail_target is None or target == self.server.fail_target))
                     if fail_upload:
                         self.server.fail_uploads -= 1
-                    with passive.accept()[0] as data:
+                    reply("550 Overwrite refused" if self.server.reject_upload else "150 Upload accepted")
+                    with accept_data() as data:
                         data.settimeout(10)
                         if self.server.reject_upload:
-                            reply("550 Overwrite refused")
+                            pass
                         else:
                             if command == "STOR":
                                 self.server.files[target] = b""
                             else:
                                 self.server.files.setdefault(target, b"")
                             payload = bytearray()
-                            reply("150 Upload accepted")
                             while True:
                                 limit = min(65536, self.server.drop_after - len(payload)) if fail_upload else 65536
                                 chunk = data.recv(limit)
@@ -115,7 +161,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                                 if fail_upload and len(payload) >= self.server.drop_after:
                                     break
                             self.server.uploads.append((command, target, bytes(payload)))
-                    passive.close()
+                    if passive is not None:
+                        passive.close()
                     passive = None
                     if fail_upload and not self.server.reject_upload:
                         self.server.failed_uploads += 1
@@ -141,11 +188,17 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     break
                 else:
                     reply("500 Unsupported command")
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout, ssl.SSLError):
             pass  # Expected when the client cancels a stalled command.
         finally:
             if passive is not None:
                 passive.close()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            self.connection.close()
 
 
 class FtpServer(socketserver.ThreadingTCPServer):
@@ -154,7 +207,7 @@ class FtpServer(socketserver.ThreadingTCPServer):
     def __init__(self, *, files=None, reject_upload=False, reject_delete=False, stall_directory=None,
                  stall_listing=False, stall_confirmation=False, fail_uploads=0, drop_after=65539,
                  fail_target=None, stall_retry_size=False, after_failure=None, fail_logins=0,
-                 stall_login_retry=False):
+                 stall_login_retry=False, tls_context=None, implicit_tls=False, reject_private_data=False):
         super().__init__(("127.0.0.1", 0), FtpHandler)
         self.files = dict(files or {})
         self.files_lock = threading.Lock()
@@ -175,6 +228,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.fail_logins = fail_logins
         self.login_attempts = 0
         self.stall_login_retry = stall_login_retry
+        self.tls_context = tls_context
+        self.implicit_tls = implicit_tls
+        self.reject_private_data = reject_private_data
+        self.tls_data_connections = 0
         self.stalled = threading.Event()
         self.release = threading.Event()
         self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)

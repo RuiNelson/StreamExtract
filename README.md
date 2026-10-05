@@ -130,7 +130,10 @@ password-protected archives are supported:
 |---|---|
 | `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT volume image (`.exfat`), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
 | `--host HOST` | FTP server name or address (IPv4 or IPv6). |
-| `--port PORT` | Default `21`. |
+| `--protocol ftp\|ftps` | Default `ftp`. `ftps` encrypts the control and data connections with TLS. CLI only. |
+| `--ftps-mode explicit\|implicit` | Default `explicit` (AUTH TLS). `implicit` starts TLS immediately. Requires `--protocol ftps`. |
+| `--port PORT` | Default `21`, or `990` for implicit FTPS. |
+| `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
 | `--mode passive\|active` | Data connection mode. Default `passive`. |
 | `--user NAME` | Without it, the login is anonymous. |
 | `--password PASSWORD` | Requires `--user`. If omitted, it is asked for (hidden) on the terminal. |
@@ -141,6 +144,15 @@ password-protected archives are supported:
 | `--verbose` | Log every FTP command and reply (the password is masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
 | `--retries N` | Total attempts for connection/login and each file upload, including the first. Default `3`; `1` disables retries. |
+
+For explicit FTPS, add `--protocol ftps` to the command. For implicit FTPS,
+add `--protocol ftps --ftps-mode implicit`. Either accepts a custom `--port`.
+FTPS requires encryption for both connections and verifies the server's
+certificate and hostname; it fails if TLS is unavailable or verification fails.
+On macOS/Linux, certificates use the CA bundle detected when building libcurl
+(on macOS, `/etc/ssl/cert.pem`); on Windows they use the native certificate store.
+Use `--cacert /path/to/ca.pem` to trust a private CA for this transfer.
+The GUI continues to use FTP.
 
 The interface shows a fixed log panel, the progress of the current file and of
 the whole archive with their ETAs (for a compressed tar, by how much of the
@@ -307,7 +319,7 @@ Behaviour, in both:
 
 ### Not supported yet
 
-FTPS, extracting only some files, and several parallel connections. Symbolic links, hard links and
+FTPS in the GUI, extracting only some files, and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 
@@ -323,14 +335,16 @@ Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 To update the project version everywhere (including the GUI and API examples),
 run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
 
-Requirements: a C++17 compiler and CMake 3.21+. An FTP-only libcurl is always
+Requirements: a C++17 compiler and CMake 3.21+. An FTP/FTPS libcurl is always
 built from pinned sources and linked statically, so its features are consistent
 across platforms. UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
-LZ4 and, on Linux, mbed TLS) are built from source as static libraries during the
+LZ4) are built from source as static libraries during the
 first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
 longer.
+mbed TLS is fetched and built statically for FTPS on every platform; its crypto
+library also supports encrypted ZIP files on Linux. Windows root certificates are supplied to mbed TLS from the native root store.
 
 The UnRAR sources are not part of this repository (they have their own
 license) and must be extracted into `unrarsrc/`:
@@ -487,8 +501,8 @@ The Rust side has its own unit tests, which link the built library:
 | [FatFs](https://elm-chan.org/fsw/ff/) | exFAT volume image reading | FatFs license (BSD-style) |
 | [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive (and BZip2, Deflate and Zstandard in 7z) | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
-| [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | AES for encrypted ZIP files (Linux only; macOS and Windows use the system's) | Apache-2.0 |
-| [libcurl](https://curl.se/libcurl/) | FTP client | curl (MIT/X derivative) |
+| [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | FTPS on every platform; AES for encrypted ZIP files on Linux | Apache-2.0 |
+| [libcurl](https://curl.se/libcurl/) | FTP/FTPS client | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |

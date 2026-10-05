@@ -103,8 +103,8 @@ jobs:
             7z x -bso0 -bsp0 -olzmasdk "${archive}"
           fi
 
-      # libcurl is always built from source and linked statically (FTP only, no
-      # TLS), so the binary depends on nothing that Windows does not ship.
+      # libcurl is always built from source and linked statically, with FTP/FTPS.
+      # TLS uses static mbed TLS on every platform.
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs

@@ -60,6 +60,10 @@ target_compile_definitions(streamextract_core PRIVATE STREAMEXTRACT_VERSION="${P
 target_link_libraries(streamextract_core
   PUBLIC fmt::fmt
   PRIVATE unrar::unrar streamextract::lzmasdk streamextract::fatfs streamextract::libarchive CURL::libcurl_static Threads::Threads)
+if(WIN32)
+  target_sources(streamextract_core PRIVATE src/util/windows_tls.cpp)
+  target_link_libraries(streamextract_core PRIVATE crypt32)
+endif()
 if(APPLE)
   target_link_libraries(streamextract_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.
 endif()

@@ -9,6 +9,9 @@
 #include <utility>
 
 #include <fmt/format.h>
+#ifdef _WIN32
+#include <CLI/CLI.hpp>
+#endif
 
 #include "ftp_client.hpp"
 #include "logger.hpp"
@@ -73,6 +76,9 @@ int run(const Options& options) {
   ftp_config.host = options.host;
   ftp_config.port = options.port;
   ftp_config.mode = options.mode;
+  ftp_config.protocol = options.protocol;
+  ftp_config.ftps_mode = options.ftps_mode;
+  ftp_config.ca_certificate = options.ca_certificate;
   ftp_config.user = options.user.value_or("");
   ftp_config.password = options.password.value_or("");
   if (options.user && !options.password) {
@@ -219,6 +225,11 @@ int run(const Options& options) {
 int main(int argc, char** argv) {
   std::setlocale(LC_CTYPE, "");  // UnRAR converts some names with the locale.
   streamextract::setup_console();
+#ifdef _WIN32
+  // Read the native command line here; parse_options also accepts synthetic UTF-8 argv.
+  CLI::App utf8_arguments;
+  argv = utf8_arguments.ensure_utf8(argv);
+#endif
   const streamextract::ParsedOptions parsed = streamextract::parse_options(argc, argv);
   if (!parsed.options) {
     return parsed.exit_code;

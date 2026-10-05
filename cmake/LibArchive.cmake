@@ -39,9 +39,6 @@ else()
   _streamextract_static_lib(_zstd_lib zstd)
 endif()
 _streamextract_static_lib(_lz4_lib lz4)
-_streamextract_static_lib(_mbedcrypto_lib mbedcrypto)
-_streamextract_static_lib(_mbedx509_lib mbedx509)
-_streamextract_static_lib(_mbedtls_lib mbedtls)
 _streamextract_static_lib(_archive_lib archive)
 
 # AES for encrypted ZIP files: libarchive uses CommonCrypto on macOS and CNG on
@@ -149,21 +146,16 @@ _streamextract_dependency(streamextract_lz4
 set(_archive_depends streamextract_zlib streamextract_bzip2 streamextract_xz streamextract_zstd streamextract_lz4)
 set(_archive_crypto_args -DENABLE_MBEDTLS=OFF)
 
-# --- mbed TLS (Apache-2.0), only its crypto library is used ------------------
+# Reuse the bundled TLS backend's crypto library for encrypted ZIP on Linux.
 if(_use_mbedtls)
-  _streamextract_dependency(streamextract_mbedtls
-    URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
-    SHA256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
-    ARGS -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF -DMBEDTLS_FATAL_WARNINGS=OFF -DGEN_FILES=OFF
-         -DUSE_SHARED_MBEDTLS_LIBRARY=OFF -DUSE_STATIC_MBEDTLS_LIBRARY=ON
-    BYPRODUCTS "${_mbedcrypto_lib}" "${_mbedx509_lib}" "${_mbedtls_lib}")
-  list(APPEND _archive_depends streamextract_mbedtls)
+  list(APPEND _archive_depends mbedcrypto mbedx509 mbedtls)
   set(_archive_crypto_args
     -DENABLE_MBEDTLS=ON
-    "-DMBEDTLS_INCLUDE_DIRS=${_ad}/include"
-    "-DMBEDTLS_LIBRARY=${_mbedtls_lib}"
-    "-DMBEDX509_LIBRARY=${_mbedx509_lib}"
-    "-DMBEDCRYPTO_LIBRARY=${_mbedcrypto_lib}")
+    "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD -pthread"
+    "-DMBEDTLS_INCLUDE_DIRS=${mbedtls_SOURCE_DIR}/include"
+    "-DMBEDTLS_LIBRARY=$<TARGET_FILE:mbedtls>"
+    "-DMBEDX509_LIBRARY=$<TARGET_FILE:mbedx509>"
+    "-DMBEDCRYPTO_LIBRARY=$<TARGET_FILE:mbedcrypto>")
 endif()
 
 # --- libarchive (BSD-2-Clause) -----------------------------------------------
@@ -197,7 +189,7 @@ ExternalProject_Add_StepDependencies(streamextract_libarchive download "${CMAKE_
 # Link order matters for static libraries: libarchive first, then what it uses.
 set(_archive_link "${_zstd_lib}" "${_lz4_lib}" "${_lzma_lib}" "${_bzip2_lib}" "${_zlib_lib}")
 if(_use_mbedtls)
-  list(APPEND _archive_link "${_mbedcrypto_lib}")
+  list(APPEND _archive_link mbedcrypto)
 endif()
 if(APPLE)
   list(APPEND _archive_link iconv)

@@ -11,6 +11,9 @@
 #include "logger.hpp"
 #include "util/remote_path.hpp"
 #include "util/text.hpp"
+#ifdef _WIN32
+#include "util/windows_tls.hpp"
+#endif
 
 namespace streamextract {
 
@@ -74,6 +77,7 @@ struct FtpClient::Impl {
   bool verbose = false;
   CURL* curl = nullptr;
   std::string base_url;
+  std::string ca_bundle;
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   std::string last_reply;
   bool logged_in = false;
@@ -183,6 +187,20 @@ struct FtpClient::Impl {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer.data());
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    if (config.protocol == FtpProtocol::Ftps) {
+      // Explicit FTPS upgrades ftp:// with AUTH TLS; ftps:// starts TLS immediately.
+      // Require encrypted control and data channels on every operation, including retries.
+      curl_easy_setopt(curl, CURLOPT_USE_SSL, static_cast<long>(CURLUSESSL_ALL));
+      curl_easy_setopt(curl, CURLOPT_FTPSSLAUTH, static_cast<long>(CURLFTPAUTH_TLS));
+      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+      if (config.ca_certificate) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, config.ca_certificate->c_str());
+      } else if (!ca_bundle.empty()) {
+        curl_blob blob{ca_bundle.data(), ca_bundle.size(), CURL_BLOB_COPY};
+        curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &blob);
+      }
+    }
     if (config.user.empty()) {
       curl_easy_setopt(curl, CURLOPT_USERNAME, "anonymous");
       curl_easy_setopt(curl, CURLOPT_PASSWORD, "anonymous@");
@@ -281,12 +299,26 @@ std::once_flag g_curl_init;
 
 FtpClient::FtpClient(FtpConfig config, Logger& log, bool verbose)
     : impl_(std::make_unique<Impl>(std::move(config), log, verbose)) {
-  std::call_once(g_curl_init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  std::call_once(g_curl_init, [] {
+#ifdef _WIN32
+    windows_tls_init();
+#endif
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+  });
+  // Load before creating the handle so a certificate-store error cannot leak it.
+#ifdef _WIN32
+  if (impl_->config.protocol == FtpProtocol::Ftps && !impl_->config.ca_certificate) {
+    impl_->ca_bundle = windows_ca_bundle();
+  }
+#endif
   impl_->curl = curl_easy_init();
   if (impl_->curl == nullptr) {
     throw FtpError("cannot initialize libcurl", CURLE_FAILED_INIT);
   }
   impl_->base_url = ftp_base_url(impl_->config.host, impl_->config.port);
+  if (impl_->config.protocol == FtpProtocol::Ftps && impl_->config.ftps_mode == FtpsMode::Implicit) {
+    impl_->base_url.replace(0, 3, "ftps");
+  }
 }
 
 FtpClient::~FtpClient() {

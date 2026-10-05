@@ -10,8 +10,8 @@ and CLI11 are not in the GUI, and Tauri and the Rust crates are not in the
 `streamextract` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
 zlib, bzip2 and Zstandard for the methods it lacks. libarchive reads the ZIP and
 tar archives, with zlib, bzip2, liblzma (XZ Utils), Zstandard and LZ4 for
-decompression, and with mbed TLS for encrypted ZIP files in the Linux builds
-only.
+decompression. mbed TLS provides FTPS on every platform and encrypted ZIP support
+on Linux.
 
 ## Completion sound (GUI only)
 
@@ -235,10 +235,11 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## mbed TLS (Linux builds only)
+## mbed TLS
 
-Copyright The Mbed TLS Contributors. Only its crypto library is linked, for
-AES-encrypted ZIP files. Dual-licensed Apache-2.0 or GPL-2.0-or-later; used here
+Copyright The Mbed TLS Contributors. Its TLS, X.509 and crypto libraries are
+linked statically for FTPS; Linux also uses its crypto library for AES-encrypted
+ZIP files. Dual-licensed Apache-2.0 or GPL-2.0-or-later; used here
 under the Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0>.
 Source: <https://github.com/Mbed-TLS/mbedtls>.
 

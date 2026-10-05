@@ -9,6 +9,9 @@ namespace streamextract {
 ParsedOptions parse_options(int argc, char** argv) {
   Options o;
   std::string mode = "passive";
+  std::string protocol = "ftp";
+  std::string ftps_mode = "explicit";
+  std::string ca_certificate;
   std::string user;
   std::string password;
   std::string directory;
@@ -16,10 +19,9 @@ ParsedOptions parse_options(int argc, char** argv) {
 
   CLI::App app{
       "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume image, straight to an FTP "
-      "server, without extracting it "
+      "or FTPS server, without extracting it "
       "to disk.",
       "sext"};
-  argv = app.ensure_utf8(argv);
   app.set_version_flag("--version", version_string());
   app.get_formatter()->column_width(28);
 
@@ -29,10 +31,21 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->check(CLI::ExistingFile.description(""))
       ->type_name("PATH");
   app.add_option("--host", o.host, "FTP server name or IP address")->required()->type_name("HOST");
-  app.add_option("--port", o.port, "FTP server port")
-      ->check(CLI::Range(1, 65535).description(""))
+  app.add_option("--protocol", protocol, "Transfer protocol")
+      ->check(CLI::IsMember({"ftp", "ftps"}, CLI::ignore_case).description(""))
       ->capture_default_str()
-      ->type_name("PORT");
+      ->type_name("ftp|ftps");
+  CLI::Option* ftps_mode_option = app.add_option("--ftps-mode", ftps_mode, "FTPS connection mode")
+                                    ->check(CLI::IsMember({"explicit", "implicit"}, CLI::ignore_case).description(""))
+                                    ->capture_default_str()
+                                    ->type_name("explicit|implicit");
+  CLI::Option* ca_option = app.add_option("--cacert", ca_certificate, "CA certificate file for FTPS (PEM)")
+                               ->check(CLI::ExistingFile.description(""))
+                               ->type_name("PATH");
+  CLI::Option* port_option =
+      app.add_option("--port", o.port, "Server port (default: 21; implicit FTPS: 990)")
+          ->check(CLI::Range(1, 65535).description(""))
+          ->type_name("PORT");
   app.add_option("--mode", mode, "Data connection mode")
       ->check(CLI::IsMember({"passive", "active"}, CLI::ignore_case).description(""))
       ->capture_default_str()
@@ -76,10 +89,22 @@ ParsedOptions parse_options(int argc, char** argv) {
   }
 
   if (o.host.find_first_of("/ \t") != std::string::npos || o.host.empty()) {
-    std::fprintf(stderr, "--host: expected a host name or address, without ftp:// or a path\n");
+    std::fprintf(stderr, "--host: expected a host name or address, without a URL scheme or a path\n");
     return {std::nullopt, 2};
   }
   o.mode = CLI::detail::to_lower(mode) == "active" ? FtpMode::Active : FtpMode::Passive;
+  o.protocol = CLI::detail::to_lower(protocol) == "ftps" ? FtpProtocol::Ftps : FtpProtocol::Ftp;
+  o.ftps_mode = CLI::detail::to_lower(ftps_mode) == "implicit" ? FtpsMode::Implicit : FtpsMode::Explicit;
+  if (o.protocol == FtpProtocol::Ftp && (ftps_mode_option->count() > 0 || ca_option->count() > 0)) {
+    std::fprintf(stderr, "--ftps-mode and --cacert require --protocol ftps\n");
+    return {std::nullopt, 2};
+  }
+  if (o.protocol == FtpProtocol::Ftps && o.ftps_mode == FtpsMode::Implicit && port_option->count() == 0) {
+    o.port = 990;
+  }
+  if (ca_option->count() > 0) {
+    o.ca_certificate = ca_certificate;
+  }
   if (user_option->count() > 0 && !user.empty()) {
     o.user = user;
   }
