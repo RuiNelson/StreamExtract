@@ -58,6 +58,7 @@ jobs:
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
               -DCURL_STATIC_CRT=ON
+              -DPERL_EXECUTABLE=C:/Strawberry/perl/bin/perl.exe
     defaults:
       run:
         shell: bash
@@ -140,12 +141,6 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
-      # Git for Windows' bundled Perl lacks modules OpenSSL's Configure script
-      # uses.  Prefer the complete Strawberry Perl provided by the runner.
-      - name: Use Strawberry Perl (Windows)
-        if: runner.os == 'Windows'
-        run: echo 'C:\Strawberry\perl\bin' >> "$GITHUB_PATH"
-
       - name: Configure
         run: >
           cmake -S . -B build
@@ -212,6 +207,7 @@ jobs:
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
               -DCURL_STATIC_CRT=ON
+              -DPERL_EXECUTABLE=C:/Strawberry/perl/bin/perl.exe
             rustflags: -C target-feature=+crt-static
             tauri: --no-bundle
     defaults:
@@ -322,12 +318,6 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
-
-      # Git for Windows' bundled Perl lacks modules OpenSSL's Configure script
-      # uses.  Prefer the complete Strawberry Perl provided by the runner.
-      - name: Use Strawberry Perl (Windows)
-        if: runner.os == 'Windows'
-        run: echo 'C:\Strawberry\perl\bin' >> "$GITHUB_PATH"
 
       - name: Configure the library
         run: >
