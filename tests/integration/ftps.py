@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI FTP/FTPS tests against the shared Docker server."""
+"""CLI and GUI core FTP/FTPS tests against the shared Docker server."""
 
 import argparse
 import io
@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from docker_server import FtpServer, HOME, PASSWORD, USER, Server
+from run import Library, LibJob
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "ftps"
@@ -41,7 +42,10 @@ class FtpsTests(unittest.TestCase):
                    "--protocol", "ftps", "--no-tui", "--buffer", "1", "--verbose"]
         if trusted:
             command += ["--cacert", str(FIXTURES / "server-cert.pem")]
-        return subprocess.run(command + list(options), capture_output=True, text=True, timeout=15)
+        return self.transfer(command + list(options))
+
+    def transfer(self, command):
+        return subprocess.run(command, capture_output=True, text=True, timeout=30)
 
     def test_real_server_ftp_explicit_and_implicit_ftps(self):
         root = Path(self.temp.name) / "remote"
@@ -68,7 +72,7 @@ class FtpsTests(unittest.TestCase):
                     if protocol == "ftps":
                         command += ["--protocol", "ftps", "--ftps-mode", mode,
                                     "--cacert", str(FIXTURES / "server-cert.pem")]
-                    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                    result = self.transfer(command)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("Resuming nested/data.bin at byte 19", result.stdout)
                     self.assertIn("DEBUG > APPE data.bin", result.stdout)
@@ -153,8 +157,49 @@ class FtpsTests(unittest.TestCase):
             self.assertEqual(server.uploads, [])
 
 
+class LibraryFtpsTests(FtpsTests):
+    """Run the same TLS, resume and failure cases through the API used by the GUI."""
+
+    def setUp(self):
+        if not ARGS.lib:
+            self.skipTest("--lib was not supplied")
+        super().setUp()
+        self.lib = Library(ARGS.lib)
+
+    def transfer(self, command):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--file")
+        parser.add_argument("--host")
+        parser.add_argument("--port", type=int)
+        parser.add_argument("--directory")
+        parser.add_argument("--user")
+        parser.add_argument("--password")
+        parser.add_argument("--protocol", default="ftp")
+        parser.add_argument("--ftps-mode", default="explicit")
+        parser.add_argument("--mode", default="passive")
+        parser.add_argument("--cacert")
+        parser.add_argument("--buffer", type=int, default=1)
+        parser.add_argument("--retries", type=int, default=3)
+        parser.add_argument("--no-tui", action="store_true")
+        parser.add_argument("--verbose", action="store_true")
+        options = parser.parse_args(command[1:])
+        protocol = "ftp" if options.protocol == "ftp" else "ftps_" + options.ftps_mode
+        with LibJob(self.lib, {
+                "archive": options.file, "host": options.host, "port": options.port,
+                "directory": options.directory, "user": options.user, "password": options.password,
+                "active_mode": options.mode == "active", "verbose": options.verbose,
+                "buffer_mib": options.buffer, "protocol": protocol,
+                "ca_certificate": options.cacert}, retries=options.retries) as job:
+            job.wait(timeout=30)
+        # Present library logs in the same format so all assertions cover both callers.
+        output = "\n".join(f"{line['level'].upper()} {line['text']}" for line in job.log)
+        return subprocess.CompletedProcess(command, 0 if job.result["status"] == "success" else 1,
+                                           stdout=output, stderr=job.result["error"] or "")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--sext", required=True)
+    parser.add_argument("--lib", help="also test the GUI core library")
     ARGS, remaining = parser.parse_known_args()
     unittest.main(argv=[__file__, *remaining])

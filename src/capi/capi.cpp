@@ -54,6 +54,11 @@ streamextract_job* streamextract_job_start_with_units(const streamextract_job_co
 }
 
 streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units, unsigned retries) {
+  return streamextract_job_start_with_protocol(config, si_units, retries, STREAMEXTRACT_PROTOCOL_FTP, nullptr);
+}
+
+streamextract_job* streamextract_job_start_with_protocol(const streamextract_job_config* config, int si_units,
+                                                      unsigned retries, int protocol, const char* ca_certificate) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -68,6 +73,10 @@ streamextract_job* streamextract_job_start_with_options(const streamextract_job_
     }
     copy.host = copy_string(config->host);
     copy.port = config->port;
+    copy.protocol = protocol;
+    if (ca_certificate != nullptr) {
+      copy.ca_certificate = std::string(ca_certificate);
+    }
     copy.active_mode = config->active_mode != 0;
     copy.user = copy_string(config->user);
     copy.password = copy_string(config->password);

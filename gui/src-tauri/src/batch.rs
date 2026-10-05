@@ -314,6 +314,7 @@ mod tests {
             archive_password: None,
             host: "127.0.0.1".into(),
             port: 1,
+            protocol: crate::Protocol::Ftp,
             mode: Mode::Passive,
             user: String::new(),
             password: String::new(),

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "capi/streamextract.h"
 #include "logger.hpp"
 #include "plan.hpp"
 #include "progress.hpp"
@@ -24,6 +25,8 @@ struct JobConfig {
   std::optional<std::string> archive_password;
   std::string host;
   int port = 21;
+  int protocol = STREAMEXTRACT_PROTOCOL_FTP;  // Validated before the archive is opened.
+  std::optional<std::string> ca_certificate;
   bool active_mode = false;
   std::string user;  // Empty: anonymous.
   std::string password;

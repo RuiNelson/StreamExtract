@@ -122,6 +122,19 @@ TEST_CASE("version string") {
   CHECK(streamextract_version() == version);  // Static storage.
 }
 
+TEST_CASE("protocol selection rejects invalid values before reading the archive") {
+  CHECK(streamextract_job_start_with_protocol(nullptr, 0, 0, STREAMEXTRACT_PROTOCOL_FTP, nullptr) == nullptr);
+  const std::string path = "/nonexistent/invalid-protocol.rar";
+  streamextract_job_config config = make_config(path, 21);
+  for (int protocol : {-1, 3}) {
+    streamextract_job* job = streamextract_job_start_with_protocol(&config, 0, 0, protocol, nullptr);
+    REQUIRE(job != nullptr);
+    const std::string json = wait_for(job, "\"phase\":\"finished\"");
+    CHECK(contains(json, "\"error\":\"invalid transfer protocol\""));
+    streamextract_job_free(job);
+  }
+}
+
 TEST_CASE("a missing config is refused and NULL handles are ignored") {
   CHECK(streamextract_job_start(nullptr) == nullptr);
   CHECK(streamextract_job_start_with_options(nullptr, 1, 5) == nullptr);

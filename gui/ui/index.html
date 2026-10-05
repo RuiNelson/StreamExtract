@@ -17,7 +17,7 @@
         <header class="app-header">
           <h1>StreamExtract</h1>
           <span id="app-version" class="version muted"></span>
-          <p class="tagline muted">Stream archives to an FTP server without unpacking them to disk.</p>
+          <p class="tagline muted">Stream archives to a server without unpacking them to disk.</p>
         </header>
 
         <!-- Archive -->
@@ -67,6 +67,14 @@
 
           <div class="grid host-row">
             <div class="field">
+              <label for="protocol">Protocol</label>
+              <select id="protocol">
+                <option value="ftp">FTP</option>
+                <option value="ftps_explicit">FTPS (explicit)</option>
+                <option value="ftps_implicit">FTPS (implicit)</option>
+              </select>
+            </div>
+            <div class="field">
               <label for="host">Host</label>
               <input id="host" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
                      spellcheck="false" placeholder="ftp.example.com">
@@ -77,13 +85,11 @@
                      aria-describedby="port-error">
             </div>
             <div class="field">
-              <span id="mode-label" class="label">Mode</span>
-              <div class="segmented" role="radiogroup" aria-labelledby="mode-label">
-                <input type="radio" name="mode" id="mode-passive" value="passive" checked>
-                <label for="mode-passive">Passive</label>
-                <input type="radio" name="mode" id="mode-active" value="active">
-                <label for="mode-active">Active</label>
-              </div>
+              <label for="mode">Mode</label>
+              <select id="mode">
+                <option value="passive">Passive</option>
+                <option value="active">Active</option>
+              </select>
             </div>
             <p id="port-error" class="error-text host-row-error" role="alert" hidden></p>
           </div>

@@ -35,12 +35,12 @@ its container IP. The CA's private key is public and strictly for tests.
 Run the suites without RAR or Docker configuration arguments:
 
 ```bash
-python3 tests/integration/ftps.py --sext build/sext
+python3 tests/integration/ftps.py --sext build/sext --lib build/libstreamextractcore.dylib
 python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
 ```
 
 The archive runner additionally needs RARLAB's `rar`; 7-Zip and Info-ZIP are
-optional. Select the protocol for all of its CLI archive tests:
+optional. Select the protocol for its CLI and library archive tests (`--lib`):
 
 ```bash
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar

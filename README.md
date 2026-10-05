@@ -57,7 +57,9 @@ The app offers:
   `~/.config/streamextract/preferences.ini` (off by default).
 - **Server**: host, port, passive or active mode, username and password
   (anonymous without a username), destination directory and *Create directory
-  if missing*.
+  if missing*. Choose **FTP** (default), **FTPS (explicit)** or **FTPS (implicit)**
+  in **Protocol** before Host. Both FTPS modes encrypt control and data connections
+  and verify the server certificate using system CA trust.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
@@ -152,7 +154,11 @@ certificate and hostname; it fails if TLS is unavailable or verification fails.
 On macOS/Linux, certificates use the CA bundle detected when building libcurl
 (on macOS, `/etc/ssl/cert.pem`); on Windows they use the native certificate store.
 Use `--cacert /path/to/ca.pem` to trust a private CA for this transfer.
-The GUI continues to use FTP.
+In the GUI, choose **FTP**, **FTPS (explicit)**, or **FTPS (implicit)** from
+**Protocol** before Host. FTP remains the default. Changing protocol updates
+port 21/990 when it is still the previous default; custom ports are preserved.
+Memory Save/Recall includes the protocol. The GUI uses the system CA trust
+above; private CA files can be supplied through the CLI's `--cacert` option.
 
 The interface shows a fixed log panel, the progress of the current file and of
 the whole archive with their ETAs (for a compressed tar, by how much of the
@@ -319,7 +325,7 @@ Behaviour, in both:
 
 ### Not supported yet
 
-FTPS in the GUI, extracting only some files, and several parallel connections. Symbolic links, hard links and
+Extracting only some files and several parallel connections. Symbolic links, hard links and
 file references (`rar -oi`) are skipped with a warning, since FTP cannot
 create links.
 
@@ -476,7 +482,8 @@ python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --7z /path
 
 All integration runners automatically build the same pinned Docker image and
 remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
-implicit FTPS uploads, plus certificate checks and TLS failures. `ftp_faults.py`
+implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
+to run the same cases through the core API used by the GUI. `ftp_faults.py`
 tests resume, retry and cancellation using controlled scenarios in that image:
 
 ```bash

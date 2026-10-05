@@ -9,6 +9,7 @@
 //! [server]
 //! host=ftp.example.com
 //! port=21
+//! protocol=ftp
 //! mode=passive
 //! user=alice
 //! password=s3cret;#=x
@@ -28,16 +29,16 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::{Mode, ServerSettings};
+use crate::{Mode, Protocol, ServerSettings};
 
 /// Error returned when a non-anonymous login is saved before the user answered the consent question.
 pub const CONSENT_REQUIRED: &str = "credentials consent required";
 
-const DEFAULT_PORT: u32 = 21;
-
 /// `<home>/.config/streamextract/memory.ini`
 pub fn memory_path(home: &Path) -> PathBuf {
-    home.join(".config").join("streamextract").join("memory.ini")
+    home.join(".config")
+        .join("streamextract")
+        .join("memory.ini")
 }
 
 /// Result of `memory_status`.
@@ -56,6 +57,7 @@ struct Parsed {
     host: Option<String>,
     port: Option<String>,
     mode: Option<String>,
+    protocol: Option<String>,
     user: Option<String>,
     password: Option<String>,
     directory: Option<String>,
@@ -71,6 +73,7 @@ fn parse(text: &str) -> Parsed {
         host: server("host"),
         port: server("port"),
         mode: server("mode"),
+        protocol: server("protocol"),
         user: server("user"),
         password: server("password"),
         directory: server("directory"),
@@ -112,13 +115,24 @@ pub fn recall(path: &Path) -> Result<Option<ServerSettings>, String> {
     if !parsed.has_server_section {
         return Ok(None);
     }
+    let protocol = match parsed
+        .protocol
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("ftps_explicit") => Protocol::FtpsExplicit,
+        Some("ftps_implicit") => Protocol::FtpsImplicit,
+        _ => Protocol::Ftp,
+    };
     Ok(Some(ServerSettings {
         host: parsed.host.unwrap_or_default(),
         port: parsed
             .port
             .and_then(|value| value.trim().parse().ok())
             .filter(|port| (1..=65535).contains(port))
-            .unwrap_or(DEFAULT_PORT),
+            .unwrap_or(protocol.default_port()),
+        protocol,
         mode: match parsed
             .mode
             .as_deref()
@@ -174,8 +188,9 @@ pub fn save(
     text.push_str("# StreamExtract memory: plain text, written by Memory Save\n[server]\n");
     push_value(&mut text, "host", &server.host)?;
     text.push_str(&format!(
-        "port={}\nmode={}\n",
+        "port={}\nprotocol={}\nmode={}\n",
         server.port,
+        server.protocol.as_str(),
         server.mode.as_str()
     ));
     if anonymous {
@@ -260,12 +275,38 @@ mod tests {
         ServerSettings {
             host: "ftp.example.com".to_string(),
             port: 2121,
+            protocol: crate::Protocol::Ftp,
             mode: Mode::Active,
             user: user.map(str::to_string),
             password: password.map(str::to_string),
             directory: "/up loads/dir;#=x".to_string(),
             mkdir: true,
         }
+    }
+
+    #[test]
+    fn protocols_round_trip_and_old_memory_defaults_to_ftp() {
+        let home = TempHome::new();
+        let path = home.memory();
+        for protocol in [
+            Protocol::Ftp,
+            Protocol::FtpsExplicit,
+            Protocol::FtpsImplicit,
+        ] {
+            let mut settings = server(None, None);
+            settings.protocol = protocol;
+            settings.port = protocol.default_port();
+            save(&path, &settings, None).unwrap();
+            let recalled = recall(&path).unwrap().unwrap();
+            assert_eq!(recalled.protocol, protocol);
+            assert_eq!(recalled.port, settings.port);
+        }
+        fs::write(&path, "[server]\nhost=old.example.com\nport=2121\n").unwrap();
+        let recalled = recall(&path).unwrap().unwrap();
+        assert_eq!(recalled.protocol, Protocol::Ftp);
+        assert_eq!(recalled.port, 2121);
+        fs::write(&path, "[server]\nprotocol=ftps_implicit\n").unwrap();
+        assert_eq!(recall(&path).unwrap().unwrap().port, 990);
     }
 
     #[test]

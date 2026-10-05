@@ -44,8 +44,9 @@
     archivePassword: $("archive-password"),
     host: $("host"),
     port: $("port"),
+    protocol: $("protocol"),
     portError: $("port-error"),
-    modeGroup: document.querySelectorAll('input[name="mode"]'),
+    mode: $("mode"),
     user: $("user"),
     password: $("password"),
     directory: $("directory"),
@@ -446,12 +447,24 @@
   /* ---------------------------------------------------------- setup: form */
 
   function selectedMode() {
-    for (const radio of els.modeGroup) if (radio.checked) return radio.value;
-    return "passive";
+    return els.mode.value === "active" ? "active" : "passive";
   }
 
   function setMode(mode) {
-    for (const radio of els.modeGroup) radio.checked = radio.value === mode;
+    els.mode.value = mode;
+  }
+
+  function defaultPort(protocol) {
+    return protocol === "ftps_implicit" ? 990 : 21;
+  }
+
+  function changeProtocol() {
+    const previous = els.protocol.dataset.previous || "ftp";
+    if (els.port.value.trim() === String(defaultPort(previous))) {
+      els.port.value = String(defaultPort(els.protocol.value));
+    }
+    els.protocol.dataset.previous = els.protocol.value;
+    validatePort();
   }
 
   function setFieldError(input, errorEl, message) {
@@ -549,6 +562,7 @@
   function readServer() {
     return {
       host: els.host.value.trim(),
+      protocol: els.protocol.value || "ftp",
       mode: selectedMode(),
       user: els.user.value.trim(),
       password: els.password.value,
@@ -586,6 +600,7 @@
       archive: state.archives[0],
       archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
       host: server.host,
+      protocol: server.protocol,
       port,
       mode: server.mode,
       user: server.user,
@@ -696,6 +711,7 @@
       await invoke("memory_save", {
         server: {
           host: server.host,
+          protocol: server.protocol,
           port,
           mode: server.mode,
           user: server.user,
@@ -721,7 +737,9 @@
         return;
       }
       els.host.value = saved.host || "";
-      els.port.value = String(saved.port == null ? 21 : saved.port);
+      els.protocol.value = ["ftps_explicit", "ftps_implicit"].includes(saved.protocol) ? saved.protocol : "ftp";
+      els.protocol.dataset.previous = els.protocol.value;
+      els.port.value = String(saved.port == null ? defaultPort(els.protocol.value) : saved.port);
       setMode(saved.mode === "active" ? "active" : "passive");
       els.directory.value = saved.directory || "";
       els.mkdir.checked = Boolean(saved.mkdir);
@@ -1465,6 +1483,7 @@
     });
     els.host.addEventListener("input", updateSubmitState);
     els.port.addEventListener("input", validatePort);
+    els.protocol.addEventListener("change", changeProtocol);
     els.buffer.addEventListener("input", validateBuffer);
     els.buffer.addEventListener("change", saveBuffer);
     els.retries.addEventListener("input", validateRetries);

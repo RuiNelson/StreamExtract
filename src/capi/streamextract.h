@@ -30,7 +30,7 @@ typedef struct streamextract_job streamextract_job;
 typedef struct streamextract_job_config {
   const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT volume image. */
   const char* archive_password; /* NULL: asked through the job when needed. */
-  const char* host;             /* Host name or address, without ftp:// or a path. */
+  const char* host;             /* Host name or address, without a URL scheme or a path. */
   int port;                     /* 1-65535. */
   int active_mode;              /* 0: passive, 1: active. */
   const char* user;             /* NULL or "": anonymous login. */
@@ -63,6 +63,22 @@ STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_units(const st
  * is unchanged. */
 STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units,
                                                   unsigned retries);
+
+/* Transfer protocol. The existing start functions continue to use plain FTP. */
+typedef enum streamextract_protocol {
+  STREAMEXTRACT_PROTOCOL_FTP = 0,
+  STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT = 1,
+  STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT = 2
+} streamextract_protocol;
+
+/* Like streamextract_job_start_with_options, with a protocol and optional PEM CA
+ * certificate path (NULL: system trust). FTPS requires TLS on control and data
+ * connections and verifies the certificate and host. `config->port` is used as
+ * supplied (usually 21 for FTP/explicit FTPS, 990 for implicit FTPS).
+ * Strings are copied; the config layout and older entry points are unchanged.
+ * An invalid protocol ends the job as failed. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_protocol(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol, const char* ca_certificate);
 
 /* Current state as a JSON object, including the log lines numbered
  * `log_cursor` and later. Free the result with streamextract_free(). Returns NULL

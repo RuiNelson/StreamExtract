@@ -6,7 +6,7 @@ use std::ptr::{self, NonNull};
 
 use serde_json::Value;
 
-use crate::{Mode, TransferConfig};
+use crate::{Mode, Protocol, TransferConfig};
 
 /// Opaque `streamextract_job`.
 #[repr(C)]
@@ -34,10 +34,12 @@ pub struct StreamExtractJobConfig {
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_options(
+    pub fn streamextract_job_start_with_protocol(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
+        protocol: c_int,
+        ca_certificate: *const c_char,
     ) -> *mut StreamExtractJob;
     pub fn streamextract_job_poll(job: *mut StreamExtractJob, log_cursor: u64) -> *mut c_char;
     pub fn streamextract_job_answer_password(job: *mut StreamExtractJob, password: *const c_char);
@@ -109,10 +111,16 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_options(
+            streamextract_job_start_with_protocol(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
+                match config.protocol {
+                    Protocol::Ftp => 0,
+                    Protocol::FtpsExplicit => 1,
+                    Protocol::FtpsImplicit => 2,
+                },
+                ptr::null(), // Use the system certificate trust store.
             )
         };
         NonNull::new(job)
@@ -171,6 +179,7 @@ mod tests {
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 21,
+            protocol: crate::Protocol::Ftp,
             mode: Mode::Passive,
             user: String::new(),
             password: String::new(),

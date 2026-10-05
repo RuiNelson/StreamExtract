@@ -218,7 +218,8 @@ p {
 }
 
 input[type="text"],
-input[type="password"] {
+input[type="password"],
+select {
   font: inherit;
   width: 100%;
   min-width: 0;
@@ -231,6 +232,11 @@ input[type="password"] {
   cursor: text;
   -webkit-user-select: text;
   user-select: text;
+}
+
+select {
+  cursor: pointer;
+  padding-right: 4px;
 }
 
 input::placeholder {
@@ -394,7 +400,7 @@ input[type="checkbox"] {
 }
 
 .host-row {
-  grid-template-columns: minmax(0, 1fr) 84px auto;
+  grid-template-columns: 152px minmax(0, 1fr) 64px 96px;
 }
 
 .host-row-error {
@@ -1123,11 +1129,11 @@ dialog.dialog::backdrop {
 
 @media (max-width: 520px) {
   .host-row {
-    grid-template-columns: minmax(0, 1fr) 84px;
+    grid-template-columns: 152px minmax(0, 1fr);
   }
 
   .host-row > .field:nth-child(3) {
-    grid-column: 1 / -1;
+    grid-column: 1;
   }
 
   .grid.two {

@@ -42,7 +42,7 @@ else()
 endif()
 if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
   add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext>)
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext> FtpsTests)
   set_tests_properties(ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
@@ -59,6 +59,13 @@ if(TARGET streamextractcore)
       COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:streamextractcore> $<TARGET_FILE_DIR:streamextractcore_tests>)
   endif()
   add_test(NAME capi COMMAND streamextractcore_tests)
+
+  if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+    add_test(NAME lib_ftps COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py"
+      --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore> LibraryFtpsTests)
+    set_tests_properties(lib_ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endif()
 
   # FTP resume, failures and cancellation against the same Docker image.
   if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)

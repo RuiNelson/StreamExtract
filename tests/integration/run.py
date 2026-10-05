@@ -384,6 +384,9 @@ class Library:
         dll.streamextract_job_start_with_units.restype = ctypes.c_void_p
         dll.streamextract_job_start_with_options.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int, ctypes.c_uint]
         dll.streamextract_job_start_with_options.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_protocol.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
+                                                            ctypes.c_uint, ctypes.c_int, ctypes.c_char_p]
+        dll.streamextract_job_start_with_protocol.restype = ctypes.c_void_p
         dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.streamextract_job_poll.restype = ctypes.c_void_p
         dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -435,6 +438,9 @@ class LibJob:
     job, which cancels and waits for it if it is still running."""
 
     def __init__(self, lib, config, si_units=False, retries=None):
+        config = dict(config)
+        protocol = config.pop("protocol", None)
+        ca_certificate = config.pop("ca_certificate", None)
         unknown = set(config) - set(LIB_CONFIG_DEFAULTS)
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
@@ -448,7 +454,12 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        if retries is not None:
+        if protocol is not None:
+            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2}
+            self.handle = lib.dll.streamextract_job_start_with_protocol(
+                ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol],
+                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None)
+        elif retries is not None:
             self.handle = lib.dll.streamextract_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
         else:
             self.handle = (lib.dll.streamextract_job_start_with_units(ctypes.byref(self._config), 1) if si_units
@@ -731,8 +742,10 @@ class Env:
     def lib_config(self, archive, **overrides):
         """Job config for the C API: this server, the tester login and `overrides`."""
         self.server.sync()
-        config = {"archive": self.archive(archive), "host": self.server.host, "port": self.server.port,
+        config = {"archive": self.archive(archive), "host": self.server.host, "port": self.cli_port,
                   "user": USER, "password": PASSWORD}
+        if self.protocol == "ftps":
+            config.update(protocol="ftps_" + self.ftps_mode, ca_certificate=str(CA_CERTIFICATE))
         config.update(overrides)
         return config
 
@@ -1467,7 +1480,7 @@ def test_lib_basic_upload(env):
     check(has_fields(state["archive"], name="basic.rar", files=files, bytes=size, volumes=1, solid=False,
                      encrypted=False), f"wrong archive info {state['archive']}", out)
     check(state["target"] is not None and state["target"].startswith(
-        f"ftp://{env.server.host}:{env.server.port}{HOME}/lib-basic"), f"wrong target {state['target']!r}", out)
+        f"{env.target_scheme}://{env.server.host}:{env.cli_port}{HOME}/lib-basic"), f"wrong target {state['target']!r}", out)
     check((state["mode"], state["user"]) == ("passive", USER), "wrong mode or user", out)
     check(state["probe"] == {"done": files, "total": files}, f"wrong probe {state['probe']}", out)
     check(has_fields(state["progress"], total_files=files, files_done=files, total_bytes=size, sent_bytes=size,
@@ -1478,7 +1491,7 @@ def test_lib_basic_upload(env):
     check(len(result["summary"]) == 1 and result["summary"][0].startswith(f"Done: {files} file(s), "),
           f"wrong summary {result['summary']}", out)
     log = lib_log_text(job)
-    for text in (f"Reading {env.archive('basic.rar')}", f"Logged in as {USER}", "Destination: ftp://",
+    for text in (f"Reading {env.archive('basic.rar')}", f"Logged in as {USER}", f"Destination: {env.target_scheme}://",
                  f"To upload: {files} file(s)"):
         check(text in log, f"{text!r} not logged", out)
     check(not job.prompts, "the job asked for a password", out)
@@ -1808,7 +1821,7 @@ TESTS = [
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sext", required=True, help="path to the sext binary")
-    parser.add_argument("--protocol", choices=("ftp", "ftps"), default="ftp", help="CLI transfer protocol")
+    parser.add_argument("--protocol", choices=("ftp", "ftps"), default="ftp", help="CLI and library transfer protocol")
     parser.add_argument("--ftps-mode", choices=("explicit", "implicit"), default="explicit")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
     parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")

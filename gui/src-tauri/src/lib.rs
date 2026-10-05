@@ -36,6 +36,34 @@ impl Mode {
     }
 }
 
+/// Control connection protocol, including the two FTPS negotiation modes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    #[default]
+    Ftp,
+    FtpsExplicit,
+    FtpsImplicit,
+}
+
+impl Protocol {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ftp => "ftp",
+            Self::FtpsExplicit => "ftps_explicit",
+            Self::FtpsImplicit => "ftps_implicit",
+        }
+    }
+
+    fn default_port(self) -> u32 {
+        if self == Self::FtpsImplicit {
+            990
+        } else {
+            21
+        }
+    }
+}
+
 /// Everything needed to start a transfer. `user` "" is anonymous, `directory` "" the login
 /// directory, `archive_password` `null` means "ask when needed". Deliberately not `Debug`: it
 /// holds passwords.
@@ -46,6 +74,8 @@ pub struct TransferConfig {
     pub archive_password: Option<String>,
     pub host: String,
     pub port: u32,
+    #[serde(default)]
+    pub protocol: Protocol,
     pub mode: Mode,
     pub user: String,
     pub password: String,
@@ -65,6 +95,8 @@ pub struct TransferConfig {
 pub struct ServerSettings {
     pub host: String,
     pub port: u32,
+    #[serde(default)]
+    pub protocol: Protocol,
     pub mode: Mode,
     pub user: Option<String>,
     pub password: Option<String>,
@@ -446,6 +478,7 @@ mod tests {
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 1,
+            protocol: crate::Protocol::Ftp,
             mode: Mode::Passive,
             user: String::new(),
             password: String::new(),

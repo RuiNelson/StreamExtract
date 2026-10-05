@@ -482,6 +482,10 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
 }
 
 Job::Result Job::pipeline() {
+  if (config_.protocol != STREAMEXTRACT_PROTOCOL_FTP && config_.protocol != STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT &&
+      config_.protocol != STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT) {
+    throw std::runtime_error("invalid transfer protocol");
+  }
   if (config_.host.empty() || config_.host.find_first_of("/ \t") != std::string::npos) {
     throw std::runtime_error("the host must be a host name or address, without ftp:// or a path");
   }
@@ -501,6 +505,10 @@ Job::Result Job::pipeline() {
   FtpConfig ftp_config;
   ftp_config.host = config_.host;
   ftp_config.port = config_.port;
+  ftp_config.protocol = config_.protocol == STREAMEXTRACT_PROTOCOL_FTP ? FtpProtocol::Ftp : FtpProtocol::Ftps;
+  ftp_config.ftps_mode =
+      config_.protocol == STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT ? FtpsMode::Implicit : FtpsMode::Explicit;
+  ftp_config.ca_certificate = config_.ca_certificate;
   ftp_config.mode = config_.active_mode ? FtpMode::Active : FtpMode::Passive;
   ftp_config.user = config_.user;
   ftp_config.password = config_.password;
