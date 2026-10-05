@@ -1,4 +1,4 @@
-"""Shared Docker image and lifecycle for every FTP/FTPS integration suite."""
+"""Shared Docker image and lifecycle for every FTP/FTPS/SFTP integration suite."""
 
 import atexit
 import base64
@@ -77,6 +77,7 @@ class Container:
         self.control_start = free_port_range(4)
         self.passive_start = free_port_range(10)
         self.api_port = free_port()
+        self.ssh_host_port = free_port()
         mode = "filesystem" if data_dir is not None else "faults"
         command = ["docker", "run", "-d", "--rm", "--name", self.name,
                    "-e", f"MODE={mode}", "-e", f"CONTROL_START={self.control_start}",
@@ -91,6 +92,8 @@ class Container:
             command += ["-v", f"{self.data_dir}:{HOME}", "-e", f"FTP_UID={uid}",
                         "-p", f"127.0.0.1:{self.control_start}:21",
                         "-p", f"127.0.0.1:{self.control_start + 1}:990"]
+            import getpass
+            command += ["-p", f"127.0.0.1:{self.ssh_host_port}:22", "-e", f"LOCAL_USER={getpass.getuser()}"]
         else:
             command += ["-p", f"127.0.0.1:{self.control_start}-{self.control_start + 3}:"
                              f"{self.control_start}-{self.control_start + 3}"]
@@ -107,6 +110,7 @@ class Container:
         self.api_url = f"http://{self.host}:8100" if self.routable else f"http://127.0.0.1:{self.api_port}"
         self.port = 21 if self.routable else self.control_start
         self.implicit_port = 990 if self.routable else self.control_start + 1
+        self.ssh_port = 22 if self.routable else self.ssh_host_port
         try:
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:

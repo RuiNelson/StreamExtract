@@ -14,12 +14,14 @@ ParsedOptions parse_options(int argc, char** argv) {
   std::string ca_certificate;
   std::string user;
   std::string password;
+  std::string private_key;
+  std::string known_hosts;
   std::string directory;
   std::string archive_password;
 
   CLI::App app{
-      "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume image, straight to an FTP "
-      "or FTPS server, without extracting it "
+      "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume image, straight to an FTP, "
+      "FTPS or SFTP server, without extracting it "
       "to disk.",
       "sext"};
   app.set_version_flag("--version", version_string());
@@ -30,20 +32,21 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->required()
       ->check(CLI::ExistingFile.description(""))
       ->type_name("PATH");
-  app.add_option("--host", o.host, "FTP server name or IP address")->required()->type_name("HOST");
+  app.add_option("--host", o.host, "Server name or IP address")->required()->type_name("HOST");
   app.add_option("--protocol", protocol, "Transfer protocol")
-      ->check(CLI::IsMember({"ftp", "ftps"}, CLI::ignore_case).description(""))
+      ->check(CLI::IsMember({"ftp", "ftps", "sftp"}, CLI::ignore_case).description(""))
       ->capture_default_str()
-      ->type_name("ftp|ftps");
-  CLI::Option* ftps_mode_option = app.add_option("--ftps-mode", ftps_mode, "FTPS connection mode")
-                                    ->check(CLI::IsMember({"explicit", "implicit"}, CLI::ignore_case).description(""))
-                                    ->capture_default_str()
-                                    ->type_name("explicit|implicit");
+      ->type_name("ftp|ftps|sftp");
+  CLI::Option* ftps_mode_option =
+      app.add_option("--ftps-mode", ftps_mode, "FTPS connection mode")
+          ->check(CLI::IsMember({"explicit", "implicit"}, CLI::ignore_case).description(""))
+          ->capture_default_str()
+          ->type_name("explicit|implicit");
   CLI::Option* ca_option = app.add_option("--cacert", ca_certificate, "CA certificate file for FTPS (PEM)")
                                ->check(CLI::ExistingFile.description(""))
                                ->type_name("PATH");
   CLI::Option* port_option =
-      app.add_option("--port", o.port, "Server port (default: 21; implicit FTPS: 990)")
+      app.add_option("--port", o.port, "Server port (FTP/FTPS: 21; implicit FTPS: 990; SSH: 22)")
           ->check(CLI::Range(1, 65535).description(""))
           ->type_name("PORT");
   app.add_option("--mode", mode, "Data connection mode")
@@ -51,25 +54,35 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->capture_default_str()
       ->type_name("passive|active");
   CLI::Option* user_option =
-      app.add_option("--user", user, "FTP user name; anonymous login if omitted")->type_name("NAME");
+      app.add_option("--user", user, "User name (FTP: anonymous; SSH: current local user)")->type_name("NAME");
   CLI::Option* password_option =
-      app.add_option("--password", password, "FTP password; asked for when --user is given without it")
-          ->needs(user_option)
-          ->type_name("PASSWORD");
+      app.add_option("--password", password, "Login password (SSH never prompts)")->type_name("PASSWORD");
+  CLI::Option* key_option =
+      app.add_option("--private-key", private_key, "SSH private key (default: keys in ~/.ssh)")
+          ->check(CLI::ExistingFile.description(""))
+          ->type_name("PATH");
+  CLI::Option* passphrase_option =
+      app.add_option("--private-key-passphrase,--private-key-passphare", o.private_key_passphrase,
+                     "Passphrase for encrypted SSH private keys; never prompted")
+          ->type_name("PASSPHRASE");
+  CLI::Option* known_hosts_option =
+      app.add_option("--known-hosts", known_hosts,
+                     "Verify SSH host keys against PATH; empty: ~/.ssh/known_hosts; omitted: accept any")
+          ->type_name("PATH");
   CLI::Option* directory_option =
       app.add_option("--directory", directory, "Remote destination directory (default: the login directory)")
           ->type_name("DIR");
   app.add_flag("--mkdir", o.mkdir, "Create the destination directory if missing (one MKD, not recursive)");
-  CLI::Option* archive_password_option =
-      app.add_option("--archive-password", archive_password,
-                     "Password of an encrypted archive; asked for when needed")
-          ->type_name("PASSWORD");
+  CLI::Option* archive_password_option = app.add_option("--archive-password", archive_password,
+                                                        "Password of an encrypted archive; asked for when needed")
+                                             ->type_name("PASSWORD");
   // Former name, kept as an alias (hidden from the help).
   CLI::Option* rar_password_option = app.add_option("--rar-password", archive_password)->group("");
   app.add_flag("--no-tui", o.no_tui, "Plain log output instead of the full-screen interface");
-  app.add_flag("--verbose", o.verbose, "Log every FTP command and reply");
-  app.add_option("--retries", o.retries,
-                 "Total attempts for connection/login and each file upload, including the first; 1 disables retries")
+  app.add_flag("--verbose", o.verbose, "Log connection and protocol details");
+  app.add_option(
+         "--retries", o.retries,
+         "Total attempts for connection/login and each file upload, including the first; 1 disables retries")
       ->check(CLI::PositiveNumber.description(""))
       ->capture_default_str()
       ->type_name("N");
@@ -78,7 +91,8 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->capture_default_str()
       ->type_name("MIB");
   app.footer(
-      "Anonymous login is used when no --user is given. Equal-size remote files are skipped; smaller files "
+      "Without --user, FTP/FTPS uses anonymous login and SFTP uses the current local username. "
+      "Equal-size remote files are skipped; smaller files "
       "are resumed; larger files are deleted before uploading from the beginning.");
 
   try {
@@ -93,12 +107,26 @@ ParsedOptions parse_options(int argc, char** argv) {
     return {std::nullopt, 2};
   }
   o.mode = CLI::detail::to_lower(mode) == "active" ? FtpMode::Active : FtpMode::Passive;
-  o.protocol = CLI::detail::to_lower(protocol) == "ftps" ? FtpProtocol::Ftps : FtpProtocol::Ftp;
+  const auto selected_protocol = CLI::detail::to_lower(protocol);
+  o.protocol = selected_protocol == "sftp"   ? FtpProtocol::Sftp
+               : selected_protocol == "ftps" ? FtpProtocol::Ftps
+                                             : FtpProtocol::Ftp;
   o.ftps_mode = CLI::detail::to_lower(ftps_mode) == "implicit" ? FtpsMode::Implicit : FtpsMode::Explicit;
-  if (o.protocol == FtpProtocol::Ftp && (ftps_mode_option->count() > 0 || ca_option->count() > 0)) {
+  if (o.protocol != FtpProtocol::Ftps && (ftps_mode_option->count() > 0 || ca_option->count() > 0)) {
     std::fprintf(stderr, "--ftps-mode and --cacert require --protocol ftps\n");
     return {std::nullopt, 2};
   }
+  if (!is_ssh(o.protocol) && (key_option->count() || passphrase_option->count() || known_hosts_option->count())) {
+    std::fprintf(stderr, "SSH key and known-hosts options require --protocol sftp\n");
+    return {std::nullopt, 2};
+  }
+  if (!is_ssh(o.protocol) && password_option->count() && !user_option->count()) {
+    std::fprintf(stderr, "--password requires --user for FTP and FTPS\n");
+    return {std::nullopt, 2};
+  }
+  if (is_ssh(o.protocol) && port_option->count() == 0) o.port = 22;
+  if (key_option->count()) o.private_key = private_key;
+  if (known_hosts_option->count()) o.known_hosts = known_hosts;
   if (o.protocol == FtpProtocol::Ftps && o.ftps_mode == FtpsMode::Implicit && port_option->count() == 0) {
     o.port = 990;
   }

@@ -399,8 +399,16 @@ input[type="checkbox"] {
   grid-template-columns: 1fr 1fr;
 }
 
+.server-options { display: flex; align-items: center; justify-content: space-between; }
+.server-options .btn-small { padding-block: 0; min-height: 0; height: 18px; }
+.key-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+
 .host-row {
   grid-template-columns: 152px minmax(0, 1fr) 64px 96px;
+}
+
+.host-row.sftp {
+  grid-template-columns: 152px minmax(0, 1fr) 64px;
 }
 
 .host-row-error {
@@ -1128,7 +1136,8 @@ dialog.dialog::backdrop {
 /* ---------------------------------------------------------------- misc */
 
 @media (max-width: 520px) {
-  .host-row {
+  .host-row,
+  .host-row.sftp {
     grid-template-columns: 152px minmax(0, 1fr);
   }
 

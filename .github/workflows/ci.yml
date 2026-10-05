@@ -107,8 +107,7 @@ jobs:
             7z x -bso0 -bsp0 -olzmasdk "${archive}"
           fi
 
-      # libcurl is always built from source and linked statically, with FTP/FTPS.
-      # TLS uses static mbed TLS on every platform.
+      # libcurl is built statically with FTP/FTPS/SFTP and bundled OpenSSL/libssh2.
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs
@@ -136,7 +135,10 @@ jobs:
           path: |
             build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
             build/_ext/*/src/*.tar.*
-          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/SSH.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
 
       - name: Configure
         run: >
@@ -310,7 +312,10 @@ jobs:
           path: |
             build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
             build/_ext/*/src/*.tar.*
-          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/SSH.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
 
       - name: Configure the library
         run: >

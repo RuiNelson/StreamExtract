@@ -20,6 +20,7 @@ SESSIONS = {}
 LOCK = threading.Lock()
 PASSIVE = range(int(os.environ["PASSIVE_START"]), int(os.environ["PASSIVE_START"]) + 10)
 CONTROLS = range(int(os.environ["CONTROL_START"]), int(os.environ["CONTROL_START"]) + 4)
+SSH_PROCESS = None
 
 
 def tls_context():
@@ -68,6 +69,36 @@ def start_vsftpd():
     return processes
 
 
+def start_sshd(settings=None):
+    global SSH_PROCESS
+    settings = settings or {}
+    if SSH_PROCESS is not None:
+        SSH_PROCESS.terminate()
+        SSH_PROCESS.wait(timeout=5)
+    subprocess.run(["ssh-keygen", "-A"], check=True, stdout=subprocess.DEVNULL)
+    local_user = os.environ.get("LOCAL_USER", "tester")
+    if local_user != "tester" and local_user != "root":
+        uid = os.environ.get("FTP_UID", "1000")
+        passwd = Path("/etc/passwd")
+        if not any(line.startswith(local_user + ":") for line in passwd.read_text().splitlines()):
+            with passwd.open("a") as file:
+                file.write(f"{local_user}:x:{uid}:{uid}::/ftp/tester:/bin/sh\n")
+            subprocess.run(["chpasswd"], input=f"{local_user}:secret\n", text=True, check=True)
+    Path("/tmp/ssh-authorized-keys").write_text(settings.get("authorized_keys", ""))
+    Path("/tmp/ssh-authorized-keys").chmod(0o644)
+    config = Path("/tmp/sshd-config")
+    config.write_text(
+        "Port 22\nListenAddress 0.0.0.0\nStrictModes no\nPerSourcePenalties no\n"
+        "AuthorizedKeysFile /tmp/ssh-authorized-keys\nPermitRootLogin no\n"
+        "Subsystem sftp internal-sftp\nLogLevel VERBOSE\n"
+        f"PasswordAuthentication {'yes' if settings.get('password', True) else 'no'}\n"
+        f"PubkeyAuthentication {'yes' if settings.get('public_key', True) else 'no'}\n"
+        "KbdInteractiveAuthentication no\n"
+    )
+    SSH_PROCESS = subprocess.Popen(["/usr/sbin/sshd", "-D", "-e", "-f", str(config)])
+    return SSH_PROCESS
+
+
 class Api(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
@@ -86,6 +117,10 @@ class Api(BaseHTTPRequestHandler):
     def do_POST(self):
         parts = self.path.strip("/").split("/")
         body = self.body()
+        if parts == ["ssh"]:
+            start_sshd(body)
+            self.respond({})
+            return
         if parts == ["sessions"]:
             options = body
             options["files"] = {key: base64.b64decode(value) for key, value in options.get("files", {}).items()}
@@ -134,6 +169,9 @@ class Api(BaseHTTPRequestHandler):
         if parts == ["health"]:
             self.respond({"ready": True})
             return
+        if parts == ["ssh-host-keys"]:
+            self.respond([path.read_text().strip() for path in sorted(Path("/etc/ssh").glob("ssh_host_*_key.pub"))])
+            return
         if parts == ["filesystem"]:
             root = Path("/ftp/tester")
             self.respond({unicodedata.normalize("NFC", item.relative_to(root).as_posix()):
@@ -167,10 +205,14 @@ class Api(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     generate_certificate()
     processes = start_vsftpd() if os.environ.get("MODE") == "filesystem" else []
+    if processes:
+        processes.append(start_sshd())
 
     def stop(_signum, _frame):
         for process in processes:
             process.terminate()
+        if SSH_PROCESS is not None:
+            SSH_PROCESS.terminate()
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, stop)

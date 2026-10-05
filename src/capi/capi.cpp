@@ -53,12 +53,21 @@ streamextract_job* streamextract_job_start_with_units(const streamextract_job_co
   return streamextract_job_start_with_options(config, si_units, 0);
 }
 
-streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units, unsigned retries) {
+streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units,
+                                                        unsigned retries) {
   return streamextract_job_start_with_protocol(config, si_units, retries, STREAMEXTRACT_PROTOCOL_FTP, nullptr);
 }
 
 streamextract_job* streamextract_job_start_with_protocol(const streamextract_job_config* config, int si_units,
-                                                      unsigned retries, int protocol, const char* ca_certificate) {
+                                                         unsigned retries, int protocol,
+                                                         const char* ca_certificate) {
+  return streamextract_job_start_with_connection(config, si_units, retries, protocol, ca_certificate, nullptr);
+}
+
+streamextract_job* streamextract_job_start_with_connection(const streamextract_job_config* config, int si_units,
+                                                           unsigned retries, int protocol,
+                                                           const char* ca_certificate,
+                                                           const streamextract_ssh_options* ssh) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -80,6 +89,12 @@ streamextract_job* streamextract_job_start_with_protocol(const streamextract_job
     copy.active_mode = config->active_mode != 0;
     copy.user = copy_string(config->user);
     copy.password = copy_string(config->password);
+    copy.password_supplied = config->password != nullptr;
+    if (ssh) {
+      if (ssh->private_key) copy.private_key = std::string(ssh->private_key);
+      copy.private_key_passphrase = copy_string(ssh->private_key_passphrase);
+      if (ssh->known_hosts) copy.known_hosts = std::string(ssh->known_hosts);
+    }
     copy.directory = copy_string(config->directory);
     copy.mkdir = config->mkdir != 0;
     copy.verbose = config->verbose != 0;

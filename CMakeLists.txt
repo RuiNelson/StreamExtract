@@ -54,6 +54,7 @@ add_library(streamextract_core STATIC
   src/transfer.cpp
   src/util/json.cpp
   src/util/remote_path.cpp
+  src/util/ssh_settings.cpp
   src/util/terminal.cpp
   src/util/text.cpp)
 target_include_directories(streamextract_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
@@ -62,8 +63,7 @@ target_link_libraries(streamextract_core
   PUBLIC fmt::fmt
   PRIVATE unrar::unrar streamextract::lzmasdk streamextract::fatfs streamextract::libarchive CURL::libcurl_static Threads::Threads)
 if(WIN32)
-  target_sources(streamextract_core PRIVATE src/util/windows_tls.cpp)
-  target_link_libraries(streamextract_core PRIVATE crypt32)
+  target_link_libraries(streamextract_core PRIVATE crypt32 advapi32)
 endif()
 if(APPLE)
   target_link_libraries(streamextract_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.

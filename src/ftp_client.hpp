@@ -14,8 +14,10 @@ namespace streamextract {
 class Logger;
 
 enum class FtpMode { Passive, Active };
-enum class FtpProtocol { Ftp, Ftps };
+enum class FtpProtocol { Ftp, Ftps, Sftp };
 enum class FtpsMode { Explicit, Implicit };
+
+inline bool is_ssh(FtpProtocol protocol) { return protocol == FtpProtocol::Sftp; }
 
 struct FtpConfig {
   std::string host;
@@ -26,7 +28,11 @@ struct FtpConfig {
   std::optional<std::string> ca_certificate;
   std::string user;  // Empty: anonymous login.
   std::string password;
-  bool mention_flags = true;  // Hints in error messages name command-line options ("--mode active").
+  bool password_supplied = false;
+  std::optional<std::string> private_key;
+  std::string private_key_passphrase;
+  std::optional<std::string> known_hosts;  // Absent: accept any key; empty: ~/.ssh/known_hosts.
+  bool mention_flags = true;               // Hints in error messages name command-line options ("--mode active").
 };
 
 class FtpError : public std::runtime_error {

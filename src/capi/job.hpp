@@ -28,13 +28,17 @@ struct JobConfig {
   int protocol = STREAMEXTRACT_PROTOCOL_FTP;  // Validated before the archive is opened.
   std::optional<std::string> ca_certificate;
   bool active_mode = false;
-  std::string user;  // Empty: anonymous.
+  std::string user;  // Empty: anonymous for FTP, local username for SFTP.
   std::string password;
+  bool password_supplied = false;
+  std::optional<std::string> private_key;
+  std::string private_key_passphrase;
+  std::optional<std::string> known_hosts;
   std::string directory;  // Empty: the login directory.
   bool mkdir = false;
   bool verbose = false;
   unsigned buffer_mib = 0;  // 0: the default.
-  unsigned retries = 3;  // Total connection/login and per-file upload attempts, including the first.
+  unsigned retries = 3;     // Total connection/login and per-file upload attempts, including the first.
   ByteUnits units = ByteUnits::Binary;
 };
 
@@ -63,7 +67,7 @@ class Job {
   struct ArchiveInfo {
     std::string name;
     ArchiveFormat format = ArchiveFormat::Rar;
-    std::string compression;  // Compressed tar; empty otherwise.
+    std::string compression;        // Compressed tar; empty otherwise.
     std::optional<uint64_t> files;  // Unknown for a streamed archive.
     std::optional<uint64_t> bytes;
     unsigned volumes = 1;
@@ -106,6 +110,7 @@ class Job {
   void add_log_line(const LogLine& line);
 
   const JobConfig config_;
+  std::string login_user_;
   const std::string archive_name_;
   Logger log_;
   Progress progress_;

@@ -42,11 +42,11 @@ _streamextract_static_lib(_lz4_lib lz4)
 _streamextract_static_lib(_archive_lib archive)
 
 # AES for encrypted ZIP files: libarchive uses CommonCrypto on macOS and CNG on
-# Windows; elsewhere it needs a crypto library, mbed TLS here.
+# Windows; elsewhere it needs a crypto library, bundled OpenSSL here.
 if(APPLE OR WIN32)
-  set(_use_mbedtls OFF)
+  set(_use_openssl OFF)
 else()
-  set(_use_mbedtls ON)
+  set(_use_openssl ON)
 endif()
 
 # Settings shared by every dependency, as an initial cache file: values such as
@@ -144,18 +144,14 @@ _streamextract_dependency(streamextract_lz4
   BYPRODUCTS "${_lz4_lib}")
 
 set(_archive_depends streamextract_zlib streamextract_bzip2 streamextract_xz streamextract_zstd streamextract_lz4)
-set(_archive_crypto_args -DENABLE_MBEDTLS=OFF)
+set(_archive_crypto_args -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF)
 
-# Reuse the bundled TLS backend's crypto library for encrypted ZIP on Linux.
-if(_use_mbedtls)
-  list(APPEND _archive_depends mbedcrypto mbedx509 mbedtls)
-  set(_archive_crypto_args
-    -DENABLE_MBEDTLS=ON
-    "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD -pthread"
-    "-DMBEDTLS_INCLUDE_DIRS=${mbedtls_SOURCE_DIR}/include"
-    "-DMBEDTLS_LIBRARY=$<TARGET_FILE:mbedtls>"
-    "-DMBEDX509_LIBRARY=$<TARGET_FILE:mbedx509>"
-    "-DMBEDCRYPTO_LIBRARY=$<TARGET_FILE:mbedcrypto>")
+# Reuse bundled OpenSSL for encrypted ZIP files on Linux.
+if(_use_openssl)
+  list(APPEND _archive_depends streamextract_ssh_crypto_build)
+  set(_archive_crypto_args -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=ON
+    -DOPENSSL_USE_STATIC_LIBS=ON "-DOPENSSL_INCLUDE_DIR=${_ssh_openssl_headers}"
+    "-DOPENSSL_CRYPTO_LIBRARY=${_ssh_crypto_library}" "-DOPENSSL_SSL_LIBRARY=${_ssh_ssl_library}")
 endif()
 
 # --- libarchive (BSD-2-Clause) -----------------------------------------------
@@ -170,7 +166,7 @@ _streamextract_dependency(streamextract_libarchive
     -DENABLE_INSTALL=ON -DENABLE_WERROR=OFF -DENABLE_COVERAGE=OFF
     -DENABLE_ZLIB=ON -DENABLE_BZip2=ON -DENABLE_LZMA=ON -DENABLE_ZSTD=ON -DENABLE_LZ4=ON
     -DENABLE_LZO=OFF -DENABLE_LIBB2=OFF -DENABLE_MD=OFF
-    -DENABLE_OPENSSL=OFF -DENABLE_NETTLE=OFF -DENABLE_CNG=ON
+    -DENABLE_NETTLE=OFF -DENABLE_CNG=ON
     -DENABLE_LIBXML2=OFF -DENABLE_EXPAT=OFF -DENABLE_WIN32_XMLLITE=OFF -DENABLE_BSDXML=OFF
     -DENABLE_PCREPOSIX=OFF -DENABLE_PCRE2POSIX=OFF -DENABLE_LIBGCC=OFF
     -DPOSIX_REGEX_LIB=NONE  # Only bsdtar uses regular expressions (Windows has none: it would want libgcc).
@@ -188,8 +184,8 @@ ExternalProject_Add_StepDependencies(streamextract_libarchive download "${CMAKE_
 
 # Link order matters for static libraries: libarchive first, then what it uses.
 set(_archive_link "${_zstd_lib}" "${_lz4_lib}" "${_lzma_lib}" "${_bzip2_lib}" "${_zlib_lib}")
-if(_use_mbedtls)
-  list(APPEND _archive_link mbedcrypto)
+if(_use_openssl)
+  list(APPEND _archive_link streamextract::ssh_crypto)
 endif()
 if(APPLE)
   list(APPEND _archive_link iconv)

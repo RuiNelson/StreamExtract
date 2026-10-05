@@ -368,6 +368,11 @@ class StreamExtractJobConfig(ctypes.Structure):
     ]
 
 
+class StreamExtractSshOptions(ctypes.Structure):
+    _fields_ = [("private_key", ctypes.c_char_p), ("private_key_passphrase", ctypes.c_char_p),
+                ("known_hosts", ctypes.c_char_p)]
+
+
 class Library:
     """libstreamextractcore loaded with the prototypes of streamextract.h."""
 
@@ -387,6 +392,9 @@ class Library:
         dll.streamextract_job_start_with_protocol.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
                                                             ctypes.c_uint, ctypes.c_int, ctypes.c_char_p]
         dll.streamextract_job_start_with_protocol.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_connection.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
+            ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions)]
+        dll.streamextract_job_start_with_connection.restype = ctypes.c_void_p
         dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.streamextract_job_poll.restype = ctypes.c_void_p
         dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -441,6 +449,9 @@ class LibJob:
         config = dict(config)
         protocol = config.pop("protocol", None)
         ca_certificate = config.pop("ca_certificate", None)
+        ssh_values = {name: config.pop(name, None) for name in ("private_key", "private_key_passphrase", "known_hosts")}
+        ssh = StreamExtractSshOptions(**{key: value.encode("utf-8") if isinstance(value, str) else value
+                                         for key, value in ssh_values.items()})
         unknown = set(config) - set(LIB_CONFIG_DEFAULTS)
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
@@ -455,10 +466,10 @@ class LibJob:
         self._phase = 0
         self._had_progress = False
         if protocol is not None:
-            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2}
-            self.handle = lib.dll.streamextract_job_start_with_protocol(
+            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
+            self.handle = lib.dll.streamextract_job_start_with_connection(
                 ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol],
-                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None)
+                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None, ctypes.byref(ssh))
         elif retries is not None:
             self.handle = lib.dll.streamextract_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
         else:
@@ -714,16 +725,22 @@ class Env:
 
     @property
     def cli_port(self):
+        if self.protocol == "sftp":
+            return self.server.ssh_port
         return self.server.implicit_port if self.protocol == "ftps" and self.ftps_mode == "implicit" else self.server.port
 
     @property
     def target_scheme(self):
+        if self.protocol == "sftp":
+            return "sftp"
         return "ftps" if self.protocol == "ftps" and self.ftps_mode == "implicit" else "ftp"
 
     def command(self, archive, *args, login=True, host=None, no_tui=True):
         self.server.sync()
         cmd = [self.sext, "--file", self.archive(archive), "--host", host or self.server.host,
                "--port", str(self.cli_port)]
+        if self.protocol == "sftp":
+            cmd += ["--protocol", "sftp"]
         if self.protocol == "ftps":
             cmd += ["--protocol", "ftps", "--ftps-mode", self.ftps_mode, "--cacert", str(CA_CERTIFICATE)]
         if login:
@@ -744,6 +761,8 @@ class Env:
         self.server.sync()
         config = {"archive": self.archive(archive), "host": self.server.host, "port": self.cli_port,
                   "user": USER, "password": PASSWORD}
+        if self.protocol == "sftp":
+            config.update(protocol="sftp")
         if self.protocol == "ftps":
             config.update(protocol="ftps_" + self.ftps_mode, ca_certificate=str(CA_CERTIFICATE))
         config.update(overrides)
@@ -794,7 +813,8 @@ def test_larger_remote_file_is_uploaded_again(env):
     out = env.run("basic.rar", "--directory", "basic", "--verbose")
     check("To upload: 1 file(s)" in out, "expected exactly one upload", out)
     check("Removed the larger remote file" in out, "larger file was not deleted first", out)
-    check(out.index("DEBUG > DELE ") < out.index("DEBUG > STOR "), "upload preceded deletion", out)
+    if env.protocol != "sftp":
+        check(out.index("DEBUG > DELE ") < out.index("DEBUG > STOR "), "upload preceded deletion", out)
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
 
 
@@ -812,7 +832,8 @@ def test_smaller_remote_files_are_resumed(env):
         out = env.run(archive, "--directory", directory, "--verbose", "--buffer", "1")
         check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "incomplete files were not resumed", out)
         check(f"Resuming tree/random-5M.bin at byte {offset}" in out, "resume offset was not used", out)
-        check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
+        if env.protocol != "sftp":
+            check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
         check("DEBUG > DELE " not in out, "an incomplete file was deleted", out)
         compare_trees(env.fixtures["main"], root, out)
 
@@ -823,6 +844,8 @@ def test_solid(env):
 
 
 def test_active_mode(env):
+    if env.protocol == "sftp":
+        raise Skipped("SFTP has no active/passive data mode")
     if not env.server.routable:
         raise Skipped("active mode needs a routable server address (Linux); Docker Desktop only publishes ports")
     out = env.run("basic.rar", "--mode", "active", "--directory", "active", "--mkdir")
@@ -930,7 +953,8 @@ def test_small_files_directory_navigation(env):
     out = env.run(archive, "--directory", "small-navigation", "--verbose")
     cwd_count = out.count("DEBUG > CWD ")
     print(f"    {len(files)} small files: {cwd_count} CWD commands, {time.monotonic() - started:.3f} s")
-    check(0 < cwd_count < 100, f"too many directory traversal commands: {cwd_count}", out)
+    if env.protocol != "sftp":
+        check(0 < cwd_count < 100, f"too many directory traversal commands: {cwd_count}", out)
     compare_trees(source, destination, out)
     compare_mtimes(source, destination, out)
 
@@ -950,7 +974,8 @@ def check_hidden_files(env, archive, directory):
     out = env.run(archive, "--directory", directory, "--verbose")
     check("Done: 0 file(s)" in out and f"Skipped {count} file(s)" in out, "hidden files were uploaded again", out)
     check("DEBUG > STOR " not in out, "a skipped file was sent", out)
-    check("DEBUG > SIZE .hidden" in out, "the hidden file was not checked with SIZE", out)
+    if env.protocol != "sftp":
+        check("DEBUG > SIZE .hidden" in out, "the hidden file was not checked with SIZE", out)
 
     # Omitted names still need their size checked, including zero-byte files.
     env.remote(directory, ".hidden").unlink()
@@ -1000,6 +1025,8 @@ def test_encrypted_headers(env):
 
 
 def test_anonymous_login_is_attempted(env):
+    if env.protocol == "sftp":
+        raise Skipped("SFTP uses the local username; covered by sftp.py")
     # Without --user streamextract logs in anonymously, which this server refuses.
     out = env.run("tiny.rar", "--directory", "anon", login=False, expect=1)
     check("cannot log in" in out and "530" in out, "anonymous login refusal not reported", out)
@@ -1351,7 +1378,8 @@ def test_exfat_basic(env):
     time.sleep(1)  # Let Docker's bind mount see the incomplete file.
     out = env.run("basic.exfat", "--directory", "exfat", "--verbose")
     check("Resuming fragmented.bin at byte 1000" in out, "exFAT file was not resumed", out)
-    check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
+    if env.protocol != "sftp":
+        check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
     check_exfat_tree(env.remote("exfat"), out)
 
 
@@ -1821,7 +1849,7 @@ TESTS = [
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sext", required=True, help="path to the sext binary")
-    parser.add_argument("--protocol", choices=("ftp", "ftps"), default="ftp", help="CLI and library transfer protocol")
+    parser.add_argument("--protocol", choices=("ftp", "ftps", "sftp"), default="ftp", help="CLI and library transfer protocol")
     parser.add_argument("--ftps-mode", choices=("explicit", "implicit"), default="explicit")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
     parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")

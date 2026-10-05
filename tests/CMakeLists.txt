@@ -43,6 +43,9 @@ endif()
 if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
   add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext> FtpsTests)
+  add_test(NAME sftp COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/sftp.py" --sext $<TARGET_FILE:sext> SftpTests)
+  set_tests_properties(sftp PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   set_tests_properties(ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
@@ -64,6 +67,10 @@ if(TARGET streamextractcore)
     add_test(NAME lib_ftps COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py"
       --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore> LibraryFtpsTests)
+    add_test(NAME lib_sftp COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/integration/sftp.py"
+      --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore> LibrarySftpTests)
+    set_tests_properties(lib_sftp PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
     set_tests_properties(lib_ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 

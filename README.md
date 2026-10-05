@@ -56,8 +56,8 @@ The app offers:
   password fields, including that prompt, and is saved automatically in
   `~/.config/streamextract/preferences.ini` (off by default).
 - **Server**: host, port, passive or active mode, username and password
-  (anonymous without a username), destination directory and *Create directory
-  if missing*. Choose **FTP** (default), **FTPS (explicit)** or **FTPS (implicit)**
+  (FTP/FTPS: anonymous; SFTP: local username if omitted), destination directory and *Create directory
+  if missing*. Choose **FTP** (default), **FTPS (explicit)**, **FTPS (implicit)** or **SFTP**
   in **Protocol** before Host. Both FTPS modes encrypt control and data connections
   and verify the server certificate using system CA trust.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
@@ -131,19 +131,22 @@ password-protected archives are supported:
 | Option | Description |
 |---|---|
 | `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT volume image (`.exfat`), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
-| `--host HOST` | FTP server name or address (IPv4 or IPv6). |
-| `--protocol ftp\|ftps` | Default `ftp`. `ftps` encrypts the control and data connections with TLS. CLI only. |
+| `--host HOST` | Server name or address (IPv4 or IPv6). |
+| `--protocol ftp\|ftps\|sftp` | Default `ftp`. `ftps` uses TLS; `sftp` transfers over SSH. Available in the CLI and GUI. |
 | `--ftps-mode explicit\|implicit` | Default `explicit` (AUTH TLS). `implicit` starts TLS immediately. Requires `--protocol ftps`. |
-| `--port PORT` | Default `21`, or `990` for implicit FTPS. |
+| `--port PORT` | Default `21`, `990` for implicit FTPS, or `22` for SFTP. |
 | `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
-| `--mode passive\|active` | Data connection mode. Default `passive`. |
-| `--user NAME` | Without it, the login is anonymous. |
-| `--password PASSWORD` | Requires `--user`. If omitted, it is asked for (hidden) on the terminal. |
+| `--mode passive\|active` | FTP/FTPS data connection mode. Default `passive`; unused for SFTP. |
+| `--user NAME` | Without it, FTP/FTPS uses anonymous login; SFTP uses the current local username. |
+| `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
+| `--private-key PATH` | SFTP private key. With neither a password nor a selected key, private keys in `~/.ssh` are tried. |
+| `--private-key-passphrase PASSPHRASE` | Passphrase for an encrypted SFTP private key; never prompted. The spelling `--private-key-passphare` is also accepted. |
+| `--known-hosts PATH` | Verify SFTP host keys against this file. An empty string uses `~/.ssh/known_hosts`; omitting the option accepts any host key. |
 | `--directory DIR` | Destination, absolute or relative to the login directory. Without it the login directory is used and a warning says which one. |
 | `--mkdir` | Create the destination if it does not exist, with a single `MKD` (not recursive). Without it, a missing destination is an error. |
 | `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
-| `--verbose` | Log every FTP command and reply (the password is masked). |
+| `--verbose` | Log connection and protocol details (credentials are masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
 | `--retries N` | Total attempts for connection/login and each file upload, including the first. Default `3`; `1` disables retries. |
 
@@ -151,14 +154,32 @@ For explicit FTPS, add `--protocol ftps` to the command. For implicit FTPS,
 add `--protocol ftps --ftps-mode implicit`. Either accepts a custom `--port`.
 FTPS requires encryption for both connections and verifies the server's
 certificate and hostname; it fails if TLS is unavailable or verification fails.
-On macOS/Linux, certificates use the CA bundle detected when building libcurl
-(on macOS, `/etc/ssl/cert.pem`); on Windows they use the native certificate store.
+On macOS and Windows, verification uses native certificate trust; Linux uses
+the CA bundle detected when building libcurl.
 Use `--cacert /path/to/ca.pem` to trust a private CA for this transfer.
-In the GUI, choose **FTP**, **FTPS (explicit)**, or **FTPS (implicit)** from
+In the GUI, choose **FTP**, **FTPS (explicit)**, or **FTPS (implicit)**, or **SFTP** from
 **Protocol** before Host. FTP remains the default. Changing protocol updates
-port 21/990 when it is still the previous default; custom ports are preserved.
+port 21/990/22 when it is still the previous default; custom ports are preserved.
 Memory Save/Recall includes the protocol. The GUI uses the system CA trust
 above; private CA files can be supplied through the CLI's `--cacert` option.
+
+For SFTP, use `--protocol sftp`. Authentication is limited to passwords and
+private keys; SSH agents, keyboard-interactive login and SSH configuration files
+are not used. `--password` is the account password and
+`--private-key-passphrase` is a separate key passphrase. RSA, ECDSA and Ed25519
+OpenSSH keys are supported, including encrypted keys and keys without a `.pub`
+file. FTP's existing skip, resume, replacement and partial-file cleanup behavior
+also applies to SFTP.
+
+```bash
+sext --file backup.zip --host example.com --protocol sftp \
+     --private-key ~/.ssh/id_ed25519 --known-hosts ""
+```
+
+In the GUI, select **SFTP** and open **SSH settings** for the private key,
+passphrase and optional known-hosts verification. An empty username uses the
+current local username. Memory stores the key and known-hosts paths; passwords
+and key passphrases are saved only with the existing consent to store credentials.
 
 The interface shows a fixed log panel, the progress of the current file and of
 the whole archive with their ETAs (for a compressed tar, by how much of the
@@ -341,7 +362,7 @@ Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
 To update the project version everywhere (including the GUI and API examples),
 run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
 
-Requirements: a C++17 compiler and CMake 3.21+. An FTP/FTPS libcurl is always
+Requirements: a C++17 compiler, CMake 3.21+, Perl and Make (NMake in a Visual Studio developer environment on Windows). An FTP/FTPS/SFTP libcurl is always
 built from pinned sources and linked statically, so its features are consistent
 across platforms. UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
@@ -349,8 +370,10 @@ libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandar
 LZ4) are built from source as static libraries during the
 first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
 longer.
-mbed TLS is fetched and built statically for FTPS on every platform; its crypto
-library also supports encrypted ZIP files on Linux. Windows root certificates are supplied to mbed TLS from the native root store.
+OpenSSL 3.5.9 and libssh2 1.11.1 are fetched from pinned sources and linked
+statically on every platform. OpenSSL supplies FTPS and SSH cryptography, and
+also supports encrypted ZIP files on Linux. The GUI core embeds these same
+static libraries; no system libcurl or OpenSSL is needed for transfers.
 
 The UnRAR sources are not part of this repository (they have their own
 license) and must be extracted into `unrarsrc/`:
@@ -483,12 +506,15 @@ python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --7z /path
 All integration runners automatically build the same pinned Docker image and
 remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
 implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
-to run the same cases through the core API used by the GUI. `ftp_faults.py`
+to run the same cases through the core API used by the GUI. `sftp.py` covers
+SFTP authentication, host verification and file transfer behavior. `ftp_faults.py`
 tests resume, retry and cancellation using controlled scenarios in that image:
 
 ```bash
 python3 tests/integration/ftps.py --sext build/sext
+python3 tests/integration/sftp.py --sext build/sext --lib build/libstreamextractcore.dylib
 python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
+python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol sftp
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps --ftps-mode implicit
 ```
@@ -525,8 +551,9 @@ The Rust side has its own unit tests, which link the built library:
 | [FatFs](https://elm-chan.org/fsw/ff/) | exFAT volume image reading | FatFs license (BSD-style) |
 | [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive (and BZip2, Deflate and Zstandard in 7z) | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
-| [mbed TLS](https://www.trustedfirmware.org/projects/mbed-tls/) | FTPS on every platform; AES for encrypted ZIP files on Linux | Apache-2.0 |
-| [libcurl](https://curl.se/libcurl/) | FTP/FTPS client | curl (MIT/X derivative) |
+| [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
+| [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
+| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |

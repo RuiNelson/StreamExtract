@@ -19,6 +19,9 @@ struct Options {
   std::optional<std::string> ca_certificate;
   std::optional<std::string> user;
   std::optional<std::string> password;
+  std::optional<std::string> private_key;
+  std::string private_key_passphrase;
+  std::optional<std::string> known_hosts;
   std::optional<std::string> directory;
   bool mkdir = false;
   std::optional<std::string> archive_password;

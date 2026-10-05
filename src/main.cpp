@@ -22,6 +22,7 @@
 #include "transfer.hpp"
 #include "ui.hpp"
 #include "util/remote_path.hpp"
+#include "util/ssh_settings.hpp"
 #include "util/terminal.hpp"
 #include "util/text.hpp"
 
@@ -81,7 +82,11 @@ int run(const Options& options) {
   ftp_config.ca_certificate = options.ca_certificate;
   ftp_config.user = options.user.value_or("");
   ftp_config.password = options.password.value_or("");
-  if (options.user && !options.password) {
+  ftp_config.password_supplied = options.password.has_value();
+  ftp_config.private_key = options.private_key;
+  ftp_config.private_key_passphrase = options.private_key_passphrase;
+  ftp_config.known_hosts = options.known_hosts;
+  if (!is_ssh(options.protocol) && options.user && !options.password) {
     if (!interactive) {
       log.error("--password is required when standard input is not a terminal");
       return kExitUsage;
@@ -124,10 +129,14 @@ int run(const Options& options) {
   FtpClient ftp(ftp_config, log, options.verbose);
   std::string target;
   try {
-    log.info("Connecting to {}:{} ({} mode)", options.host, options.port,
-             options.mode == FtpMode::Active ? "active" : "passive");
+    if (is_ssh(options.protocol))
+      log.info("Connecting to {}:{} (SFTP)", options.host, options.port);
+    else
+      log.info("Connecting to {}:{} ({} mode)", options.host, options.port,
+               options.mode == FtpMode::Active ? "active" : "passive");
     const std::string home = normalize_remote_path(ftp.connect(options.retries));
-    log.info("Logged in as {}", options.user ? *options.user : "anonymous");
+    log.info("Logged in as {}",
+             options.user.value_or(is_ssh(options.protocol) ? current_username() : "anonymous"));
     if (!options.directory) {
       target = home;
       log.warn("no --directory given: uploading to the server's default directory {}", target);

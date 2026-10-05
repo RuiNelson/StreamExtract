@@ -683,3 +683,44 @@ test("the protocol and connection mode reach the transfer and server memory", as
   assert.equal(app.node("protocol").value, "ftp");
   assert.equal(app.node("port").value, "2121");
 });
+
+test("SFTP selects port 22, hides FTP mode, and passes SSH settings", () => {
+  const ui = frontend();
+  ui.node("mode").value = "active";
+  ui.node("port").value = "21";
+  ui.node("protocol").value = "sftp";
+  ui.changeProtocol();
+  assert.equal(ui.node("port").value, "22");
+  assert.equal(ui.node("mode").disabled, true);
+  assert.equal(ui.node("mode-field").hidden, true);
+  assert.equal(ui.node("btn-ssh").hidden, false);
+  ui.node("private-key").value = "/keys/custom";
+  ui.node("private-key-passphrase").value = "key passphrase";
+  ui.node("verify-host-key").checked = true;
+  ui.node("known-hosts").value = "";
+  const config = ui.buildConfig();
+  assert.equal(config.private_key, "/keys/custom");
+  assert.equal(config.private_key_passphrase, "key passphrase");
+  assert.equal(config.known_hosts, "");
+  ui.node("verify-host-key").checked = false;
+  assert.equal(ui.buildConfig().known_hosts, null);
+  ui.node("port").value = "2222";
+  ui.node("protocol").value = "ftp";
+  ui.changeProtocol();
+  assert.equal(ui.node("port").value, "2222");
+  assert.equal(ui.node("mode").disabled, false);
+  assert.equal(ui.node("mode-field").hidden, false);
+  assert.equal(ui.node("mode").value, "active");
+});
+
+test("SFTP memory recalls private key and host verification settings", async () => {
+  const ui = frontend(async () => ({ protocol: "sftp", port: 22, host: "ssh.example", user: "",
+    private_key: "/keys/custom", private_key_passphrase: "secret", known_hosts: "" }));
+  await ui.memoryRecall();
+  assert.equal(ui.node("protocol").value, "sftp");
+  assert.equal(ui.node("mode-field").hidden, true);
+  assert.equal(ui.node("private-key").value, "/keys/custom");
+  assert.equal(ui.node("private-key-passphrase").value, "secret");
+  assert.equal(ui.node("verify-host-key").checked, true);
+  assert.equal(ui.buildConfig().known_hosts, "");
+});

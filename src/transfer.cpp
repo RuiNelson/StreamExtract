@@ -692,7 +692,8 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
         }
       }
       if (!result.ok && complete && result.bytes_sent >= remaining && !cancel_requested_ && !pipe_.aborted()) {
-        log_.warn("no confirmation from the server for {} ({}); checking its size", planned.relative, result.error);
+        log_.warn("no confirmation from the server for {} ({}); checking its size", planned.relative,
+                  result.error);
         try {
           const RemoteFile remote = ftp_.stat_file(planned.remote);
           if (remote.exists && remote.size && *remote.size == size) {
@@ -747,7 +748,7 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
       log_.warn("could not set the modification time of {}", planned.relative);
     } else if (!timestamp_warning_shown_) {
       timestamp_warning_shown_ = true;
-      log_.warn("the server supports neither MFMT nor MDTM for setting times: file dates are not preserved");
+      log_.warn("the server cannot set modification times: file dates are not preserved");
     }
   }
   std::lock_guard lock(mutex_);

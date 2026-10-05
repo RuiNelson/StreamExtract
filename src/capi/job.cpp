@@ -12,6 +12,7 @@
 #include "summary.hpp"
 #include "util/json.hpp"
 #include "util/remote_path.hpp"
+#include "util/ssh_settings.hpp"
 #include "util/text.hpp"
 
 namespace streamextract {
@@ -122,6 +123,9 @@ void write_progress(JsonWriter& json, const Progress::Snapshot& s, double upload
 
 Job::Job(JobConfig config)
     : config_(std::move(config)), archive_name_(file_name_of(config_.archive)), log_(config_.units) {
+  login_user_ = config_.user.empty()
+                    ? (config_.protocol == STREAMEXTRACT_PROTOCOL_SFTP ? "current local user" : "anonymous")
+                    : config_.user;
   log_.set_verbose(config_.verbose);
   log_.set_sink([this](const LogLine& line) { add_log_line(line); });
   thread_ = std::thread([this] { run(); });
@@ -252,7 +256,7 @@ std::string Job::poll(uint64_t log_cursor) {
     json.null();
   }
   json.member("mode", config_.active_mode ? "active" : "passive");
-  json.member("user", config_.user.empty() ? std::string("anonymous") : config_.user);
+  json.member("user", login_user_);
 
   json.key("probe");
   if (probe_) {
@@ -483,7 +487,8 @@ ArchiveListing Job::read_archive(std::optional<PasswordSource>& passwords) {
 
 Job::Result Job::pipeline() {
   if (config_.protocol != STREAMEXTRACT_PROTOCOL_FTP && config_.protocol != STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT &&
-      config_.protocol != STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT) {
+      config_.protocol != STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT &&
+      config_.protocol != STREAMEXTRACT_PROTOCOL_SFTP) {
     throw std::runtime_error("invalid transfer protocol");
   }
   if (config_.host.empty() || config_.host.find_first_of("/ \t") != std::string::npos) {
@@ -505,23 +510,37 @@ Job::Result Job::pipeline() {
   FtpConfig ftp_config;
   ftp_config.host = config_.host;
   ftp_config.port = config_.port;
-  ftp_config.protocol = config_.protocol == STREAMEXTRACT_PROTOCOL_FTP ? FtpProtocol::Ftp : FtpProtocol::Ftps;
+  ftp_config.protocol = config_.protocol == STREAMEXTRACT_PROTOCOL_SFTP  ? FtpProtocol::Sftp
+                        : config_.protocol == STREAMEXTRACT_PROTOCOL_FTP ? FtpProtocol::Ftp
+                                                                         : FtpProtocol::Ftps;
   ftp_config.ftps_mode =
       config_.protocol == STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT ? FtpsMode::Implicit : FtpsMode::Explicit;
   ftp_config.ca_certificate = config_.ca_certificate;
   ftp_config.mode = config_.active_mode ? FtpMode::Active : FtpMode::Passive;
   ftp_config.user = config_.user;
+  if (is_ssh(ftp_config.protocol) && ftp_config.user.empty()) ftp_config.user = current_username();
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    login_user_ = ftp_config.user.empty() ? "anonymous" : ftp_config.user;
+  }
   ftp_config.password = config_.password;
+  ftp_config.password_supplied = config_.password_supplied;
+  ftp_config.private_key = config_.private_key;
+  ftp_config.private_key_passphrase = config_.private_key_passphrase;
+  ftp_config.known_hosts = config_.known_hosts;
   ftp_config.mention_flags = false;
   FtpClient ftp(ftp_config, log_, config_.verbose);
   // Lets a cancel request interrupt a server that is slow to answer.
   ftp.set_cancel_check([this] { return cancel_requested_.load(); });
 
-  log_.info("Connecting to {}:{} ({} mode)", config_.host, config_.port,
-            config_.active_mode ? "active" : "passive");
+  if (is_ssh(ftp_config.protocol))
+    log_.info("Connecting to {}:{} (SFTP)", config_.host, config_.port);
+  else
+    log_.info("Connecting to {}:{} ({} mode)", config_.host, config_.port,
+              config_.active_mode ? "active" : "passive");
   const std::string home = normalize_remote_path(ftp.connect(config_.retries));
   throw_if_cancelled();
-  log_.info("Logged in as {}", config_.user.empty() ? "anonymous" : config_.user);
+  log_.info("Logged in as {}", ftp_config.user.empty() ? "anonymous" : ftp_config.user);
   std::string target;
   if (config_.directory.empty()) {
     target = home;

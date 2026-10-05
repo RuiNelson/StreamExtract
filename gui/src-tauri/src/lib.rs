@@ -44,6 +44,7 @@ pub enum Protocol {
     Ftp,
     FtpsExplicit,
     FtpsImplicit,
+    Sftp,
 }
 
 impl Protocol {
@@ -52,11 +53,14 @@ impl Protocol {
             Self::Ftp => "ftp",
             Self::FtpsExplicit => "ftps_explicit",
             Self::FtpsImplicit => "ftps_implicit",
+            Self::Sftp => "sftp",
         }
     }
 
     fn default_port(self) -> u32 {
-        if self == Self::FtpsImplicit {
+        if self == Self::Sftp {
+            22
+        } else if self == Self::FtpsImplicit {
             990
         } else {
             21
@@ -76,6 +80,12 @@ pub struct TransferConfig {
     pub port: u32,
     #[serde(default)]
     pub protocol: Protocol,
+    #[serde(default)]
+    pub private_key: Option<String>,
+    #[serde(default)]
+    pub private_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub known_hosts: Option<String>,
     pub mode: Mode,
     pub user: String,
     pub password: String,
@@ -97,6 +107,12 @@ pub struct ServerSettings {
     pub port: u32,
     #[serde(default)]
     pub protocol: Protocol,
+    #[serde(default)]
+    pub private_key: Option<String>,
+    #[serde(default)]
+    pub private_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub known_hosts: Option<String>,
     pub mode: Mode,
     pub user: Option<String>,
     pub password: Option<String>,
@@ -479,6 +495,9 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 1,
             protocol: crate::Protocol::Ftp,
+            private_key: None,
+            private_key_passphrase: None,
+            known_hosts: None,
             mode: Mode::Passive,
             user: String::new(),
             password: String::new(),

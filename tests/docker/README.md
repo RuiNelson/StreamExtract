@@ -3,10 +3,10 @@
 Every runner in `tests/integration` uses this Docker image. The Python helpers
 build it automatically, allocate ports, wait for readiness and remove their
 containers when the runner exits. Docker must be running. The base image is
-pinned by digest, and vsftpd/OpenSSL by Alpine package version.
+pinned by digest, and vsftpd/OpenSSL/OpenSSH by Alpine package version.
 
 vsftpd listens on port 21 for FTP or explicit FTPS and on 990 for implicit FTPS.
-It uses the test-only `tester` / `secret` login and `/ftp/tester` home directory.
+OpenSSH provides SFTP on port 22. Both use the test-only `tester` / `secret` login and `/ftp/tester` home directory.
 The fault suites use remotely configured FTP/FTPS sessions in the same image to
 exercise interrupted uploads, refusals, retries, corruption and cancellation.
 They inspect server state through an HTTP control API, rather than running a
@@ -23,7 +23,7 @@ Run a standalone server (ports and passive range must match on both sides):
 ```bash
 docker run --rm --name streamextract-test-server \
   -e MODE=filesystem -e FTP_UID=1000 -e CONTROL_START=21000 -e PASSIVE_START=30000 \
-  -p 127.0.0.1:2121:21 -p 127.0.0.1:2990:990 \
+  -p 127.0.0.1:2121:21 -p 127.0.0.1:2990:990 -p 127.0.0.1:2222:22 \
   -p 127.0.0.1:30000-30009:30000-30009 \
   streamextract-integration
 ```
@@ -36,6 +36,7 @@ Run the suites without RAR or Docker configuration arguments:
 
 ```bash
 python3 tests/integration/ftps.py --sext build/sext --lib build/libstreamextractcore.dylib
+python3 tests/integration/sftp.py --sext build/sext --lib build/libstreamextractcore.dylib
 python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
 ```
 
@@ -48,6 +49,10 @@ python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps --ftps-mode implicit
 ```
 
-`--lib` exercises the GUI C API through FTP. Active data connections are tested
+`--lib` exercises the GUI C API through the selected protocol. Active data connections are tested
 on Linux, where the container address is routable; macOS/Windows skip them.
-All passive-mode FTP/FTPS cases run on every host platform.
+All passive-mode FTP/FTPS and SFTP cases run on every host platform.
+The SFTP suite needs `ssh-keygen` for temporary key fixtures and tests password,
+RSA/ECDSA/Ed25519 private keys, encrypted keys, automatic key discovery, strict
+known-hosts checks (including hashed entries), resume, skip and replacement.
+Keys are generated in temporary test directories; local SSH files are untouched.

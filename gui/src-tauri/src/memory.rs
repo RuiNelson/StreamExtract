@@ -58,6 +58,9 @@ struct Parsed {
     port: Option<String>,
     mode: Option<String>,
     protocol: Option<String>,
+    private_key: Option<String>,
+    private_key_passphrase: Option<String>,
+    known_hosts: Option<String>,
     user: Option<String>,
     password: Option<String>,
     directory: Option<String>,
@@ -74,6 +77,9 @@ fn parse(text: &str) -> Parsed {
         port: server("port"),
         mode: server("mode"),
         protocol: server("protocol"),
+        private_key: server("private_key"),
+        private_key_passphrase: server("private_key_passphrase"),
+        known_hosts: server("known_hosts"),
         user: server("user"),
         password: server("password"),
         directory: server("directory"),
@@ -123,6 +129,7 @@ pub fn recall(path: &Path) -> Result<Option<ServerSettings>, String> {
     {
         Some("ftps_explicit") => Protocol::FtpsExplicit,
         Some("ftps_implicit") => Protocol::FtpsImplicit,
+        Some("sftp") => Protocol::Sftp,
         _ => Protocol::Ftp,
     };
     Ok(Some(ServerSettings {
@@ -133,6 +140,9 @@ pub fn recall(path: &Path) -> Result<Option<ServerSettings>, String> {
             .filter(|port| (1..=65535).contains(port))
             .unwrap_or(protocol.default_port()),
         protocol,
+        private_key: parsed.private_key,
+        private_key_passphrase: parsed.private_key_passphrase,
+        known_hosts: parsed.known_hosts,
         mode: match parsed
             .mode
             .as_deref()
@@ -168,7 +178,14 @@ pub fn save(
         .and_then(|parsed| parsed.store_credentials)
         .and_then(|value| parse_bool(&value));
     let user = server.user.as_deref().unwrap_or("");
-    let anonymous = user.is_empty();
+    let anonymous = user.is_empty()
+        && (server.protocol != Protocol::Sftp
+            || (server.password.as_deref().unwrap_or("").is_empty()
+                && server
+                    .private_key_passphrase
+                    .as_deref()
+                    .unwrap_or("")
+                    .is_empty()));
 
     let answer = if anonymous {
         stored_answer
@@ -202,6 +219,17 @@ pub fn save(
             "password",
             server.password.as_deref().unwrap_or(""),
         )?;
+    }
+    if let Some(key) = &server.private_key {
+        push_value(&mut text, "private_key", key)?;
+    }
+    if let Some(hosts) = &server.known_hosts {
+        push_value(&mut text, "known_hosts", hosts)?;
+    }
+    if store_login {
+        if let Some(passphrase) = &server.private_key_passphrase {
+            push_value(&mut text, "private_key_passphrase", passphrase)?;
+        }
     }
     push_value(&mut text, "directory", &server.directory)?;
     text.push_str(&format!("mkdir={}\n", server.mkdir));
@@ -276,12 +304,40 @@ mod tests {
             host: "ftp.example.com".to_string(),
             port: 2121,
             protocol: crate::Protocol::Ftp,
+            private_key: None,
+            private_key_passphrase: None,
+            known_hosts: None,
             mode: Mode::Active,
             user: user.map(str::to_string),
             password: password.map(str::to_string),
             directory: "/up loads/dir;#=x".to_string(),
             mkdir: true,
         }
+    }
+
+    #[test]
+    fn ssh_paths_and_secret_storage_follow_credentials_consent() {
+        let home = TempHome::new();
+        let path = home.memory();
+        let mut settings = server(Some(""), Some("ssh password"));
+        settings.protocol = Protocol::Sftp;
+        settings.private_key = Some("/keys/custom".into());
+        settings.private_key_passphrase = Some("key passphrase".into());
+        settings.known_hosts = Some("".into());
+        assert_eq!(save(&path, &settings, None).unwrap_err(), CONSENT_REQUIRED);
+        save(&path, &settings, Some(false)).unwrap();
+        let recalled = recall(&path).unwrap().unwrap();
+        assert_eq!(recalled.private_key, settings.private_key);
+        assert_eq!(recalled.known_hosts, Some("".into()));
+        assert_eq!(recalled.private_key_passphrase, None);
+        assert_eq!(recalled.password, None);
+        save(&path, &settings, Some(true)).unwrap();
+        let recalled = recall(&path).unwrap().unwrap();
+        assert_eq!(recalled.password, settings.password);
+        assert_eq!(
+            recalled.private_key_passphrase,
+            settings.private_key_passphrase
+        );
     }
 
     #[test]
@@ -292,6 +348,7 @@ mod tests {
             Protocol::Ftp,
             Protocol::FtpsExplicit,
             Protocol::FtpsImplicit,
+            Protocol::Sftp,
         ] {
             let mut settings = server(None, None);
             settings.protocol = protocol;
