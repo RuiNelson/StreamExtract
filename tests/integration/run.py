@@ -2,8 +2,7 @@
 """End-to-end tests for streamextract.
 
 Creates archives with RARLAB's `rar`, Python's zipfile and tarfile, 7-Zip
-(`7zz`) and Info-ZIP's `zip`, uploads them with streamextract to vsftpd running in Docker (image
-delfer/alpine-ftp-server) and checks what arrives.
+(`7zz`) and Info-ZIP's `zip`, uploads them with streamextract to the shared FTP/FTPS server built from tests/docker/Dockerfile and checks what arrives.
 
     python3 tests/integration/run.py --sext build/sext --rar /path/to/rar [--7z PATH] [--big] [--lib PATH]
 
@@ -34,14 +33,10 @@ import time
 import traceback
 import unicodedata
 import tarfile
-import uuid
 import zipfile
 from pathlib import Path
 
-IMAGE = "delfer/alpine-ftp-server"
-USER = "tester"
-PASSWORD = "secret"
-HOME = f"/ftp/{USER}"  # Login directory on the server (not chrooted).
+from docker_server import CA_CERTIFICATE, HOME, PASSWORD, USER, Server
 BASE_TIME = 1_700_000_000
 ARCHIVE_PASSWORD = "s3cr3t pässwörd"
 ZIP_AES_PASSWORD = "s3cr3t p4ssw0rd"  # 7-Zip refuses non-ASCII passwords for ZIP.
@@ -108,88 +103,6 @@ def compare_mtimes(expected_root, actual_root, output):
             dst = Path(actual_root) / src.relative_to(expected_root)
             delta = abs(src.stat().st_mtime - dst.stat().st_mtime)
             check(delta < 2, f"modification time of {dst} differs by {delta:.0f} s", output)
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def free_port_range(count):
-    for _ in range(200):
-        base = random.randint(30000, 60000 - count)
-        sockets = []
-        try:
-            for port in range(base, base + count):
-                s = socket.socket()
-                sockets.append(s)
-                s.bind(("0.0.0.0", port))
-            return base
-        except OSError:
-            continue
-        finally:
-            for s in sockets:
-                s.close()
-    raise RuntimeError("no free port range")
-
-
-# --------------------------------------------------------------------------
-# FTP server
-
-
-class Server:
-    """vsftpd (delfer/alpine-ftp-server) with user tester/secret, whose home
-    directory is `data_dir` on this machine."""
-
-    def __init__(self, data_dir):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        user = f"{USER}|{PASSWORD}|{HOME}"
-        if os.getuid() != 0:
-            user += f"|{os.getuid()}"  # Uploaded files belong to us: readable and deletable here.
-        for attempt in range(3):  # Retry if Docker finds one of the ports taken.
-            pasv = free_port_range(10)
-            control = free_port()
-            self.name = f"streamextract-it-{uuid.uuid4().hex[:8]}"
-            proc = subprocess.run(["docker", "run", "-d", "--rm", "--name", self.name,
-                                   "-e", f"USERS={user}", "-e", f"MIN_PORT={pasv}", "-e", f"MAX_PORT={pasv + 9}",
-                                   "-v", f"{self.data_dir}:{HOME}",
-                                   "-p", f"{control}:21", "-p", f"{pasv}-{pasv + 9}:{pasv}-{pasv + 9}", IMAGE],
-                                  capture_output=True, text=True)
-            if proc.returncode == 0:
-                break
-            subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
-            if "port" not in proc.stderr or attempt == 2:
-                raise RuntimeError(f"cannot start the FTP server container:\n{proc.stderr.strip()}")
-        # On Linux the container address is routable, so active mode works
-        # too; Docker Desktop (macOS, Windows) only offers published ports.
-        self.routable = sys.platform.startswith("linux")
-        if self.routable:
-            self.host = subprocess.run(
-                ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", self.name],
-                check=True, capture_output=True, text=True).stdout.strip()
-            self.port = 21
-        else:
-            self.host = "127.0.0.1"
-            self.port = control
-        self.wait_ready()
-
-    def wait_ready(self, timeout=60):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                with socket.create_connection((self.host, self.port), timeout=2) as s:
-                    if s.recv(64).startswith(b"220"):
-                        return
-            except OSError:
-                pass
-            time.sleep(0.3)
-        logs = subprocess.run(["docker", "logs", self.name], capture_output=True, text=True)
-        raise RuntimeError(f"FTP server not ready:\n{logs.stdout}{logs.stderr}")
-
-    def close(self):
-        subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
 
 
 # --------------------------------------------------------------------------
@@ -763,6 +676,8 @@ class Env:
         self.lz4 = shutil.which("lz4")
         self.lib = Library(Path(args.lib).resolve()) if args.lib else None  # Fails fast on a bad library.
         self.work = work
+        self.protocol = args.protocol
+        self.ftps_mode = args.ftps_mode
         self.server = Server(work / "ftp")  # First: fails fast without Docker.
         try:
             self.fixtures = build_fixtures(work, args.rar, args.big, self.sevenzip, self.infozip, self.lz4)
@@ -786,9 +701,20 @@ class Env:
         """Local view of a path in the FTP user's home directory."""
         return self.server.data_dir.joinpath(*parts)
 
+    @property
+    def cli_port(self):
+        return self.server.implicit_port if self.protocol == "ftps" and self.ftps_mode == "implicit" else self.server.port
+
+    @property
+    def target_scheme(self):
+        return "ftps" if self.protocol == "ftps" and self.ftps_mode == "implicit" else "ftp"
+
     def command(self, archive, *args, login=True, host=None, no_tui=True):
+        self.server.sync()
         cmd = [self.sext, "--file", self.archive(archive), "--host", host or self.server.host,
-               "--port", str(self.server.port)]
+               "--port", str(self.cli_port)]
+        if self.protocol == "ftps":
+            cmd += ["--protocol", "ftps", "--ftps-mode", self.ftps_mode, "--cacert", str(CA_CERTIFICATE)]
         if login:
             cmd += ["--user", USER, "--password", PASSWORD]
         if no_tui:
@@ -804,6 +730,7 @@ class Env:
 
     def lib_config(self, archive, **overrides):
         """Job config for the C API: this server, the tester login and `overrides`."""
+        self.server.sync()
         config = {"archive": self.archive(archive), "host": self.server.host, "port": self.server.port,
                   "user": USER, "password": PASSWORD}
         config.update(overrides)
@@ -837,7 +764,7 @@ def test_basic_upload(env):
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
     compare_mtimes(env.fixtures["main"], env.remote("basic", "tree"), out)
     check(f"Logged in as {USER}" in out, "no login message", out)
-    check(f"Destination: ftp://{env.server.host}:{env.server.port}{HOME}/basic" in out,
+    check(f"Destination: {env.target_scheme}://{env.server.host}:{env.cli_port}{HOME}/basic" in out,
           "relative --directory not resolved against the login directory", out)
 
 
@@ -1066,8 +993,7 @@ def test_anonymous_login_is_attempted(env):
 
 
 def test_wrong_ftp_password(env):
-    cmd = [env.sext, "--file", env.archive("tiny.rar"), "--host", env.server.host, "--port",
-           str(env.server.port), "--user", USER, "--password", "not-the-password", "--no-tui"]
+    cmd = env.command("tiny.rar", "--user", USER, "--password", "not-the-password", login=False)
     proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
     out = proc.stdout + proc.stderr
     check(proc.returncode == 1 and "cannot log in" in out, "wrong FTP password not reported", out)
@@ -1207,7 +1133,7 @@ def test_ipv6(env):
         raise Skipped(f"no IPv6 access to the published port: {error}") from error
     out = env.run("tiny.rar", "--directory", "ipv6", "--mkdir", host="::1")
     check(env.remote("ipv6", "tree", "tiny.txt").is_file(), "IPv6 upload failed", out)
-    check("ftp://[::1]:" in out, "IPv6 URL not bracketed", out)
+    check(f"{env.target_scheme}://[::1]:" in out, "IPv6 URL not bracketed", out)
 
 
 def test_zip_basic(env):
@@ -1882,6 +1808,8 @@ TESTS = [
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sext", required=True, help="path to the sext binary")
+    parser.add_argument("--protocol", choices=("ftp", "ftps"), default="ftp", help="CLI transfer protocol")
+    parser.add_argument("--ftps-mode", choices=("explicit", "implicit"), default="explicit")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
     parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")
     parser.add_argument("--big", action="store_true", help="also test a 4.5 GiB file")

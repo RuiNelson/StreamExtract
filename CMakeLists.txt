@@ -20,6 +20,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(STREAMEXTRACT_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
+option(STREAMEXTRACT_BUILD_INTEGRATION_TESTS "Register Docker integration tests with CTest" OFF)
 option(STREAMEXTRACT_BUILD_LIBRARY "Build the streamextractcore shared library used by StreamExtract" OFF)
 
 if(STREAMEXTRACT_BUILD_LIBRARY)

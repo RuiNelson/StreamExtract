@@ -34,12 +34,16 @@ target_compile_definitions(streamextract_tests PRIVATE STREAMEXTRACT_TEST_FIXTUR
 
 add_test(NAME unit COMMAND streamextract_tests)
 
-# CLI FTP/FTPS tests run without the GUI library, Docker or external archivers.
-find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
-if(Python3_Interpreter_FOUND)
+# Docker integration tests are opt-in; normal unit/C API checks need no daemon.
+if(STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+  find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
+else()
+  find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+endif()
+if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
   add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext>)
-  set_tests_properties(ftps PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  set_tests_properties(ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
 if(TARGET streamextractcore)
@@ -56,12 +60,11 @@ if(TARGET streamextractcore)
   endif()
   add_test(NAME capi COMMAND streamextractcore_tests)
 
-  # FTP resume, failures and cancellation against a local server, using only Python's stdlib.
-  find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
-  if(Python3_Interpreter_FOUND)
+  # FTP resume, failures and cancellation against the same Docker image.
+  if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
     add_test(NAME ftp_faults COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftp_faults.py"
       --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore>)
-    set_tests_properties(ftp_faults PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    set_tests_properties(ftp_faults PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 endif()

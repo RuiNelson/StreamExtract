@@ -32,6 +32,8 @@ jobs:
             exe: sext
             configure: >-
               -G Ninja
+              -DSTREAMEXTRACT_BUILD_LIBRARY=ON
+              -DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: linux-arm64
             # Native arm64 runner, same glibc baseline as linux-x64.
@@ -39,6 +41,8 @@ jobs:
             exe: sext
             configure: >-
               -G Ninja
+              -DSTREAMEXTRACT_BUILD_LIBRARY=ON
+              -DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: macos-universal
             os: macos-latest

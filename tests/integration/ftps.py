@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""CLI FTPS tests using a local TLS server and Python's standard library."""
+"""CLI FTP/FTPS tests against the shared Docker server."""
 
 import argparse
 import io
-import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -11,7 +10,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from ftp_faults import FtpServer
+from docker_server import FtpServer, HOME, PASSWORD, USER, Server
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "ftps"
@@ -21,8 +20,6 @@ class FtpsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.context.load_cert_chain(FIXTURES / "server-cert.pem", FIXTURES / "server-key.pem")
 
     def archive(self, entries, streamed=False):
         target = Path(self.temp.name) / ("source.tar.gz" if streamed else "source.zip")
@@ -38,13 +35,45 @@ class FtpsTests(unittest.TestCase):
                     archive.writestr(name, payload)
         return target
 
-    def cli(self, archive, server, *options, trusted=True, host="127.0.0.1"):
-        command = [ARGS.sext, "--file", str(archive), "--host", host,
+    def cli(self, archive, server, *options, trusted=True, host=None):
+        command = [ARGS.sext, "--file", str(archive), "--host", host or server.host,
                    "--port", str(server.server_address[1]), "--directory", "/upload",
                    "--protocol", "ftps", "--no-tui", "--buffer", "1", "--verbose"]
         if trusted:
             command += ["--cacert", str(FIXTURES / "server-cert.pem")]
         return subprocess.run(command + list(options), capture_output=True, text=True, timeout=15)
+
+    def test_real_server_ftp_explicit_and_implicit_ftps(self):
+        root = Path(self.temp.name) / "remote"
+        payload = bytes(range(251)) * 12000
+        entries = [("same.txt", b"same"), ("larger.txt", b"new"), ("nested/data.bin", payload),
+                   ("empty.txt", b"")]
+        with_server = Server(root)
+        self.addCleanup(with_server.close)
+        for protocol, mode in (("ftp", "explicit"), ("ftps", "explicit"), ("ftps", "implicit")):
+            for streamed in (False, True):
+                with self.subTest(protocol=protocol, mode=mode, streamed=streamed):
+                    directory = f"{protocol}-{mode}-{streamed}"
+                    destination = root / directory
+                    (destination / "nested").mkdir(parents=True)
+                    (destination / "same.txt").write_bytes(b"same")
+                    (destination / "larger.txt").write_bytes(b"larger old file")
+                    (destination / "nested" / "data.bin").write_bytes(payload[:19])
+                    with_server.sync()
+                    archive = self.archive(entries, streamed)
+                    port = with_server.implicit_port if mode == "implicit" else with_server.port
+                    command = [ARGS.sext, "--file", str(archive), "--host", with_server.host,
+                               "--port", str(port), "--user", USER, "--password", PASSWORD,
+                               "--directory", HOME + "/" + directory, "--no-tui", "--verbose"]
+                    if protocol == "ftps":
+                        command += ["--protocol", "ftps", "--ftps-mode", mode,
+                                    "--cacert", str(FIXTURES / "server-cert.pem")]
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("Resuming nested/data.bin at byte 19", result.stdout)
+                    self.assertIn("DEBUG > APPE data.bin", result.stdout)
+                    for name, expected in entries:
+                        self.assertEqual((destination / name).read_bytes(), expected)
 
     def test_explicit_and_implicit_encrypt_uploads_listings_and_retries(self):
         payload = bytes(range(251)) * 12000
@@ -56,7 +85,7 @@ class FtpsTests(unittest.TestCase):
                     archive = self.archive(entries, streamed)
                     files = {"/upload/same.txt": b"same", "/upload/larger.txt": b"old contents",
                              "/upload/nested/data.bin": payload[:19]}
-                    with FtpServer(tls_context=self.context, implicit_tls=implicit, files=files,
+                    with FtpServer(tls=True, implicit_tls=implicit, files=files,
                                    fail_uploads=1, fail_target="/upload/nested/data.bin") as server:
                         options = ["--ftps-mode", "implicit"] if implicit else []
                         result = self.cli(archive, server, *options)
@@ -84,10 +113,10 @@ class FtpsTests(unittest.TestCase):
         for implicit in (False, True):
             for trusted in (False, True):
                 with self.subTest(implicit=implicit, trusted=trusted), FtpServer(
-                        tls_context=self.context, implicit_tls=implicit) as server:
+                        tls=True, implicit_tls=implicit) as server:
                     options = ["--ftps-mode", "implicit"] if implicit else []
-                    # The fixture certificate only identifies 127.0.0.1.
-                    host = "localhost" if trusted else "127.0.0.1"
+                    # The Docker leaf has IP SANs, but does not identify localhost by DNS name.
+                    host = "localhost" if trusted else server.host
                     result = self.cli(archive, server, "--retries", "1", *options, trusted=trusted, host=host)
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertIn("cert", (result.stdout + result.stderr).lower())
@@ -97,7 +126,9 @@ class FtpsTests(unittest.TestCase):
         archive = self.archive([("hello.txt", b"hello")])
         for implicit in (False, True):
             with self.subTest(implicit=implicit), FtpServer(
-                    tls_context=self.context, implicit_tls=implicit) as server:
+                    tls=True, implicit_tls=implicit) as server:
+                if not server.routable:
+                    self.skipTest("Docker active data connections require a routable Linux container")
                 options = ["--ftps-mode", "implicit"] if implicit else []
                 result = self.cli(archive, server, "--mode", "active", *options)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -106,7 +137,7 @@ class FtpsTests(unittest.TestCase):
 
     def test_exhausted_ftps_retries_delete_partial_upload(self):
         archive = self.archive([("hello.txt", b"hello"), ("after.txt", b"after")])
-        with FtpServer(tls_context=self.context, fail_uploads=3, drop_after=1) as server:
+        with FtpServer(tls=True, fail_uploads=3, drop_after=1) as server:
             result = self.cli(archive, server)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertNotIn("/upload/hello.txt", server.files)
@@ -115,7 +146,7 @@ class FtpsTests(unittest.TestCase):
 
     def test_server_must_accept_encrypted_data(self):
         archive = self.archive([("hello.txt", b"hello")])
-        with FtpServer(tls_context=self.context, reject_private_data=True) as server:
+        with FtpServer(tls=True, reject_private_data=True) as server:
             result = self.cli(archive, server, "--retries", "1")
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn(("PROT", "P"), server.commands)

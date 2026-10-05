@@ -463,8 +463,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 End-to-end tests upload archives created with RARLAB's `rar`, Python's
-`zipfile` and `tarfile`, 7-Zip and Info-ZIP's `zip` to vsftpd running in Docker
-([delfer/alpine-ftp-server](https://hub.docker.com/r/delfer/alpine-ftp-server))
+`zipfile` and `tarfile`, 7-Zip and Info-ZIP's `zip` to the shared Docker server
+in [`tests/docker`](tests/docker/README.md)
 and compare what arrives, byte by byte. They need Docker, `rar` and Python 3.9+
 (standard library only). Archives that cannot be made are skipped: those that
 need 7-Zip (`7zz`, found in `PATH` or given with `--7z`), Info-ZIP's `zip`, the
@@ -473,6 +473,23 @@ need 7-Zip (`7zz`, found in `PATH` or given with `--7z`), Info-ZIP's `zip`, the
 ```bash
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --7z /path/to/7zz
 ```
+
+All integration runners automatically build the same pinned Docker image and
+remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
+implicit FTPS uploads, plus certificate checks and TLS failures. `ftp_faults.py`
+tests resume, retry and cancellation using controlled scenarios in that image:
+
+```bash
+python3 tests/integration/ftps.py --sext build/sext
+python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
+python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps
+python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps --ftps-mode implicit
+```
+
+To register the Docker suites with CTest, configure with
+`-DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON` (and
+`-DSTREAMEXTRACT_BUILD_LIBRARY=ON` for the fault suite). The normal unit and
+C API smoke tests do not require Docker. Linux CI enables the Docker suites.
 
 `--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
 container address is reachable directly; Docker Desktop only publishes ports.
