@@ -29,6 +29,22 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
     if (!nodes.has(id)) nodes.set(id, {
       value: "", textContent: "", title: "", style: {}, dataset: {}, children: [], firstElementChild: { style: {} },
       classList: { toggle() {} },
+      events: new Map(),
+      addEventListener(type, listener) {
+        if (!this.events.has(type)) this.events.set(type, new Set());
+        this.events.get(type).add(listener);
+      },
+      removeEventListener(type, listener) { this.events.get(type)?.delete(listener); },
+      dispatch(type, event = {}) { for (const listener of this.events.get(type) || []) listener(event); },
+      showModal() {
+        this.open = true;
+        queueMicrotask(() => {
+          this.onShow?.();
+          if (this.answer === "escape") this.dispatch("cancel");
+          else this.dispatch("submit", { submitter: { value: this.answer || "select" } });
+          this.open = false;
+        });
+      },
       setAttribute() {}, removeAttribute() {},
       append(...children) { this.children.push(...children); },
       replaceChildren(...children) { this.children = children; }, remove() {}, focus() {}, scrollIntoView() {},
@@ -58,7 +74,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, memorySave, memoryRecall, changeProtocol, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, memorySave, memoryRecall, memoryClear, chooseMemorySlot, runMemoryAction, updateMemoryButtons, changeProtocol, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -173,7 +189,7 @@ test("the sound preference loads and saves without changing units or buffer", as
   app.node("completion-sound").checked = true;
   await app.saveCompletionSound();
   assert.deepEqual({ ...calls[1].args.preferences }, {
-    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3, check_updates: null,
+    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true,
   });
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").disabled, false);
@@ -207,7 +223,7 @@ test("password visibility is shared, persists across preference changes, and kee
   assert.equal(calls[1].args.preferences.show_passwords, true);
   await app.savePasswordVisibility({ target: { checked: false } });
   assert.deepEqual({ ...calls[2].args.preferences }, {
-    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3, check_updates: null,
+    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true,
   });
   for (const id of fields) {
     assert.equal(app.node(id).type, "password");
@@ -661,7 +677,7 @@ test("the protocol and connection mode reach the transfer and server memory", as
   const app = frontend(async (command, args) => {
     calls.push({ command, args });
     if (command === "memory_recall") return saved;
-    if (command === "memory_status") return { saved: true, store_credentials: false };
+    if (command === "memory_status") return { saved: true, configs: [{ id: "ed8c5e75-f51f-48b2-a8e8-8e5de7b9a2e6", ...saved, store_credentials: false }] };
   });
   app.state.archives = ["one.zip", "two.zip"];
   app.node("port").value = "21";
@@ -714,8 +730,10 @@ test("SFTP selects port 22, hides FTP mode, and passes SSH settings", () => {
 });
 
 test("SFTP memory recalls private key and host verification settings", async () => {
-  const ui = frontend(async () => ({ protocol: "sftp", port: 22, host: "ssh.example", user: "",
-    private_key: "/keys/custom", private_key_passphrase: "secret", known_hosts: "" }));
+  const saved = { protocol: "sftp", port: 22, host: "ssh.example", user: "",
+    private_key: "/keys/custom", private_key_passphrase: "secret", known_hosts: "" };
+  const ui = frontend(async (command) => command === "memory_status"
+    ? { saved: true, configs: [{ id: "ed8c5e75-f51f-48b2-a8e8-8e5de7b9a2e6", ...saved }] } : saved);
   await ui.memoryRecall();
   assert.equal(ui.node("protocol").value, "sftp");
   assert.equal(ui.node("mode-field").hidden, true);
@@ -723,4 +741,116 @@ test("SFTP memory recalls private key and host verification settings", async () 
   assert.equal(ui.node("private-key-passphrase").value, "secret");
   assert.equal(ui.node("verify-host-key").checked, true);
   assert.equal(ui.buildConfig().known_hosts, "");
+});
+
+
+const memoryConfigs = [
+  { id: "ed8c5e75-f51f-48b2-a8e8-8e5de7b9a2e6", host: "ftp.example", port: 21,
+    protocol: "ftp", user: "alice", directory: "/uploads", store_credentials: true },
+  { id: "bd1072ad-b9fb-4d8e-a46b-a3e480f5c87b", host: "ssh.example", port: 22,
+    protocol: "sftp", user: null, directory: "/backup", store_credentials: false },
+];
+
+function memoryFrontend() {
+  const calls = [];
+  const ui = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "memory_status") return { saved: true, configs: memoryConfigs };
+    if (command === "memory_recall") return { ...memoryConfigs.find((config) => config.id === args.id), password: null };
+  });
+  ui.node("host").value = "new.example";
+  ui.node("port").value = "2121";
+  ui.node("protocol").value = "ftp";
+  const select = (id) => {
+    ui.node("memory-slot").value = id;
+    ui.node("memory-slot").dispatch("change");
+  };
+  return { ui, calls, select };
+}
+
+test("memory save lists configs and defaults to a new slot without names", async () => {
+  const { ui, calls } = memoryFrontend();
+  await ui.memorySave();
+  const options = ui.node("memory-slot").children;
+  assert.equal(options.length, 3);
+  assert.equal(options[0].textContent, "New slot");
+  assert.equal(options[1].textContent, "ftp.example:21 · /uploads");
+  const args = calls.find((call) => call.command === "memory_save").args;
+  assert.equal(args.id, null);
+  assert.equal(args.server.host, "new.example");
+  assert.equal(args.name, undefined);
+});
+
+test("memory overwrite uses the selected UUID and that slot's consent", async () => {
+  const { ui, calls, select } = memoryFrontend();
+  ui.node("user").value = "bob";
+  ui.node("password").value = "secret";
+  ui.node("dlg-memory-slots").onShow = () => select(memoryConfigs[1].id);
+  await ui.memorySave();
+  const args = calls.find((call) => call.command === "memory_save").args;
+  assert.equal(args.id, memoryConfigs[1].id);
+  assert.equal(args.store_credentials, null);
+  assert.equal(ui.node("memory-slot-action").textContent, "Overwrite");
+  assert.match(ui.node("memory-slot-details").textContent, /SFTP · ssh.example:22/);
+});
+
+test("new memory slot asks consent even when another slot stores credentials", async () => {
+  const { ui, calls } = memoryFrontend();
+  ui.node("user").value = "bob";
+  ui.node("dlg-memory").answer = "dont";
+  await ui.memorySave();
+  const args = calls.find((call) => call.command === "memory_save").args;
+  assert.equal(args.id, null);
+  assert.equal(args.store_credentials, false);
+});
+
+test("memory recall loads the chosen UUID and clears credentials absent from the slot", async () => {
+  const { ui, calls, select } = memoryFrontend();
+  ui.node("user").value = "old user";
+  ui.node("password").value = "old secret";
+  ui.node("dlg-memory-slots").onShow = () => select(memoryConfigs[1].id);
+  await ui.memoryRecall();
+  assert.equal(calls.find((call) => call.command === "memory_recall").args.id, memoryConfigs[1].id);
+  assert.equal(ui.node("host").value, "ssh.example");
+  assert.equal(ui.node("directory").value, "/backup");
+  assert.equal(ui.node("user").value, "");
+  assert.equal(ui.node("password").value, "");
+});
+
+test("memory clear deletes only the chosen configuration", async () => {
+  const { ui, calls, select } = memoryFrontend();
+  ui.node("dlg-memory-slots").onShow = () => select(memoryConfigs[1].id);
+  await ui.memoryClear();
+  assert.equal(ui.node("memory-slot").children.length, 2);
+  assert.equal(calls.find((call) => call.command === "memory_clear").args.id, memoryConfigs[1].id);
+});
+
+test("cancel or Escape in every memory picker leaves settings untouched", async () => {
+  for (const action of ["memorySave", "memoryRecall", "memoryClear"]) {
+    for (const answer of ["cancel", "escape"]) {
+      const { ui, calls } = memoryFrontend();
+      ui.node("dlg-memory-slots").answer = answer;
+      await ui[action]();
+      assert.deepEqual(calls.map((call) => call.command), ["memory_status"]);
+      assert.equal(ui.node("host").value, "new.example");
+    }
+  }
+});
+
+test("cancel in the credential dialog aborts saving a new slot", async () => {
+  const { ui, calls } = memoryFrontend();
+  ui.node("user").value = "bob";
+  ui.node("dlg-memory").answer = "escape";
+  await ui.memorySave();
+  assert.equal(calls.some((call) => call.command === "memory_save"), false);
+});
+
+test("empty memory disables recall and clear while allowing a new save", async () => {
+  const ui = frontend(async () => ({ saved: false, configs: [] }));
+  ui.updateMemoryButtons();
+  assert.equal(ui.node("btn-mem-save").disabled, false);
+  assert.equal(ui.node("btn-mem-recall").disabled, true);
+  assert.equal(ui.node("btn-mem-clear").disabled, true);
+  const result = await ui.chooseMemorySlot("recall", { configs: [] });
+  assert.equal(result, null);
 });

@@ -328,6 +328,22 @@
     </form>
   </dialog>
 
+  <dialog id="dlg-memory-slots" class="dialog" aria-labelledby="dlg-memory-slots-title">
+    <form method="dialog">
+      <h2 id="dlg-memory-slots-title">Save configuration</h2>
+      <p id="memory-slots-help"></p>
+      <div class="field">
+        <label for="memory-slot">Configuration</label>
+        <select id="memory-slot" size="5" aria-describedby="memory-slot-details"></select>
+      </div>
+      <p id="memory-slot-details" class="memory-slot-details"></p>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="btn" formnovalidate>Cancel</button>
+        <button id="memory-slot-action" type="submit" value="select" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-memory" class="dialog" aria-labelledby="dlg-memory-title">
     <form method="dialog">
       <h2 id="dlg-memory-title">Store the login unencrypted?</h2>

@@ -116,6 +116,12 @@
     // shared
     srStatus: $("sr-status"),
     toasts: $("toasts"),
+    dlgMemorySlots: $("dlg-memory-slots"),
+    dlgMemorySlotsTitle: $("dlg-memory-slots-title"),
+    memorySlotsHelp: $("memory-slots-help"),
+    memorySlot: $("memory-slot"),
+    memorySlotDetails: $("memory-slot-details"),
+    memorySlotAction: $("memory-slot-action"),
     dlgMemory: $("dlg-memory"),
     dlgMemoryPath: $("dlg-memory-path"),
     dlgPassword: $("dlg-password"),
@@ -131,7 +137,7 @@
     view: "setup",
     archives: [], // absolute paths in batch order
     info: null, // app_info()
-    memory: { saved: false, store_credentials: null },
+    memory: { saved: false, configs: [] },
     memoryBusy: false,
     units: "si",
     bufferMib: 64,
@@ -670,7 +676,7 @@
   }
 
   function anyDialogOpen() {
-    return els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open;
+    return els.dlgMemorySlots.open || els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open;
   }
 
   async function initDragDrop() {
@@ -716,9 +722,9 @@
   async function refreshMemory() {
     try {
       const status = await invoke("memory_status");
-      state.memory = status || { saved: false, store_credentials: null };
+      state.memory = status || { saved: false, configs: [] };
     } catch (e) {
-      state.memory = { saved: false, store_credentials: null };
+      state.memory = { saved: false, configs: [] };
       toastError("Could not read the saved server settings", e);
     }
     updateMemoryButtons();
@@ -736,6 +742,53 @@
     }
   }
 
+  async function chooseMemorySlot(action, status) {
+    const configs = status.configs || [];
+    const saving = action === "save";
+    if (!saving && !configs.length) {
+      toast("Nothing is saved in memory");
+      return null;
+    }
+    const titles = { save: "Save configuration", recall: "Recall configuration", clear: "Delete configuration" };
+    els.dlgMemorySlotsTitle.textContent = titles[action];
+    els.memorySlotsHelp.textContent = saving
+      ? "Choose a new slot or a saved configuration to overwrite."
+      : action === "recall" ? "Choose the configuration to load." : "Choose the configuration to delete.";
+    els.memorySlot.replaceChildren();
+    const addOption = (value, label) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      els.memorySlot.append(option);
+    };
+    if (saving) addOption("new", "New slot");
+    for (const config of configs) {
+      addOption(String(config.id), `${config.host}:${config.port}${config.directory ? ` · ${config.directory}` : ""}`);
+    }
+    els.memorySlot.value = saving ? "new" : String(configs[0].id);
+    const selected = () => configs.find((config) => String(config.id) === els.memorySlot.value);
+    const updateSelection = () => {
+      const config = selected();
+      els.memorySlotDetails.textContent = config
+        ? `${protocolLabel(config.protocol)} · ${config.host}:${config.port}${config.user ? ` · ${config.user}` : ""}${config.directory ? ` · ${config.directory}` : ""}`
+        : "Save the current server settings as a new configuration.";
+      els.memorySlotAction.textContent = saving ? (config ? "Overwrite" : "Save") : action === "recall" ? "Load" : "Delete";
+    };
+    updateSelection();
+    els.memorySlot.addEventListener("change", updateSelection);
+    try {
+      if (await askDialog(els.dlgMemorySlots) !== "select") return null;
+      const config = selected();
+      return { id: config ? config.id : null, config };
+    } finally {
+      els.memorySlot.removeEventListener("change", updateSelection);
+    }
+  }
+
+  function protocolLabel(protocol) {
+    return { ftp: "FTP", ftps_explicit: "FTPS (explicit)", ftps_implicit: "FTPS (implicit)", sftp: "SFTP" }[protocol] || "FTP";
+  }
+
   async function memorySave() {
     const port = validatePort();
     if (port === null) {
@@ -750,15 +803,19 @@
     }
     try {
       const status = await invoke("memory_status");
+      const slot = await chooseMemorySlot("save", status);
+      if (!slot) return;
       let storeCredentials = null;
+      const storedAnswer = slot.config ? slot.config.store_credentials : null;
       const hasCredentials = Boolean(server.user || (server.protocol === "sftp" && (server.password || server.private_key_passphrase)));
-      if (hasCredentials && status && status.store_credentials == null) {
+      if (hasCredentials && storedAnswer == null) {
         els.dlgMemoryPath.textContent = (state.info && state.info.memory_path) || "the memory file";
         const answer = await askDialog(els.dlgMemory);
         if (answer !== "store" && answer !== "dont") return; // Esc: abort the save
         storeCredentials = answer === "store";
       }
       await invoke("memory_save", {
+        id: slot.id,
         server: {
           host: server.host,
           protocol: server.protocol,
@@ -774,7 +831,7 @@
         },
         store_credentials: storeCredentials,
       });
-      const answered = storeCredentials !== null ? storeCredentials : status && status.store_credentials;
+      const answered = storeCredentials !== null ? storeCredentials : storedAnswer;
       const withoutLogin = hasCredentials && answered === false;
       toast(withoutLogin ? "Saved to memory, without the login" : "Saved to memory");
     } catch (e) {
@@ -784,11 +841,10 @@
 
   async function memoryRecall() {
     try {
-      const saved = await invoke("memory_recall");
-      if (!saved) {
-        toast("Nothing is saved in memory");
-        return;
-      }
+      const status = await invoke("memory_status");
+      const slot = await chooseMemorySlot("recall", status);
+      if (!slot) return;
+      const saved = await invoke("memory_recall", { id: slot.id });
       els.host.value = saved.host || "";
       els.protocol.value = ["ftps_explicit", "ftps_implicit", "sftp"].includes(saved.protocol) ? saved.protocol : "ftp";
       els.protocol.dataset.previous = els.protocol.value;
@@ -801,11 +857,8 @@
       setMode(saved.mode === "active" ? "active" : "passive");
       els.directory.value = saved.directory || "";
       els.mkdir.checked = Boolean(saved.mkdir);
-      if (saved.user != null) {
-        els.user.value = saved.user;
-        if (saved.user === "") els.password.value = "";
-      }
-      if (saved.password != null) els.password.value = saved.password;
+      els.user.value = saved.user || "";
+      els.password.value = saved.password || "";
       validatePort();
       updateSubmitState();
       toast("Recalled from memory");
@@ -816,8 +869,11 @@
 
   async function memoryClear() {
     try {
-      await invoke("memory_clear");
-      toast("Memory cleared");
+      const status = await invoke("memory_status");
+      const slot = await chooseMemorySlot("clear", status);
+      if (!slot) return;
+      await invoke("memory_clear", { id: slot.id });
+      toast("Configuration deleted");
     } catch (e) {
       toastError("Could not clear memory", e);
     }

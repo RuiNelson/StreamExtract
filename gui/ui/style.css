@@ -1125,6 +1125,20 @@ dialog.dialog::backdrop {
   margin-top: 18px;
 }
 
+#memory-slot {
+  width: 100%;
+  height: auto;
+}
+
+#memory-slot option {
+  padding: 7px 8px;
+}
+
+.memory-slot-details {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
 .path {
   font: 12px var(--mono);
   color: var(--text);

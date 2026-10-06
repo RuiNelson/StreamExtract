@@ -329,6 +329,20 @@ are used unmodified and their source is on <https://crates.io>. The crates that
 only the Windows and Linux builds pull in have not been reviewed yet.
 
 
+### YAML server memory (GUI only)
+
+Server memory uses `serde_yaml_ng` 0.10.0, Copyright (c) 2016-2024 David Tolnay and
+Copyright (c) 2024 Antoine Catton (<https://github.com/acatton/serde-yaml-ng>),
+under MIT. Its parser dependency `unsafe-libyaml` 0.2.11, by David Tolnay
+and contributors (<https://github.com/dtolnay/unsafe-libyaml>), is MIT licensed
+and is a Rust port of libyaml, Copyright (c) 2006-2016 Kirill Simonov, under MIT.
+Their exact versions are pinned in `gui/src-tauri/Cargo.lock`; license texts and
+copyright notices are included in the crate distributions on <https://crates.io>.
+`indexmap`, `itoa` and `ryu` are shared with existing dependencies.
+The existing `uuid` crate is also used directly for configuration IDs (MIT or
+Apache-2.0, by the UUID project contributors: <https://github.com/uuid-rs/uuid>),
+with random generation and serde support.
+
 ### Release checks and browser opening (GUI only)
 
 Release checks use `github_release_check` 0.2.1, Copyright (c) 2022 Matt Boulanger

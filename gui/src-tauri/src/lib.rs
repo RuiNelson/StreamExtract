@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+use uuid::Uuid;
 
 use batch::Batch;
 
@@ -26,15 +27,6 @@ use batch::Batch;
 pub enum Mode {
     Passive,
     Active,
-}
-
-impl Mode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Mode::Passive => "passive",
-            Mode::Active => "active",
-        }
-    }
 }
 
 /// Control connection protocol, including the two FTPS negotiation modes.
@@ -49,15 +41,6 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ftp => "ftp",
-            Self::FtpsExplicit => "ftps_explicit",
-            Self::FtpsImplicit => "ftps_implicit",
-            Self::Sftp => "sftp",
-        }
-    }
-
     fn default_port(self) -> u32 {
         if self == Self::Sftp {
             22
@@ -128,6 +111,9 @@ pub struct ServerSettings {
 struct AppState {
     job: Mutex<Option<Batch>>,
 }
+
+#[derive(Default)]
+struct MemoryState(Mutex<()>);
 
 /// At most one release lookup per launch, after consent. Separate from the transfer lock.
 #[derive(Default)]
@@ -412,28 +398,55 @@ async fn close_transfer(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Serialize read/modify/write operations so simultaneous commands cannot lose a slot.
+fn with_memory<T>(
+    app: &AppHandle,
+    state: &MemoryState,
+    operation: impl FnOnce(&std::path::Path) -> Result<T, String>,
+) -> Result<T, String> {
+    let _guard = state.0.lock().unwrap_or_else(PoisonError::into_inner);
+    let path = memory_file(app)?;
+    memory::migrate(&path)?;
+    operation(&path)
+}
+
 #[tauri::command(rename_all = "snake_case")]
-async fn memory_status(app: AppHandle) -> Result<memory::Status, String> {
-    memory::status(&memory_file(&app)?)
+async fn memory_status(
+    app: AppHandle,
+    state: State<'_, MemoryState>,
+) -> Result<memory::Status, String> {
+    with_memory(&app, &state, memory::status)
 }
 
 #[tauri::command(rename_all = "snake_case")]
 async fn memory_save(
     app: AppHandle,
+    state: State<'_, MemoryState>,
+    id: Option<Uuid>,
     server: ServerSettings,
     store_credentials: Option<bool>,
 ) -> Result<(), String> {
-    memory::save(&memory_file(&app)?, &server, store_credentials)
+    with_memory(&app, &state, |path| {
+        memory::save(path, id, &server, store_credentials)
+    })
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn memory_recall(app: AppHandle) -> Result<Option<ServerSettings>, String> {
-    memory::recall(&memory_file(&app)?)
+async fn memory_recall(
+    app: AppHandle,
+    state: State<'_, MemoryState>,
+    id: Uuid,
+) -> Result<ServerSettings, String> {
+    with_memory(&app, &state, |path| memory::recall(path, id))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn memory_clear(app: AppHandle) -> Result<(), String> {
-    memory::clear(&memory_file(&app)?)
+async fn memory_clear(
+    app: AppHandle,
+    state: State<'_, MemoryState>,
+    id: Uuid,
+) -> Result<(), String> {
+    with_memory(&app, &state, |path| memory::clear(path, id))
 }
 
 pub fn run() {
@@ -446,6 +459,12 @@ pub fn run() {
         )
         .manage(AppState::default())
         .manage(UpdateState::default())
+        .manage(MemoryState::default())
+        .setup(|app| {
+            // Report migration failures through memory_status without preventing app startup.
+            let _ = with_memory(app.handle(), &app.state::<MemoryState>(), |_| Ok(()));
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let _ = close_update_windows(window.app_handle());

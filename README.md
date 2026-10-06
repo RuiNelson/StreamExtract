@@ -121,12 +121,17 @@ The app offers:
   server memory (buffer default: 64 MiB; range: 1–4096 MiB).
   The buffer setting is always entered in MiB. Sizes and speeds are formatted
   by the engine from the original byte counts using the selected units.
-- **Memory Save**, **Memory Recall** and **Memory Clear**: keep the server
-  settings between runs in `~/.config/streamextract/memory.ini` (under the home
-  directory on every OS), a **plain text** file. The first time a login with a
-  username is saved, the app asks whether the username and password may be
-  stored unencrypted; if not, they are left out (Memory Clear also forgets the
-  answer). The archive password is never stored.
+- **Memory Save**, **Memory Recall** and **Memory Clear**: keep multiple server
+  configurations between runs in `~/.config/streamextract/memory.yaml` (under
+  the home directory on every OS), a **plain text** YAML array. Save lets you
+  choose a new slot or overwrite an existing configuration; Recall loads the
+  selected configuration, and Clear deletes only the selected one. Configurations
+  are identified in the picker by their connection settings and stored with stable
+  UUIDs. The first time a login is saved
+  in each slot, the app asks whether the username, password and private key
+  passphrase may be stored unencrypted; if not, they are left out. Deleting a
+  slot also forgets its answer. The archive password is never stored. On startup,
+  an existing `memory.ini` is migrated to YAML and deleted after a successful save.
 - **Progress**: a compact batch progress row with expandable archive statuses,
   the current step, the current file and the whole archive with
   their ETAs (for a compressed tar, by how much of the archive has been read),

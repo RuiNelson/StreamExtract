@@ -165,13 +165,13 @@ mod tests {
         assert!(!load(&path).unwrap().completion_sound);
         assert!(load(&path).unwrap().show_passwords);
         assert_eq!(load(&path).unwrap().check_updates, Some(false));
-        let memory = dir.join("memory.ini");
+        let memory = dir.join("memory.yaml");
         fs::write(&memory, "server settings").unwrap();
         save(&path, Preferences::default()).unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
         assert!(load(&path).unwrap().completion_sound);
         assert_eq!(fs::read_to_string(&memory).unwrap(), "server settings");
-        crate::memory::clear(&memory).unwrap();
+        fs::remove_file(&memory).unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
         fs::write(
             &path,
