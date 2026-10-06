@@ -319,6 +319,14 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
+      - name: Select the MSVC linker (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if (-not (Test-Path $linker)) { throw "MSVC linker not found: $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
+
       - name: Configure the library
         run: >
           cmake -S . -B build

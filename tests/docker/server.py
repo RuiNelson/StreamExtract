@@ -53,7 +53,9 @@ def start_vsftpd():
     os.chown("/ftp/tester", int(uid), int(uid))
     Path("/var/empty").mkdir(exist_ok=True)
     common = (
-        "listen=NO\nlisten_ipv6=YES\nbackground=NO\nanonymous_enable=NO\n"
+        # Linux tests address the container by its IPv4 Docker-network address.
+        # An IPv6-only listener is not reachable there on all Docker hosts.
+        "listen=YES\nlisten_ipv6=NO\nbackground=NO\nanonymous_enable=NO\n"
         "local_enable=YES\nwrite_enable=YES\nlocal_umask=022\ncheck_shell=NO\n"
         "chroot_local_user=NO\nsecure_chroot_dir=/var/empty\nmdtm_write=YES\n"
         "ssl_enable=YES\nforce_local_logins_ssl=NO\nforce_local_data_ssl=NO\n"
