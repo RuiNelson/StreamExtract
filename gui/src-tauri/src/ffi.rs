@@ -56,7 +56,7 @@ extern "C" {
     pub fn streamextract_free(string: *mut c_char);
 }
 
-/// `"StreamExtract 2.4.1 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
+/// `"StreamExtract 2.5.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
     unsafe { CStr::from_ptr(streamextract_version()) }
