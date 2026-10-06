@@ -194,7 +194,7 @@ async fn app_info(app: AppHandle) -> Result<Value, String> {
 
 #[tauri::command(rename_all = "snake_case")]
 async fn preferences_load(app: AppHandle) -> Result<preferences::Preferences, String> {
-    preferences::load(&memory_file(&app)?.with_file_name("preferences.ini"))
+    preferences::load(&memory_file(&app)?.with_file_name("preferences.yaml"))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -203,7 +203,7 @@ async fn preferences_save(
     preferences: preferences::Preferences,
 ) -> Result<(), String> {
     preferences::save(
-        &memory_file(&app)?.with_file_name("preferences.ini"),
+        &memory_file(&app)?.with_file_name("preferences.yaml"),
         preferences,
     )
 }
@@ -285,7 +285,7 @@ async fn show_update_available(
     app: AppHandle,
     state: State<'_, UpdateState>,
 ) -> Result<(), String> {
-    if preferences::load(&memory_file(&app)?.with_file_name("preferences.ini"))?.check_updates
+    if preferences::load(&memory_file(&app)?.with_file_name("preferences.yaml"))?.check_updates
         != Some(true)
         || state
             .version
@@ -331,7 +331,7 @@ async fn check_for_updates(
     app: AppHandle,
     state: State<'_, UpdateState>,
 ) -> Result<Option<String>, String> {
-    let path = memory_file(&app)?.with_file_name("preferences.ini");
+    let path = memory_file(&app)?.with_file_name("preferences.yaml");
     if preferences::load(&path)?.check_updates != Some(true)
         || state.checked.swap(true, Ordering::Relaxed)
     {
@@ -461,8 +461,11 @@ pub fn run() {
         .manage(UpdateState::default())
         .manage(MemoryState::default())
         .setup(|app| {
-            // Report migration failures through memory_status without preventing app startup.
+            // Retry migration failures through the corresponding commands without preventing startup.
             let _ = with_memory(app.handle(), &app.state::<MemoryState>(), |_| Ok(()));
+            if let Ok(path) = memory_file(app.handle()) {
+                let _ = preferences::migrate(&path.with_file_name("preferences.yaml"));
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -329,9 +329,9 @@ are used unmodified and their source is on <https://crates.io>. The crates that
 only the Windows and Linux builds pull in have not been reviewed yet.
 
 
-### YAML server memory (GUI only)
+### YAML settings (GUI only)
 
-Server memory uses `serde_yaml_ng` 0.10.0, Copyright (c) 2016-2024 David Tolnay and
+Server memory and preferences use `serde_yaml_ng` 0.10.0, Copyright (c) 2016-2024 David Tolnay and
 Copyright (c) 2024 Antoine Catton (<https://github.com/acatton/serde-yaml-ng>),
 under MIT. Its parser dependency `unsafe-libyaml` 0.2.11, by David Tolnay
 and contributors (<https://github.com/dtolnay/unsafe-libyaml>), is MIT licensed

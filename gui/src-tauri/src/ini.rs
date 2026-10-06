@@ -1,4 +1,4 @@
-//! Small INI reader for preferences and legacy server-memory migration.
+//! INI reader for legacy preferences and server-memory migration.
 //! Section/key names are case-insensitive. Values remain literal after the first `=`:
 //! no trimming, quoting, escaping or inline comments (passwords may contain these characters).
 //! Duplicate keys use the last value; malformed lines are ignored.

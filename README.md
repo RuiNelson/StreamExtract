@@ -107,7 +107,7 @@ The app offers:
   When the archive is encrypted and no password was typed in, the app asks for
   it, and asks again if it was wrong. **Show passwords** toggles visibility for all
   password fields, including that prompt, and is saved automatically in
-  `~/.config/streamextract/preferences.ini` (off by default).
+  `~/.config/streamextract/preferences.yaml` (off by default).
 - **Server**: host, port, passive or active mode, username and password
   (FTP/FTPS: anonymous; SFTP: local username if omitted), destination directory and *Create directory
   if missing*. Choose **FTP** (default), **FTPS (explicit)**, **FTPS (implicit)** or **SFTP**
@@ -117,8 +117,10 @@ The app offers:
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
   to sizes, speeds, log messages and the final summary. The units, buffer size and upload attempts are saved
-  automatically in `~/.config/streamextract/preferences.ini`, separately from
-  server memory (buffer default: 64 MiB; range: 1–4096 MiB).
+  automatically in `~/.config/streamextract/preferences.yaml`, separately from
+  server memory (buffer default: 64 MiB; range: 1–4096 MiB). On startup,
+  existing `preferences.ini` settings are migrated to YAML and the old file is
+  deleted after a successful save.
   The buffer setting is always entered in MiB. Sizes and speeds are formatted
   by the engine from the original byte counts using the selected units.
 - **Memory Save**, **Memory Recall** and **Memory Clear**: keep multiple server
