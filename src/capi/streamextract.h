@@ -30,11 +30,11 @@ typedef struct streamextract_job streamextract_job;
 typedef struct streamextract_job_config {
   const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT volume image. */
   const char* archive_password; /* NULL: asked through the job when needed. */
-  const char* host;             /* Host name or address, without ftp:// or a path. */
+  const char* host;             /* Host name or address, without a URL scheme or a path. */
   int port;                     /* 1-65535. */
   int active_mode;              /* 0: passive, 1: active. */
-  const char* user;             /* NULL or "": anonymous login. */
-  const char* password;         /* NULL: empty. */
+  const char* user;             /* NULL or "": anonymous for FTP/FTPS; local username for SFTP. */
+  const char* password;         /* NULL: empty for FTP/FTPS; no supplied password for SFTP. */
   const char* directory;        /* NULL or "": the login directory. */
   int mkdir;                    /* Create the destination if missing (one MKD). */
   int verbose;                  /* Log every FTP command and reply. */
@@ -54,15 +54,51 @@ STREAMEXTRACT_API streamextract_job* streamextract_job_start(const streamextract
  * summaries and JSON text fields. `si_units`: 0 = binary (1024, KiB/MiB/...),
  * nonzero = SI (1000, kB/MB/...). Numeric byte counts are always unchanged.
  * The original start function uses binary units; its config layout is unchanged. */
-STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_units(const streamextract_job_config* config, int si_units);
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_units(const streamextract_job_config* config,
+                                                                        int si_units);
 
 /* Like streamextract_job_start_with_units, with a configurable total attempt count
  * for connection/login and each file upload (including the first).
  * `retries`: 0 = default (3), 1 = no
  * retries. The older start functions keep the default and the config layout
  * is unchanged. */
-STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config, int si_units,
-                                                  unsigned retries);
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_options(const streamextract_job_config* config,
+                                                                          int si_units, unsigned retries);
+
+/* Transfer protocol. The existing start functions continue to use plain FTP. */
+typedef enum streamextract_protocol {
+  STREAMEXTRACT_PROTOCOL_FTP = 0,
+  STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT = 1,
+  STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT = 2,
+  STREAMEXTRACT_PROTOCOL_SFTP = 3
+} streamextract_protocol;
+
+/* Like streamextract_job_start_with_options, with a protocol and optional PEM CA
+ * certificate path (NULL: system trust). FTPS requires TLS on control and data
+ * connections and verifies the certificate and host. `config->port` is used as
+ * supplied (usually 21 for FTP/explicit FTPS, 990 for implicit FTPS, 22 for SFTP).
+ * Strings are copied; the config layout and older entry points are unchanged.
+ * An invalid protocol ends the job as failed. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_protocol(const streamextract_job_config* config,
+                                                                           int si_units, unsigned retries,
+                                                                           int protocol,
+                                                                           const char* ca_certificate);
+
+/* SSH settings for SFTP. NULL private_key: use ~/.ssh keys when no password is
+ * supplied. NULL known_hosts: accept any host key; "": ~/.ssh/known_hosts.
+ * NULL config->password means no password was supplied (an empty string is an
+ * explicitly supplied password). NULL/empty user: current local username.
+ * Only password and private key authentication are allowed; no login prompts.
+ * Strings are copied. The original config layout is unchanged. */
+typedef struct streamextract_ssh_options {
+  const char* private_key;
+  const char* private_key_passphrase;
+  const char* known_hosts;
+} streamextract_ssh_options;
+
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_connection(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh);
 
 /* Current state as a JSON object, including the log lines numbered
  * `log_cursor` and later. Free the result with streamextract_free(). Returns NULL

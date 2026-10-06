@@ -32,6 +32,7 @@ jobs:
             exe: sext
             configure: >-
               -G Ninja
+              -DSTREAMEXTRACT_BUILD_LIBRARY=ON
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: linux-arm64
             # Native arm64 runner, same glibc baseline as linux-x64.
@@ -39,6 +40,7 @@ jobs:
             exe: sext
             configure: >-
               -G Ninja
+              -DSTREAMEXTRACT_BUILD_LIBRARY=ON
               -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           - name: macos-universal
             os: macos-latest
@@ -54,6 +56,7 @@ jobs:
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
               -DCURL_STATIC_CRT=ON
+              -DPERL_EXECUTABLE=C:/Strawberry/perl/bin/perl.exe
     defaults:
       run:
         shell: bash
@@ -103,8 +106,7 @@ jobs:
             7z x -bso0 -bsp0 -olzmasdk "${archive}"
           fi
 
-      # libcurl is always built from source and linked statically (FTP only, no
-      # TLS), so the binary depends on nothing that Windows does not ship.
+      # libcurl is built statically with FTP/FTPS/SFTP and bundled OpenSSL/libssh2.
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs
@@ -132,13 +134,15 @@ jobs:
           path: |
             build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
             build/_ext/*/src/*.tar.*
-          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/SSH.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
 
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DSTREAMEXTRACT_BUNDLED_CURL=ON
           ${{ matrix.configure }}
 
       - name: Build
@@ -201,6 +205,7 @@ jobs:
             configure: >-
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
               -DCURL_STATIC_CRT=ON
+              -DPERL_EXECUTABLE=C:/Strawberry/perl/bin/perl.exe
             rustflags: -C target-feature=+crt-static
             tauri: --no-bundle
     defaults:
@@ -307,13 +312,23 @@ jobs:
           path: |
             build/_deps/*-subbuild/*-populate-prefix/src/*.tar.*
             build/_ext/*/src/*.tar.*
-          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+          key: cmake-source-v1-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/SSH.cmake', 'cmake/LibArchive.cmake', 'tests/CMakeLists.txt') }}
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Select the MSVC linker (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if (-not (Test-Path $linker)) { throw "MSVC linker not found: $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
 
       - name: Configure the library
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
-          -DSTREAMEXTRACT_BUNDLED_CURL=ON
           -DSTREAMEXTRACT_BUILD_LIBRARY=ON
           ${{ matrix.configure }}
 

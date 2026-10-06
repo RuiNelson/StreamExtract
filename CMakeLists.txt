@@ -19,8 +19,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(STREAMEXTRACT_BUNDLED_CURL "Build libcurl from source instead of using the system one" OFF)
 option(STREAMEXTRACT_BUILD_TESTS "Build the unit tests" ${PROJECT_IS_TOP_LEVEL})
+option(STREAMEXTRACT_BUILD_INTEGRATION_TESTS "Register Docker integration tests with CTest" OFF)
 option(STREAMEXTRACT_BUILD_LIBRARY "Build the streamextractcore shared library used by StreamExtract" OFF)
 
 if(STREAMEXTRACT_BUILD_LIBRARY)
@@ -54,13 +54,17 @@ add_library(streamextract_core STATIC
   src/transfer.cpp
   src/util/json.cpp
   src/util/remote_path.cpp
+  src/util/ssh_settings.cpp
   src/util/terminal.cpp
   src/util/text.cpp)
 target_include_directories(streamextract_core PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_compile_definitions(streamextract_core PRIVATE STREAMEXTRACT_VERSION="${PROJECT_VERSION}")
 target_link_libraries(streamextract_core
   PUBLIC fmt::fmt
-  PRIVATE unrar::unrar streamextract::lzmasdk streamextract::fatfs streamextract::libarchive CURL::libcurl Threads::Threads)
+  PRIVATE unrar::unrar streamextract::lzmasdk streamextract::fatfs streamextract::libarchive CURL::libcurl_static Threads::Threads)
+if(WIN32)
+  target_link_libraries(streamextract_core PRIVATE crypt32 advapi32)
+endif()
 if(APPLE)
   target_link_libraries(streamextract_core PRIVATE "-framework CoreFoundation")  # Unicode normalization of names.
 endif()

@@ -6,7 +6,7 @@ use std::ptr::{self, NonNull};
 
 use serde_json::Value;
 
-use crate::{Mode, TransferConfig};
+use crate::{Mode, Protocol, TransferConfig};
 
 /// Opaque `streamextract_job`.
 #[repr(C)]
@@ -31,13 +31,23 @@ pub struct StreamExtractJobConfig {
     pub buffer_mib: c_uint,
 }
 
+#[repr(C)]
+pub struct StreamExtractSshOptions {
+    pub private_key: *const c_char,
+    pub private_key_passphrase: *const c_char,
+    pub known_hosts: *const c_char,
+}
+
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_options(
+    pub fn streamextract_job_start_with_connection(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
+        protocol: c_int,
+        ca_certificate: *const c_char,
+        ssh: *const StreamExtractSshOptions,
     ) -> *mut StreamExtractJob;
     pub fn streamextract_job_poll(job: *mut StreamExtractJob, log_cursor: u64) -> *mut c_char;
     pub fn streamextract_job_answer_password(job: *mut StreamExtractJob, password: *const c_char);
@@ -81,6 +91,32 @@ impl Job {
         let host = c_string("The host", &config.host)?;
         let user = c_string("The user name", &config.user)?;
         let password = c_string("The password", &config.password)?;
+        let private_key = config
+            .private_key
+            .as_deref()
+            .map(|value| c_string("The private key path", value))
+            .transpose()?;
+        let passphrase = config
+            .private_key_passphrase
+            .as_deref()
+            .map(|value| c_string("The private key passphrase", value))
+            .transpose()?;
+        let known_hosts = config
+            .known_hosts
+            .as_deref()
+            .map(|value| c_string("The known hosts path", value))
+            .transpose()?;
+        let ssh = StreamExtractSshOptions {
+            private_key: private_key
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+            private_key_passphrase: passphrase
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+            known_hosts: known_hosts
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+        };
         let directory = c_string("The directory", &config.directory)?;
         let port =
             c_int::try_from(config.port).map_err(|_| "The port is out of range".to_string())?;
@@ -101,7 +137,11 @@ impl Job {
             port,
             active_mode: c_int::from(config.mode == Mode::Active),
             user: user.as_ptr(),
-            password: password.as_ptr(),
+            password: if config.protocol == Protocol::Sftp && config.password.is_empty() {
+                ptr::null()
+            } else {
+                password.as_ptr()
+            },
             directory: directory.as_ptr(),
             mkdir: c_int::from(config.mkdir),
             verbose: c_int::from(config.verbose),
@@ -109,10 +149,18 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_options(
+            streamextract_job_start_with_connection(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
+                match config.protocol {
+                    Protocol::Ftp => 0,
+                    Protocol::FtpsExplicit => 1,
+                    Protocol::FtpsImplicit => 2,
+                    Protocol::Sftp => 3,
+                },
+                ptr::null(), // Use the system certificate trust store.
+                &ssh,
             )
         };
         NonNull::new(job)
@@ -171,6 +219,10 @@ mod tests {
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 21,
+            protocol: crate::Protocol::Ftp,
+            private_key: None,
+            private_key_passphrase: None,
+            known_hosts: None,
             mode: Mode::Passive,
             user: String::new(),
             password: String::new(),

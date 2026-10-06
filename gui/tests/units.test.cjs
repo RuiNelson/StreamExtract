@@ -58,7 +58,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, memorySave, memoryRecall, changeProtocol, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -635,4 +635,92 @@ test("an Advanced choice made while the consent window is open takes precedence"
   assert.equal(app.state.checkUpdates, true);
   assert.equal(calls.filter((call) => call.command === "preferences_save").length, 1);
   assert.equal(calls.filter((call) => call.command === "check_for_updates").length, 1);
+});
+
+
+test("protocol changes use the right default port without replacing a custom port", () => {
+  const app = frontend();
+  app.node("port").value = "21";
+  app.node("protocol").value = "ftps_implicit";
+  app.changeProtocol();
+  assert.equal(app.node("port").value, "990");
+  app.node("protocol").value = "ftps_explicit";
+  app.changeProtocol();
+  assert.equal(app.node("port").value, "21");
+  app.node("port").value = "2121";
+  for (const protocol of ["ftps_implicit", "ftp", "ftps_explicit"]) {
+    app.node("protocol").value = protocol;
+    app.changeProtocol();
+    assert.equal(app.node("port").value, "2121");
+  }
+});
+
+test("the protocol and connection mode reach the transfer and server memory", async () => {
+  const calls = [];
+  const saved = { host: "example.org", port: 990, protocol: "ftps_implicit", mode: "active" };
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "memory_recall") return saved;
+    if (command === "memory_status") return { saved: true, store_credentials: false };
+  });
+  app.state.archives = ["one.zip", "two.zip"];
+  app.node("port").value = "21";
+  await app.memoryRecall();
+  assert.equal(app.node("protocol").value, "ftps_implicit");
+  assert.equal(app.node("mode").value, "active");
+  assert.equal(app.buildConfig().protocol, "ftps_implicit");
+  assert.equal(app.buildConfig().mode, "active");
+  await app.memorySave();
+  const server = calls.find((call) => call.command === "memory_save").args.server;
+  assert.equal(server.protocol, "ftps_implicit");
+  assert.equal(server.port, 990);
+  app.node("protocol").value = "ftp";
+  app.changeProtocol();
+  assert.equal(app.node("port").value, "21");
+  delete saved.protocol;
+  saved.port = 2121;
+  await app.memoryRecall();
+  assert.equal(app.node("protocol").value, "ftp");
+  assert.equal(app.node("port").value, "2121");
+});
+
+test("SFTP selects port 22, hides FTP mode, and passes SSH settings", () => {
+  const ui = frontend();
+  ui.node("mode").value = "active";
+  ui.node("port").value = "21";
+  ui.node("protocol").value = "sftp";
+  ui.changeProtocol();
+  assert.equal(ui.node("port").value, "22");
+  assert.equal(ui.node("mode").disabled, true);
+  assert.equal(ui.node("mode-field").hidden, true);
+  assert.equal(ui.node("btn-ssh").hidden, false);
+  ui.node("private-key").value = "/keys/custom";
+  ui.node("private-key-passphrase").value = "key passphrase";
+  ui.node("verify-host-key").checked = true;
+  ui.node("known-hosts").value = "";
+  const config = ui.buildConfig();
+  assert.equal(config.private_key, "/keys/custom");
+  assert.equal(config.private_key_passphrase, "key passphrase");
+  assert.equal(config.known_hosts, "");
+  ui.node("verify-host-key").checked = false;
+  assert.equal(ui.buildConfig().known_hosts, null);
+  ui.node("port").value = "2222";
+  ui.node("protocol").value = "ftp";
+  ui.changeProtocol();
+  assert.equal(ui.node("port").value, "2222");
+  assert.equal(ui.node("mode").disabled, false);
+  assert.equal(ui.node("mode-field").hidden, false);
+  assert.equal(ui.node("mode").value, "active");
+});
+
+test("SFTP memory recalls private key and host verification settings", async () => {
+  const ui = frontend(async () => ({ protocol: "sftp", port: 22, host: "ssh.example", user: "",
+    private_key: "/keys/custom", private_key_passphrase: "secret", known_hosts: "" }));
+  await ui.memoryRecall();
+  assert.equal(ui.node("protocol").value, "sftp");
+  assert.equal(ui.node("mode-field").hidden, true);
+  assert.equal(ui.node("private-key").value, "/keys/custom");
+  assert.equal(ui.node("private-key-passphrase").value, "secret");
+  assert.equal(ui.node("verify-host-key").checked, true);
+  assert.equal(ui.buildConfig().known_hosts, "");
 });

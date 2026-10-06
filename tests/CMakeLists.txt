@@ -18,6 +18,8 @@ file(ARCHIVE_EXTRACT INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip" DEST
 
 add_executable(streamextract_tests
   test_main.cpp
+  test_options.cpp
+  ../src/options.cpp
   test_archive.cpp
   test_exfat.cpp
   test_json.cpp
@@ -27,10 +29,25 @@ add_executable(streamextract_tests
   test_remote_path.cpp
   test_summary.cpp
   test_text.cpp)
-target_link_libraries(streamextract_tests PRIVATE streamextract_core doctest::doctest)
+target_link_libraries(streamextract_tests PRIVATE streamextract_core doctest::doctest CLI11::CLI11)
 target_compile_definitions(streamextract_tests PRIVATE STREAMEXTRACT_TEST_FIXTURES="${_test_fixtures}")
 
 add_test(NAME unit COMMAND streamextract_tests)
+
+# Docker integration tests are opt-in; normal unit/C API checks need no daemon.
+if(STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+  find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
+else()
+  find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+endif()
+if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+  add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext> FtpsTests)
+  add_test(NAME sftp COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/sftp.py" --sext $<TARGET_FILE:sext> SftpTests)
+  set_tests_properties(sftp PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  set_tests_properties(ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()
 
 if(TARGET streamextractcore)
   # C-ABI smoke test: only the public header and the shared library, exactly
@@ -46,12 +63,22 @@ if(TARGET streamextractcore)
   endif()
   add_test(NAME capi COMMAND streamextractcore_tests)
 
-  # FTP resume, failures and cancellation against a local server, using only Python's stdlib.
-  find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
-  if(Python3_Interpreter_FOUND)
+  if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+    add_test(NAME lib_ftps COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py"
+      --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore> LibraryFtpsTests)
+    add_test(NAME lib_sftp COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/integration/sftp.py"
+      --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore> LibrarySftpTests)
+    set_tests_properties(lib_sftp PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    set_tests_properties(lib_ftps PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endif()
+
+  # FTP resume, failures and cancellation against the same Docker image.
+  if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
     add_test(NAME ftp_faults COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftp_faults.py"
       --sext $<TARGET_FILE:sext> --lib $<TARGET_FILE:streamextractcore>)
-    set_tests_properties(ftp_faults PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    set_tests_properties(ftp_faults PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 endif()

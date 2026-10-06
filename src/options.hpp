@@ -14,8 +14,14 @@ struct Options {
   std::string host;
   int port = 21;
   FtpMode mode = FtpMode::Passive;
+  FtpProtocol protocol = FtpProtocol::Ftp;
+  FtpsMode ftps_mode = FtpsMode::Explicit;
+  std::optional<std::string> ca_certificate;
   std::optional<std::string> user;
   std::optional<std::string> password;
+  std::optional<std::string> private_key;
+  std::string private_key_passphrase;
+  std::optional<std::string> known_hosts;
   std::optional<std::string> directory;
   bool mkdir = false;
   std::optional<std::string> archive_password;
@@ -30,7 +36,7 @@ struct ParsedOptions {
   int exit_code = 0;
 };
 
-// Parses and validates the command line. Help, version and usage errors are
+// Parses and validates UTF-8 arguments. Help, version and usage errors are
 // printed here.
 ParsedOptions parse_options(int argc, char** argv);
 

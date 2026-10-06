@@ -17,7 +17,7 @@
         <header class="app-header">
           <h1>StreamExtract</h1>
           <span id="app-version" class="version muted"></span>
-          <p class="tagline muted">Stream archives to an FTP server without unpacking them to disk.</p>
+          <p class="tagline muted">Stream archives to a server without unpacking them to disk.</p>
         </header>
 
         <!-- Archive -->
@@ -65,7 +65,16 @@
             </div>
           </div>
 
-          <div class="grid host-row">
+          <div id="host-row" class="grid host-row">
+            <div class="field">
+              <label for="protocol">Protocol</label>
+              <select id="protocol">
+                <option value="ftp">FTP</option>
+                <option value="ftps_explicit">FTPS (explicit)</option>
+                <option value="ftps_implicit">FTPS (implicit)</option>
+                <option value="sftp">SFTP</option>
+              </select>
+            </div>
             <div class="field">
               <label for="host">Host</label>
               <input id="host" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
@@ -76,14 +85,12 @@
               <input id="port" type="text" inputmode="numeric" autocomplete="off" value="21"
                      aria-describedby="port-error">
             </div>
-            <div class="field">
-              <span id="mode-label" class="label">Mode</span>
-              <div class="segmented" role="radiogroup" aria-labelledby="mode-label">
-                <input type="radio" name="mode" id="mode-passive" value="passive" checked>
-                <label for="mode-passive">Passive</label>
-                <input type="radio" name="mode" id="mode-active" value="active">
-                <label for="mode-active">Active</label>
-              </div>
+            <div id="mode-field" class="field">
+              <label for="mode">Mode</label>
+              <select id="mode">
+                <option value="passive">Passive</option>
+                <option value="active">Active</option>
+              </select>
             </div>
             <p id="port-error" class="error-text host-row-error" role="alert" hidden></p>
           </div>
@@ -110,10 +117,13 @@
             <input id="directory" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
           </div>
 
-          <label class="check">
-            <input type="checkbox" id="mkdir">
-            <span>Create directory if missing</span>
-          </label>
+          <div class="server-options">
+            <label class="check">
+              <input type="checkbox" id="mkdir">
+              <span>Create directory if missing</span>
+            </label>
+            <button type="button" id="btn-ssh" class="btn btn-small" hidden>SSH settings</button>
+          </div>
         </section>
 
         <!-- Advanced -->
@@ -157,7 +167,7 @@
             <p class="hint muted">Display, buffer, retry, sound and update settings are saved automatically.</p>
             <label class="check">
               <input type="checkbox" id="verbose">
-              <span>Verbose log (every FTP command)</span>
+              <span>Verbose log (connection details)</span>
             </label>
           </div>
         </details>
@@ -282,10 +292,41 @@
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
   <!-- ===================== Dialogs ===================== -->
+  <dialog id="dlg-ssh" class="dialog" aria-labelledby="dlg-ssh-title">
+    <form method="dialog">
+      <h2 id="dlg-ssh-title">SSH settings</h2>
+      <div class="field">
+        <label for="private-key">Private key</label>
+        <div class="grid key-row">
+          <input id="private-key" type="text" spellcheck="false" placeholder="Automatic: private keys in ~/.ssh">
+          <button type="button" id="btn-private-key" class="btn">Choose</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="private-key-passphrase">Private key passphrase</label>
+        <input id="private-key-passphrase" type="password" autocomplete="new-password">
+      </div>
+      <p class="hint muted">A login password uses password authentication. With neither a password nor a selected key, private keys in ~/.ssh are tried. No login prompts are shown.</p>
+      <label class="check">
+        <input type="checkbox" id="verify-host-key">
+        <span>Verify host key against known hosts</span>
+      </label>
+      <div class="field">
+        <label for="known-hosts">Known hosts file</label>
+        <div class="grid key-row">
+          <input id="known-hosts" type="text" spellcheck="false" placeholder="~/.ssh/known_hosts" disabled>
+          <button type="button" id="btn-known-hosts" class="btn" disabled>Choose</button>
+        </div>
+      </div>
+      <p class="hint muted">When verification is enabled, a blank path uses ~/.ssh/known_hosts. Otherwise any host key is accepted.</p>
+      <div class="dialog-actions"><button type="submit" value="done" class="btn btn-primary">Done</button></div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-memory" class="dialog" aria-labelledby="dlg-memory-title">
     <form method="dialog">
       <h2 id="dlg-memory-title">Store the login unencrypted?</h2>
-      <p>The username and password will be saved as plain text in <code id="dlg-memory-path" class="path"></code>.</p>
+      <p>The username, password and private key passphrase will be saved as plain text in <code id="dlg-memory-path" class="path"></code>.</p>
       <div class="dialog-actions">
         <button type="submit" value="store" class="btn">Store login</button>
         <button type="submit" value="dont" class="btn btn-primary" autofocus>Don't store login</button>

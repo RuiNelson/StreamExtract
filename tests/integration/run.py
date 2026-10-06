@@ -2,8 +2,7 @@
 """End-to-end tests for streamextract.
 
 Creates archives with RARLAB's `rar`, Python's zipfile and tarfile, 7-Zip
-(`7zz`) and Info-ZIP's `zip`, uploads them with streamextract to vsftpd running in Docker (image
-delfer/alpine-ftp-server) and checks what arrives.
+(`7zz`) and Info-ZIP's `zip`, uploads them with streamextract to the shared FTP/FTPS server built from tests/docker/Dockerfile and checks what arrives.
 
     python3 tests/integration/run.py --sext build/sext --rar /path/to/rar [--7z PATH] [--big] [--lib PATH]
 
@@ -34,14 +33,10 @@ import time
 import traceback
 import unicodedata
 import tarfile
-import uuid
 import zipfile
 from pathlib import Path
 
-IMAGE = "delfer/alpine-ftp-server"
-USER = "tester"
-PASSWORD = "secret"
-HOME = f"/ftp/{USER}"  # Login directory on the server (not chrooted).
+from docker_server import CA_CERTIFICATE, HOME, PASSWORD, USER, Server
 BASE_TIME = 1_700_000_000
 ARCHIVE_PASSWORD = "s3cr3t pässwörd"
 ZIP_AES_PASSWORD = "s3cr3t p4ssw0rd"  # 7-Zip refuses non-ASCII passwords for ZIP.
@@ -108,88 +103,6 @@ def compare_mtimes(expected_root, actual_root, output):
             dst = Path(actual_root) / src.relative_to(expected_root)
             delta = abs(src.stat().st_mtime - dst.stat().st_mtime)
             check(delta < 2, f"modification time of {dst} differs by {delta:.0f} s", output)
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def free_port_range(count):
-    for _ in range(200):
-        base = random.randint(30000, 60000 - count)
-        sockets = []
-        try:
-            for port in range(base, base + count):
-                s = socket.socket()
-                sockets.append(s)
-                s.bind(("0.0.0.0", port))
-            return base
-        except OSError:
-            continue
-        finally:
-            for s in sockets:
-                s.close()
-    raise RuntimeError("no free port range")
-
-
-# --------------------------------------------------------------------------
-# FTP server
-
-
-class Server:
-    """vsftpd (delfer/alpine-ftp-server) with user tester/secret, whose home
-    directory is `data_dir` on this machine."""
-
-    def __init__(self, data_dir):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        user = f"{USER}|{PASSWORD}|{HOME}"
-        if os.getuid() != 0:
-            user += f"|{os.getuid()}"  # Uploaded files belong to us: readable and deletable here.
-        for attempt in range(3):  # Retry if Docker finds one of the ports taken.
-            pasv = free_port_range(10)
-            control = free_port()
-            self.name = f"streamextract-it-{uuid.uuid4().hex[:8]}"
-            proc = subprocess.run(["docker", "run", "-d", "--rm", "--name", self.name,
-                                   "-e", f"USERS={user}", "-e", f"MIN_PORT={pasv}", "-e", f"MAX_PORT={pasv + 9}",
-                                   "-v", f"{self.data_dir}:{HOME}",
-                                   "-p", f"{control}:21", "-p", f"{pasv}-{pasv + 9}:{pasv}-{pasv + 9}", IMAGE],
-                                  capture_output=True, text=True)
-            if proc.returncode == 0:
-                break
-            subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
-            if "port" not in proc.stderr or attempt == 2:
-                raise RuntimeError(f"cannot start the FTP server container:\n{proc.stderr.strip()}")
-        # On Linux the container address is routable, so active mode works
-        # too; Docker Desktop (macOS, Windows) only offers published ports.
-        self.routable = sys.platform.startswith("linux")
-        if self.routable:
-            self.host = subprocess.run(
-                ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", self.name],
-                check=True, capture_output=True, text=True).stdout.strip()
-            self.port = 21
-        else:
-            self.host = "127.0.0.1"
-            self.port = control
-        self.wait_ready()
-
-    def wait_ready(self, timeout=60):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                with socket.create_connection((self.host, self.port), timeout=2) as s:
-                    if s.recv(64).startswith(b"220"):
-                        return
-            except OSError:
-                pass
-            time.sleep(0.3)
-        logs = subprocess.run(["docker", "logs", self.name], capture_output=True, text=True)
-        raise RuntimeError(f"FTP server not ready:\n{logs.stdout}{logs.stderr}")
-
-    def close(self):
-        subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
 
 
 # --------------------------------------------------------------------------
@@ -455,6 +368,11 @@ class StreamExtractJobConfig(ctypes.Structure):
     ]
 
 
+class StreamExtractSshOptions(ctypes.Structure):
+    _fields_ = [("private_key", ctypes.c_char_p), ("private_key_passphrase", ctypes.c_char_p),
+                ("known_hosts", ctypes.c_char_p)]
+
+
 class Library:
     """libstreamextractcore loaded with the prototypes of streamextract.h."""
 
@@ -471,6 +389,12 @@ class Library:
         dll.streamextract_job_start_with_units.restype = ctypes.c_void_p
         dll.streamextract_job_start_with_options.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int, ctypes.c_uint]
         dll.streamextract_job_start_with_options.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_protocol.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
+                                                            ctypes.c_uint, ctypes.c_int, ctypes.c_char_p]
+        dll.streamextract_job_start_with_protocol.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_connection.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
+            ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions)]
+        dll.streamextract_job_start_with_connection.restype = ctypes.c_void_p
         dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.streamextract_job_poll.restype = ctypes.c_void_p
         dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -522,6 +446,12 @@ class LibJob:
     job, which cancels and waits for it if it is still running."""
 
     def __init__(self, lib, config, si_units=False, retries=None):
+        config = dict(config)
+        protocol = config.pop("protocol", None)
+        ca_certificate = config.pop("ca_certificate", None)
+        ssh_values = {name: config.pop(name, None) for name in ("private_key", "private_key_passphrase", "known_hosts")}
+        ssh = StreamExtractSshOptions(**{key: value.encode("utf-8") if isinstance(value, str) else value
+                                         for key, value in ssh_values.items()})
         unknown = set(config) - set(LIB_CONFIG_DEFAULTS)
         check(not unknown, f"unknown job config keys: {sorted(unknown)}")
         values = dict(LIB_CONFIG_DEFAULTS, **config)
@@ -535,7 +465,12 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        if retries is not None:
+        if protocol is not None:
+            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
+            self.handle = lib.dll.streamextract_job_start_with_connection(
+                ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol],
+                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None, ctypes.byref(ssh))
+        elif retries is not None:
             self.handle = lib.dll.streamextract_job_start_with_options(ctypes.byref(self._config), int(si_units), retries)
         else:
             self.handle = (lib.dll.streamextract_job_start_with_units(ctypes.byref(self._config), 1) if si_units
@@ -763,6 +698,8 @@ class Env:
         self.lz4 = shutil.which("lz4")
         self.lib = Library(Path(args.lib).resolve()) if args.lib else None  # Fails fast on a bad library.
         self.work = work
+        self.protocol = args.protocol
+        self.ftps_mode = args.ftps_mode
         self.server = Server(work / "ftp")  # First: fails fast without Docker.
         try:
             self.fixtures = build_fixtures(work, args.rar, args.big, self.sevenzip, self.infozip, self.lz4)
@@ -786,9 +723,26 @@ class Env:
         """Local view of a path in the FTP user's home directory."""
         return self.server.data_dir.joinpath(*parts)
 
+    @property
+    def cli_port(self):
+        if self.protocol == "sftp":
+            return self.server.ssh_port
+        return self.server.implicit_port if self.protocol == "ftps" and self.ftps_mode == "implicit" else self.server.port
+
+    @property
+    def target_scheme(self):
+        if self.protocol == "sftp":
+            return "sftp"
+        return "ftps" if self.protocol == "ftps" and self.ftps_mode == "implicit" else "ftp"
+
     def command(self, archive, *args, login=True, host=None, no_tui=True):
+        self.server.sync()
         cmd = [self.sext, "--file", self.archive(archive), "--host", host or self.server.host,
-               "--port", str(self.server.port)]
+               "--port", str(self.cli_port)]
+        if self.protocol == "sftp":
+            cmd += ["--protocol", "sftp"]
+        if self.protocol == "ftps":
+            cmd += ["--protocol", "ftps", "--ftps-mode", self.ftps_mode, "--cacert", str(CA_CERTIFICATE)]
         if login:
             cmd += ["--user", USER, "--password", PASSWORD]
         if no_tui:
@@ -804,8 +758,13 @@ class Env:
 
     def lib_config(self, archive, **overrides):
         """Job config for the C API: this server, the tester login and `overrides`."""
-        config = {"archive": self.archive(archive), "host": self.server.host, "port": self.server.port,
+        self.server.sync()
+        config = {"archive": self.archive(archive), "host": self.server.host, "port": self.cli_port,
                   "user": USER, "password": PASSWORD}
+        if self.protocol == "sftp":
+            config.update(protocol="sftp")
+        if self.protocol == "ftps":
+            config.update(protocol="ftps_" + self.ftps_mode, ca_certificate=str(CA_CERTIFICATE))
         config.update(overrides)
         return config
 
@@ -837,7 +796,7 @@ def test_basic_upload(env):
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
     compare_mtimes(env.fixtures["main"], env.remote("basic", "tree"), out)
     check(f"Logged in as {USER}" in out, "no login message", out)
-    check(f"Destination: ftp://{env.server.host}:{env.server.port}{HOME}/basic" in out,
+    check(f"Destination: {env.target_scheme}://{env.server.host}:{env.cli_port}{HOME}/basic" in out,
           "relative --directory not resolved against the login directory", out)
 
 
@@ -854,7 +813,8 @@ def test_larger_remote_file_is_uploaded_again(env):
     out = env.run("basic.rar", "--directory", "basic", "--verbose")
     check("To upload: 1 file(s)" in out, "expected exactly one upload", out)
     check("Removed the larger remote file" in out, "larger file was not deleted first", out)
-    check(out.index("DEBUG > DELE ") < out.index("DEBUG > STOR "), "upload preceded deletion", out)
+    if env.protocol != "sftp":
+        check(out.index("DEBUG > DELE ") < out.index("DEBUG > STOR "), "upload preceded deletion", out)
     compare_trees(env.fixtures["main"], env.remote("basic", "tree"), out)
 
 
@@ -872,7 +832,8 @@ def test_smaller_remote_files_are_resumed(env):
         out = env.run(archive, "--directory", directory, "--verbose", "--buffer", "1")
         check("Done: 2 file(s)" in out and "Skipped 6 file(s)" in out, "incomplete files were not resumed", out)
         check(f"Resuming tree/random-5M.bin at byte {offset}" in out, "resume offset was not used", out)
-        check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
+        if env.protocol != "sftp":
+            check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
         check("DEBUG > DELE " not in out, "an incomplete file was deleted", out)
         compare_trees(env.fixtures["main"], root, out)
 
@@ -883,6 +844,8 @@ def test_solid(env):
 
 
 def test_active_mode(env):
+    if env.protocol == "sftp":
+        raise Skipped("SFTP has no active/passive data mode")
     if not env.server.routable:
         raise Skipped("active mode needs a routable server address (Linux); Docker Desktop only publishes ports")
     out = env.run("basic.rar", "--mode", "active", "--directory", "active", "--mkdir")
@@ -990,7 +953,8 @@ def test_small_files_directory_navigation(env):
     out = env.run(archive, "--directory", "small-navigation", "--verbose")
     cwd_count = out.count("DEBUG > CWD ")
     print(f"    {len(files)} small files: {cwd_count} CWD commands, {time.monotonic() - started:.3f} s")
-    check(0 < cwd_count < 100, f"too many directory traversal commands: {cwd_count}", out)
+    if env.protocol != "sftp":
+        check(0 < cwd_count < 100, f"too many directory traversal commands: {cwd_count}", out)
     compare_trees(source, destination, out)
     compare_mtimes(source, destination, out)
 
@@ -1010,7 +974,8 @@ def check_hidden_files(env, archive, directory):
     out = env.run(archive, "--directory", directory, "--verbose")
     check("Done: 0 file(s)" in out and f"Skipped {count} file(s)" in out, "hidden files were uploaded again", out)
     check("DEBUG > STOR " not in out, "a skipped file was sent", out)
-    check("DEBUG > SIZE .hidden" in out, "the hidden file was not checked with SIZE", out)
+    if env.protocol != "sftp":
+        check("DEBUG > SIZE .hidden" in out, "the hidden file was not checked with SIZE", out)
 
     # Omitted names still need their size checked, including zero-byte files.
     env.remote(directory, ".hidden").unlink()
@@ -1060,14 +1025,15 @@ def test_encrypted_headers(env):
 
 
 def test_anonymous_login_is_attempted(env):
+    if env.protocol == "sftp":
+        raise Skipped("SFTP uses the local username; covered by sftp.py")
     # Without --user streamextract logs in anonymously, which this server refuses.
     out = env.run("tiny.rar", "--directory", "anon", login=False, expect=1)
     check("cannot log in" in out and "530" in out, "anonymous login refusal not reported", out)
 
 
 def test_wrong_ftp_password(env):
-    cmd = [env.sext, "--file", env.archive("tiny.rar"), "--host", env.server.host, "--port",
-           str(env.server.port), "--user", USER, "--password", "not-the-password", "--no-tui"]
+    cmd = env.command("tiny.rar", "--user", USER, "--password", "not-the-password", login=False)
     proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
     out = proc.stdout + proc.stderr
     check(proc.returncode == 1 and "cannot log in" in out, "wrong FTP password not reported", out)
@@ -1207,7 +1173,7 @@ def test_ipv6(env):
         raise Skipped(f"no IPv6 access to the published port: {error}") from error
     out = env.run("tiny.rar", "--directory", "ipv6", "--mkdir", host="::1")
     check(env.remote("ipv6", "tree", "tiny.txt").is_file(), "IPv6 upload failed", out)
-    check("ftp://[::1]:" in out, "IPv6 URL not bracketed", out)
+    check(f"{env.target_scheme}://[::1]:" in out, "IPv6 URL not bracketed", out)
 
 
 def test_zip_basic(env):
@@ -1412,7 +1378,8 @@ def test_exfat_basic(env):
     time.sleep(1)  # Let Docker's bind mount see the incomplete file.
     out = env.run("basic.exfat", "--directory", "exfat", "--verbose")
     check("Resuming fragmented.bin at byte 1000" in out, "exFAT file was not resumed", out)
-    check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
+    if env.protocol != "sftp":
+        check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
     check_exfat_tree(env.remote("exfat"), out)
 
 
@@ -1541,7 +1508,7 @@ def test_lib_basic_upload(env):
     check(has_fields(state["archive"], name="basic.rar", files=files, bytes=size, volumes=1, solid=False,
                      encrypted=False), f"wrong archive info {state['archive']}", out)
     check(state["target"] is not None and state["target"].startswith(
-        f"ftp://{env.server.host}:{env.server.port}{HOME}/lib-basic"), f"wrong target {state['target']!r}", out)
+        f"{env.target_scheme}://{env.server.host}:{env.cli_port}{HOME}/lib-basic"), f"wrong target {state['target']!r}", out)
     check((state["mode"], state["user"]) == ("passive", USER), "wrong mode or user", out)
     check(state["probe"] == {"done": files, "total": files}, f"wrong probe {state['probe']}", out)
     check(has_fields(state["progress"], total_files=files, files_done=files, total_bytes=size, sent_bytes=size,
@@ -1552,7 +1519,7 @@ def test_lib_basic_upload(env):
     check(len(result["summary"]) == 1 and result["summary"][0].startswith(f"Done: {files} file(s), "),
           f"wrong summary {result['summary']}", out)
     log = lib_log_text(job)
-    for text in (f"Reading {env.archive('basic.rar')}", f"Logged in as {USER}", "Destination: ftp://",
+    for text in (f"Reading {env.archive('basic.rar')}", f"Logged in as {USER}", f"Destination: {env.target_scheme}://",
                  f"To upload: {files} file(s)"):
         check(text in log, f"{text!r} not logged", out)
     check(not job.prompts, "the job asked for a password", out)
@@ -1882,6 +1849,8 @@ TESTS = [
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sext", required=True, help="path to the sext binary")
+    parser.add_argument("--protocol", choices=("ftp", "ftps", "sftp"), default="ftp", help="CLI and library transfer protocol")
+    parser.add_argument("--ftps-mode", choices=("explicit", "implicit"), default="explicit")
     parser.add_argument("--rar", default="rar", help="path to RARLAB's rar")
     parser.add_argument("--7z", dest="sevenzip", help="path to 7-Zip's 7zz (default: 7zz or 7z from PATH)")
     parser.add_argument("--big", action="store_true", help="also test a 4.5 GiB file")

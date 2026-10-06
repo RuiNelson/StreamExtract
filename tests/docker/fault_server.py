@@ -1,0 +1,248 @@
+"""Deterministic FTP/FTPS failure scenarios, served only inside the test container."""
+
+import contextlib
+import posixpath
+import socket
+import socketserver
+import ssl
+import threading
+
+class FtpHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        cwd = "/"
+        passive = None
+        active = None
+        protected = False
+
+        def start_tls():
+            self.rfile.close()
+            self.wfile.close()
+            self.connection = self.server.tls_context.wrap_socket(self.connection, server_side=True)
+            self.rfile = self.connection.makefile("rb")
+            self.wfile = self.connection.makefile("wb")
+
+        @contextlib.contextmanager
+        def accept_data():
+            data = passive.accept()[0] if passive is not None else socket.create_connection(active, timeout=10)
+            try:
+                if protected:
+                    data = self.server.tls_context.wrap_socket(data, server_side=True)
+                    self.server.tls_data_connections += 1
+                yield data
+                if protected:
+                    # A clean TLS EOF, as real FTPS servers send after the data.
+                    data = data.unwrap()
+            finally:
+                data.close()
+
+        def reply(text):
+            self.wfile.write((text + "\r\n").encode("utf-8"))
+            self.wfile.flush()
+
+        def path(arg):
+            return posixpath.normpath(arg if arg.startswith("/") else cwd + "/" + arg)
+
+        try:
+            if self.server.implicit_tls:
+                start_tls()
+            reply("220 Local test server")
+            while True:
+                line = self.rfile.readline()
+                if not line:
+                    break
+                command, _, arg = line.decode("utf-8").rstrip("\r\n").partition(" ")
+                self.server.commands.append((command, arg))
+                if command == "AUTH" and self.server.tls_context:
+                    reply("234 Start TLS")
+                    start_tls()
+                elif command == "PBSZ":
+                    reply("200 OK")
+                elif command == "PROT":
+                    protected = arg == "P" and not self.server.reject_private_data
+                    reply("200 OK" if protected else "534 Private data required")
+                elif command == "USER":
+                    if self.server.tls_context and not isinstance(self.connection, ssl.SSLSocket):
+                        reply("530 TLS required")
+                        return
+                    reply("331 Password required")
+                elif command == "PASS":
+                    self.server.login_attempts += 1
+                    if self.server.stall_login_retry and self.server.login_attempts > 1:
+                        self.server.pause()
+                    if self.server.fail_logins > 0:
+                        self.server.fail_logins -= 1
+                        reply("530 Login temporarily unavailable")
+                        return
+                    reply("230 Logged in")
+                elif command == "PWD":
+                    reply('257 "/"')
+                elif command == "SYST":
+                    reply("215 UNIX Type: L8")
+                elif command in ("OPTS", "TYPE", "REST", "MFMT"):
+                    reply("200 OK")
+                elif command == "CWD":
+                    if path(arg) == self.server.stall_directory:
+                        self.server.pause()
+                    cwd = path(arg)
+                    reply("250 Directory changed")
+                elif command == "SIZE":
+                    if self.server.stall_retry_size and self.server.failed_uploads:
+                        self.server.pause()
+                    contents = self.server.files.get(path(arg))
+                    reply(f"213 {len(contents)}" if contents is not None else "550 File not found")
+                elif command == "MDTM":
+                    reply("213 20260101000000")
+                elif command == "EPSV":
+                    passive = self.server.passive_socket()
+                    reply(f"229 Extended Passive Mode (|||{passive.getsockname()[1]}|)")
+                elif command == "EPRT":
+                    _, _, host, port, _ = arg.split(arg[0])
+                    active = (host, int(port))
+                    reply("200 Active endpoint accepted")
+                elif command == "NLST":
+                    if self.server.stall_listing:
+                        self.server.pause()
+                    reply("150 Listing")
+                    with accept_data() as data:
+                        names = [posixpath.basename(p) for p in self.server.files if posixpath.dirname(p) == cwd]
+                        data.sendall("".join(name + "\r\n" for name in names).encode("utf-8"))
+                    if passive is not None:
+                        passive.close()
+                    passive = None
+                    reply("226 Listing complete")
+                elif command in ("STOR", "APPE"):
+                    target = path(arg)
+                    fail_upload = (self.server.fail_uploads > 0 and
+                                   (self.server.fail_target is None or target == self.server.fail_target))
+                    if fail_upload:
+                        self.server.fail_uploads -= 1
+                    reply("550 Overwrite refused" if self.server.reject_upload else "150 Upload accepted")
+                    with accept_data() as data:
+                        data.settimeout(10)
+                        if self.server.reject_upload:
+                            pass
+                        else:
+                            if command == "STOR":
+                                self.server.files[target] = b""
+                            else:
+                                self.server.files.setdefault(target, b"")
+                            payload = bytearray()
+                            while True:
+                                limit = min(65536, self.server.drop_after - len(payload)) if fail_upload else 65536
+                                chunk = data.recv(limit)
+                                if not chunk:
+                                    break
+                                payload.extend(chunk)
+                                with self.server.files_lock:
+                                    # Cleanup can unlink the upload while queued data is still arriving.
+                                    if target in self.server.files:
+                                        self.server.files[target] += chunk
+                                if fail_upload and len(payload) >= self.server.drop_after:
+                                    break
+                            self.server.uploads.append((command, target, bytes(payload)))
+                            # Complete host-side mutations before closing the data socket.
+                            # Otherwise curl can reconnect and SIZE the old prefix while
+                            # the Docker control API is still delivering the callback.
+                            if fail_upload:
+                                self.server.failed_uploads += 1
+                                if self.server.after_failure:
+                                    self.server.after_failure(self.server, target)
+                    if passive is not None:
+                        passive.close()
+                    passive = None
+                    if fail_upload and not self.server.reject_upload:
+                        reply("426 Data connection interrupted")
+                        return  # Drop the control connection too; retry must reconnect.
+                    if not self.server.reject_upload:
+                        if self.server.stall_confirmation:
+                            self.server.pause()
+                        reply("226 Upload complete")
+                elif command == "DELE":
+                    target = path(arg)
+                    self.server.deleted.append(target)
+                    if self.server.reject_delete:
+                        reply("550 Delete refused")
+                    else:
+                        with self.server.files_lock:
+                            self.server.files.pop(target, None)
+                        reply("250 File deleted")
+                elif command == "QUIT":
+                    reply("221 Goodbye")
+                    break
+                else:
+                    reply("500 Unsupported command")
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout, ssl.SSLError):
+            pass  # Expected when the client cancels a stalled command.
+        finally:
+            if passive is not None:
+                passive.close()
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            self.connection.close()
+
+
+class FtpServer(socketserver.ThreadingTCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, *, files=None, reject_upload=False, reject_delete=False, stall_directory=None,
+                 stall_listing=False, stall_confirmation=False, fail_uploads=0, drop_after=65539,
+                 fail_target=None, stall_retry_size=False, after_failure=None, fail_logins=0,
+                 stall_login_retry=False, tls_context=None, implicit_tls=False, reject_private_data=False,
+                 control_port=0, passive_ports=range(30000, 30010)):
+        self.passive_ports = passive_ports
+        super().__init__(("0.0.0.0", control_port), FtpHandler)
+        self.files = dict(files or {})
+        self.files_lock = threading.Lock()
+        self.commands = []
+        self.uploads = []
+        self.deleted = []
+        self.reject_upload = reject_upload
+        self.reject_delete = reject_delete
+        self.stall_directory = stall_directory
+        self.stall_listing = stall_listing
+        self.stall_confirmation = stall_confirmation
+        self.fail_uploads = fail_uploads
+        self.failed_uploads = 0
+        self.drop_after = drop_after
+        self.fail_target = fail_target
+        self.stall_retry_size = stall_retry_size
+        self.after_failure = after_failure
+        self.fail_logins = fail_logins
+        self.login_attempts = 0
+        self.stall_login_retry = stall_login_retry
+        self.tls_context = tls_context
+        self.implicit_tls = implicit_tls
+        self.reject_private_data = reject_private_data
+        self.tls_data_connections = 0
+        self.stalled = threading.Event()
+        self.release = threading.Event()
+        self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self.thread.start()
+
+    def passive_socket(self):
+        for port in self.passive_ports:
+            listener = socket.socket()
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.settimeout(10)
+            try:
+                listener.bind(("0.0.0.0", port))
+                listener.listen()
+                return listener
+            except OSError:
+                listener.close()
+        raise RuntimeError("no passive test port available")
+
+    def pause(self):
+        self.stalled.set()
+        self.release.wait(10)
+
+    def __exit__(self, *args):
+        self.release.set()
+        self.shutdown()
+        self.thread.join()
+        super().__exit__(*args)
+

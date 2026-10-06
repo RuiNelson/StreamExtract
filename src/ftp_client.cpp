@@ -10,6 +10,7 @@
 
 #include "logger.hpp"
 #include "util/remote_path.hpp"
+#include "util/ssh_settings.hpp"
 #include "util/text.hpp"
 
 namespace streamextract {
@@ -66,6 +67,16 @@ bool is_data_connection_error(CURLcode code) {
   }
 }
 
+// SFTP quote commands are parsed by curl, with backslash escaping inside double quotes.
+std::string sftp_quote_path(const std::string& path) {
+  std::string quoted = "\"";
+  for (char c : path) {
+    if (c == '\\' || c == '\"') quoted += '\\';
+    quoted += c;
+  }
+  return quoted + '\"';
+}
+
 }  // namespace
 
 struct FtpClient::Impl {
@@ -77,6 +88,8 @@ struct FtpClient::Impl {
   std::array<char, CURL_ERROR_SIZE> error_buffer{};
   std::string last_reply;
   bool logged_in = false;
+  std::vector<std::string> private_keys;
+  size_t private_key_index = 0;
 
   enum class Timestamps { Unknown, Mfmt, Mdtm, Unsupported };
   Timestamps timestamps = Timestamps::Unknown;
@@ -91,6 +104,12 @@ struct FtpClient::Impl {
   uint64_t sent = 0;
 
   Impl(FtpConfig c, Logger& l, bool v) : config(std::move(c)), log(l), verbose(v) {}
+
+  std::string path_url(const std::string& path, bool directory) const {
+    std::string url = ftp_url(base_url, path, directory);
+    if (is_ssh(config.protocol)) url.replace(base_url.size(), 4, "/");
+    return url;
+  }
 
   static size_t on_header(char* buffer, size_t size, size_t nitems, void* user) {
     auto* self = static_cast<Impl*>(user);
@@ -130,6 +149,7 @@ struct FtpClient::Impl {
 
   static size_t on_read(char* buffer, size_t size, size_t nitems, void* user) {
     auto* self = static_cast<Impl*>(user);
+    if (is_ssh(self->config.protocol)) self->upload_started = true;
     std::optional<size_t> n;
     try {
       n = (*self->read)(buffer, size * nitems);
@@ -183,7 +203,30 @@ struct FtpClient::Impl {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer.data());
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    if (config.user.empty()) {
+    if (config.protocol == FtpProtocol::Ftps) {
+      // Explicit FTPS upgrades ftp:// with AUTH TLS; ftps:// starts TLS immediately.
+      // Require encrypted control and data channels on every operation, including retries.
+      curl_easy_setopt(curl, CURLOPT_USE_SSL, static_cast<long>(CURLUSESSL_ALL));
+      curl_easy_setopt(curl, CURLOPT_FTPSSLAUTH, static_cast<long>(CURLFTPAUTH_TLS));
+      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+      curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+      if (config.ca_certificate) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, config.ca_certificate->c_str());
+      }
+    }
+    if (is_ssh(config.protocol)) {
+      curl_easy_setopt(curl, CURLOPT_USERNAME, config.user.c_str());
+      curl_easy_setopt(curl, CURLOPT_PASSWORD, config.password.c_str());
+      long auth = (config.password_supplied || !config.password.empty()) ? CURLSSH_AUTH_PASSWORD : 0L;
+      if (!private_keys.empty()) {
+        auth |= CURLSSH_AUTH_PUBLICKEY;
+        curl_easy_setopt(curl, CURLOPT_SSH_PRIVATE_KEYFILE, private_keys[private_key_index].c_str());
+        curl_easy_setopt(curl, CURLOPT_SSH_PUBLIC_KEYFILE, "");  // Derive the public key from the private key.
+        curl_easy_setopt(curl, CURLOPT_KEYPASSWD, config.private_key_passphrase.c_str());
+      }
+      curl_easy_setopt(curl, CURLOPT_SSH_AUTH_TYPES, auth);
+      if (config.known_hosts) curl_easy_setopt(curl, CURLOPT_SSH_KNOWNHOSTS, config.known_hosts->c_str());
+    } else if (config.user.empty()) {
       curl_easy_setopt(curl, CURLOPT_USERNAME, "anonymous");
       curl_easy_setopt(curl, CURLOPT_PASSWORD, "anonymous@");
     } else {
@@ -226,7 +269,7 @@ struct FtpClient::Impl {
 
   CURLcode perform(bool retry_cwd = true) {
     CURLcode code = curl_easy_perform(curl);
-    if (retry_cwd && code == CURLE_REMOTE_ACCESS_DENIED) {
+    if (!is_ssh(config.protocol) && retry_cwd && code == CURLE_REMOTE_ACCESS_DENIED) {
       // CWD failed before any data was transferred. Walking the components
       // supports servers that reject a full path and creates missing parents
       // one at a time when FTP_CREATE_MISSING_DIRS is enabled.
@@ -247,7 +290,7 @@ struct FtpClient::Impl {
     if (!last_reply.empty() && message.find(last_reply) == std::string::npos) {
       message += fmt::format(" (server said: {})", last_reply);
     }
-    if (logged_in && is_data_connection_error(code)) {
+    if (!is_ssh(config.protocol) && logged_in && is_data_connection_error(code)) {
       const char* other = config.mode == FtpMode::Passive ? "active" : "passive";
       message += config.mention_flags ? fmt::format(" - the data connection failed; try --mode {}", other)
                                       : fmt::format(" - the data connection failed; try {} mode", other);
@@ -282,11 +325,16 @@ std::once_flag g_curl_init;
 FtpClient::FtpClient(FtpConfig config, Logger& log, bool verbose)
     : impl_(std::make_unique<Impl>(std::move(config), log, verbose)) {
   std::call_once(g_curl_init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  if (is_ssh(impl_->config.protocol)) impl_->private_keys = prepare_ssh_settings(impl_->config);
   impl_->curl = curl_easy_init();
   if (impl_->curl == nullptr) {
     throw FtpError("cannot initialize libcurl", CURLE_FAILED_INIT);
   }
   impl_->base_url = ftp_base_url(impl_->config.host, impl_->config.port);
+  if (is_ssh(impl_->config.protocol)) impl_->base_url.replace(0, 3, "sftp");
+  if (impl_->config.protocol == FtpProtocol::Ftps && impl_->config.ftps_mode == FtpsMode::Implicit) {
+    impl_->base_url.replace(0, 3, "ftps");
+  }
 }
 
 FtpClient::~FtpClient() {
@@ -313,10 +361,16 @@ std::string FtpClient::connect(unsigned attempts) {
     }
     impl_->prepare(impl_->base_url + "/");
     SList quote;
-    quote.append("*OPTS UTF8 ON");  // '*': ignore servers that do not know it.
+    if (!is_ssh(impl_->config.protocol)) quote.append("*OPTS UTF8 ON");
     curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
     curl_easy_setopt(impl_->curl, CURLOPT_QUOTE, quote.get());
-    const CURLcode code = impl_->perform();
+    CURLcode code = impl_->perform();
+    while (code == CURLE_LOGIN_DENIED && impl_->private_key_index + 1 < impl_->private_keys.size()) {
+      ++impl_->private_key_index;
+      impl_->prepare(impl_->base_url + "/");
+      curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
+      code = impl_->perform();
+    }
     if (code == CURLE_OK) {
       const char* entry = nullptr;
       curl_easy_getinfo(impl_->curl, CURLINFO_FTP_ENTRY_PATH, &entry);
@@ -326,8 +380,8 @@ std::string FtpClient::connect(unsigned attempts) {
       }
       return entry;
     }
-    const std::string error = fmt::format("cannot log in to {}:{}: {}", impl_->config.host, impl_->config.port,
-                                          impl_->describe(code));
+    const std::string error =
+        fmt::format("cannot log in to {}:{}: {}", impl_->config.host, impl_->config.port, impl_->describe(code));
     if (code == CURLE_ABORTED_BY_CALLBACK || (impl_->cancel_check && impl_->cancel_check())) {
       throw FtpError(error, static_cast<int>(code));
     }
@@ -339,27 +393,42 @@ std::string FtpClient::connect(unsigned attempts) {
 }
 
 bool FtpClient::directory_exists(const std::string& dir) {
-  impl_->prepare(ftp_url(impl_->base_url, dir, true));
-  curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
+  impl_->prepare(impl_->path_url(dir, true));
+  if (is_ssh(impl_->config.protocol))
+    curl_easy_setopt(impl_->curl, CURLOPT_DIRLISTONLY, 1L);
+  else
+    curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
   const CURLcode code = impl_->perform();
   if (code == CURLE_OK) {
     return true;
   }
-  if (code == CURLE_REMOTE_ACCESS_DENIED) {  // CWD failed.
+  if (code == CURLE_REMOTE_ACCESS_DENIED || code == CURLE_REMOTE_FILE_NOT_FOUND) {
     return false;
   }
   impl_->fail(fmt::format("cannot check remote directory {}", dir), code);
 }
 
 void FtpClient::make_directory(const std::string& dir) {
-  const CURLcode code = impl_->quote({"MKD " + dir});
+  const CURLcode code =
+      impl_->quote({is_ssh(impl_->config.protocol) ? "mkdir " + sftp_quote_path(dir) : "MKD " + dir});
   if (code != CURLE_OK) {
     impl_->fail(fmt::format("cannot create remote directory {}", dir), code);
   }
 }
 
 void FtpClient::ensure_directory(const std::string& dir) {
-  impl_->prepare(ftp_url(impl_->base_url, dir, true));
+  if (is_ssh(impl_->config.protocol)) {
+    if (directory_exists(dir)) return;
+    const auto parent = remote_parent(dir);
+    if (parent != dir) ensure_directory(parent);
+    try {
+      make_directory(dir);
+    } catch (const FtpError&) {
+      if (!directory_exists(dir)) throw;
+    }
+    return;
+  }
+  impl_->prepare(impl_->path_url(dir, true));
   curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
   curl_easy_setopt(impl_->curl, CURLOPT_FTP_CREATE_MISSING_DIRS, static_cast<long>(CURLFTP_CREATE_DIR_RETRY));
   const CURLcode code = impl_->perform();
@@ -370,7 +439,7 @@ void FtpClient::ensure_directory(const std::string& dir) {
 
 std::optional<std::vector<std::string>> FtpClient::list_names(const std::string& dir) {
   std::string listing;
-  impl_->prepare(ftp_url(impl_->base_url, dir, true));
+  impl_->prepare(impl_->path_url(dir, true));
   impl_->listing = &listing;
   curl_easy_setopt(impl_->curl, CURLOPT_DIRLISTONLY, 1L);
   const CURLcode code = impl_->perform();
@@ -401,7 +470,7 @@ std::optional<std::vector<std::string>> FtpClient::list_names(const std::string&
 }
 
 RemoteFile FtpClient::stat_file(const std::string& path) {
-  impl_->prepare(ftp_url(impl_->base_url, path, false));
+  impl_->prepare(impl_->path_url(path, false));
   curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
   const CURLcode code = impl_->perform();
   RemoteFile file;
@@ -420,9 +489,10 @@ RemoteFile FtpClient::stat_file(const std::string& path) {
 }
 
 bool FtpClient::delete_file(const std::string& path) {
-  const CURLcode code = impl_->quote({"DELE " + path});
+  const CURLcode code =
+      impl_->quote({is_ssh(impl_->config.protocol) ? "rm " + sftp_quote_path(path) : "DELE " + path});
   if (code != CURLE_OK) {
-    impl_->log.debug(fmt::format("DELE {} failed: {}", path, impl_->describe(code)));
+    impl_->log.debug(fmt::format("cannot delete {}: {}", path, impl_->describe(code)));
   }
   return code == CURLE_OK;
 }
@@ -431,7 +501,7 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
                                const ProgressFn& progress, bool append) {
   using Timestamps = Impl::Timestamps;
   Impl& d = *impl_;
-  d.prepare(ftp_url(d.base_url, path, false));
+  d.prepare(d.path_url(path, false));
   d.read = &read;
   d.progress = &progress;
 
@@ -454,7 +524,16 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
   const std::string stamp = want_time ? format_ftp_timestamp(mtime) : std::string();
   SList postquote;
   if (want_time) {
-    postquote.append(fmt::format("{} {} {}", d.timestamps == Timestamps::Mdtm ? "MDTM" : "MFMT", stamp, path));
+    if (is_ssh(d.config.protocol)) {
+      const auto date = fmt::format(
+          "{} {} {} {}:{}:{} GMT", stamp.substr(6, 2),
+          std::array<const char*, 12>{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                                      "Dec"}[static_cast<size_t>(std::stoi(stamp.substr(4, 2)) - 1)],
+          stamp.substr(0, 4), stamp.substr(8, 2), stamp.substr(10, 2), stamp.substr(12, 2));
+      postquote.append("mtime " + sftp_quote_path(date) + " " + sftp_quote_path(path));
+    } else {
+      postquote.append(fmt::format("{} {} {}", d.timestamps == Timestamps::Mdtm ? "MDTM" : "MFMT", stamp, path));
+    }
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, postquote.get());
   }
 
@@ -478,7 +557,9 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
   if (code == CURLE_QUOTE_ERROR && want_time) {
     result.ok = true;
     result.bytes_sent = size;
-    if (d.timestamps == Timestamps::Unknown) {
+    if (is_ssh(d.config.protocol)) {
+      d.timestamps = Timestamps::Unsupported;
+    } else if (d.timestamps == Timestamps::Unknown) {
       // No MFMT: try the vsftpd flavour, "MDTM <time> <path>".
       if (d.quote({fmt::format("MDTM {} {}", stamp, path)}) == CURLE_OK) {
         d.timestamps = Timestamps::Mdtm;

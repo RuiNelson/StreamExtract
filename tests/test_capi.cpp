@@ -21,8 +21,8 @@
 #include <unistd.h>
 #endif
 
-#include "capi/streamextract.h"
 #include "archive_fixtures.hpp"
+#include "capi/streamextract.h"
 
 namespace {
 
@@ -122,6 +122,19 @@ TEST_CASE("version string") {
   CHECK(streamextract_version() == version);  // Static storage.
 }
 
+TEST_CASE("protocol selection rejects invalid values before reading the archive") {
+  CHECK(streamextract_job_start_with_protocol(nullptr, 0, 0, STREAMEXTRACT_PROTOCOL_FTP, nullptr) == nullptr);
+  const std::string path = "/nonexistent/invalid-protocol.rar";
+  streamextract_job_config config = make_config(path, 21);
+  for (int protocol : {-1, 4}) {
+    streamextract_job* job = streamextract_job_start_with_protocol(&config, 0, 0, protocol, nullptr);
+    REQUIRE(job != nullptr);
+    const std::string json = wait_for(job, "\"phase\":\"finished\"");
+    CHECK(contains(json, "\"error\":\"invalid transfer protocol\""));
+    streamextract_job_free(job);
+  }
+}
+
 TEST_CASE("a missing config is refused and NULL handles are ignored") {
   CHECK(streamextract_job_start(nullptr) == nullptr);
   CHECK(streamextract_job_start_with_options(nullptr, 1, 5) == nullptr);
@@ -182,7 +195,8 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"status\":\"failed\""));
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
-  CHECK(contains(json, "\"archive\":{\"name\":\"streamextractcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
+  CHECK(contains(json,
+                 "\"archive\":{\"name\":\"streamextractcore-tiny.rar\",\"format\":\"RAR\",\"compression\":null,"));
   CHECK(contains(json, "\"files\":1,\"bytes\":6,"));
   CHECK(contains(json, "\"bytes_text\":\"6 B\",\"volumes\":1,\"solid\":false,\"encrypted\":false}"));
   CHECK(contains(json, "\"target\":null"));
@@ -242,8 +256,9 @@ TEST_CASE("a compressed tar archive is read as it is uploaded") {
   const std::string json = wait_for(job, "\"phase\":\"finished\"");
   CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
   // Not listed first: its contents are only known once it has been read.
-  CHECK(contains(json, "\"format\":\"tar\",\"compression\":\"gzip\",\"files\":null,\"bytes\":null,"
-                       "\"bytes_text\":null,"));
+  CHECK(contains(json,
+                 "\"format\":\"tar\",\"compression\":\"gzip\",\"files\":null,\"bytes\":null,"
+                 "\"bytes_text\":null,"));
   CHECK(contains(json, "read as it is uploaded"));
   streamextract_job_free(job);
 }
@@ -258,7 +273,8 @@ TEST_CASE("a wrong ZIP password is noticed while reading the archive") {
   const char* first =
       "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-aes.zip\",\"error\":null}";
   const char* again =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-aes.zip\",\"error\":\"Wrong password\"}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-aes.zip\",\"error\":\"Wrong "
+      "password\"}";
   REQUIRE(contains(wait_for(job, first), first));
   streamextract_job_answer_password(job, "wrong");
   REQUIRE(contains(wait_for(job, again), again));
@@ -280,7 +296,8 @@ TEST_CASE("the password prompt is asked again until it is right") {
   const char* first =
       "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-enc.rar\",\"error\":null}";
   const char* again =
-      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-enc.rar\",\"error\":\"Wrong password\"}";
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-enc.rar\",\"error\":\"Wrong "
+      "password\"}";
   std::string json = wait_for(job, first);
   REQUIRE(contains(json, first));
   CHECK(contains(json, "\"phase\":\"reading\""));

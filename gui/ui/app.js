@@ -43,9 +43,20 @@
     batchList: $("batch-list"),
     archivePassword: $("archive-password"),
     host: $("host"),
+    hostRow: $("host-row"),
     port: $("port"),
+    protocol: $("protocol"),
+    sshButton: $("btn-ssh"),
+    sshDialog: $("dlg-ssh"),
+    privateKey: $("private-key"),
+    privateKeyPassphrase: $("private-key-passphrase"),
+    privateKeyButton: $("btn-private-key"),
+    verifyHostKey: $("verify-host-key"),
+    knownHosts: $("known-hosts"),
+    knownHostsButton: $("btn-known-hosts"),
     portError: $("port-error"),
-    modeGroup: document.querySelectorAll('input[name="mode"]'),
+    mode: $("mode"),
+    modeField: $("mode-field"),
     user: $("user"),
     password: $("password"),
     directory: $("directory"),
@@ -153,7 +164,7 @@
       input.disabled = state.preferencesBusy;
       input.checked = state.showPasswords;
     }
-    for (const input of [els.archivePassword, els.password, els.pwInput]) {
+    for (const input of [els.archivePassword, els.password, els.pwInput, els.privateKeyPassphrase]) {
       input.type = state.showPasswords ? "text" : "password";
     }
     els.buffer.disabled = state.preferencesBusy;
@@ -446,12 +457,43 @@
   /* ---------------------------------------------------------- setup: form */
 
   function selectedMode() {
-    for (const radio of els.modeGroup) if (radio.checked) return radio.value;
-    return "passive";
+    return els.mode.value === "active" ? "active" : "passive";
   }
 
   function setMode(mode) {
-    for (const radio of els.modeGroup) radio.checked = radio.value === mode;
+    els.mode.value = mode;
+  }
+
+  function defaultPort(protocol) {
+    return protocol === "sftp" ? 22 : protocol === "ftps_implicit" ? 990 : 21;
+  }
+
+  function updateProtocolFields() {
+    const ssh = els.protocol.value === "sftp";
+    els.mode.disabled = ssh;
+    setHidden(els.modeField, ssh);
+    els.hostRow.classList.toggle("sftp", ssh);
+    els.user.placeholder = ssh ? "current local username" : "anonymous";
+    setHidden(els.sshButton, !ssh);
+    els.knownHosts.disabled = !els.verifyHostKey.checked;
+    els.knownHostsButton.disabled = !els.verifyHostKey.checked;
+  }
+
+  async function chooseSshFile(input) {
+    try {
+      const file = await tauri.dialog.open({ multiple: false, directory: false });
+      if (typeof file === "string") input.value = file;
+    } catch (e) { toastError("Could not choose a file", e); }
+  }
+
+  function changeProtocol() {
+    const previous = els.protocol.dataset.previous || "ftp";
+    if (els.port.value.trim() === String(defaultPort(previous))) {
+      els.port.value = String(defaultPort(els.protocol.value));
+    }
+    els.protocol.dataset.previous = els.protocol.value;
+    updateProtocolFields();
+    validatePort();
   }
 
   function setFieldError(input, errorEl, message) {
@@ -549,6 +591,10 @@
   function readServer() {
     return {
       host: els.host.value.trim(),
+      protocol: els.protocol.value || "ftp",
+      private_key: els.privateKey.value.trim() || null,
+      private_key_passphrase: els.privateKeyPassphrase.value || null,
+      known_hosts: els.verifyHostKey.checked ? els.knownHosts.value.trim() : null,
       mode: selectedMode(),
       user: els.user.value.trim(),
       password: els.password.value,
@@ -586,6 +632,10 @@
       archive: state.archives[0],
       archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
       host: server.host,
+      protocol: server.protocol,
+      private_key: server.private_key,
+      private_key_passphrase: server.private_key_passphrase,
+      known_hosts: server.known_hosts,
       port,
       mode: server.mode,
       user: server.user,
@@ -606,7 +656,7 @@
   }
 
   function anyDialogOpen() {
-    return els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open;
+    return els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open;
   }
 
   async function initDragDrop() {
@@ -687,7 +737,8 @@
     try {
       const status = await invoke("memory_status");
       let storeCredentials = null;
-      if (server.user && status && status.store_credentials == null) {
+      const hasCredentials = Boolean(server.user || (server.protocol === "sftp" && (server.password || server.private_key_passphrase)));
+      if (hasCredentials && status && status.store_credentials == null) {
         els.dlgMemoryPath.textContent = (state.info && state.info.memory_path) || "the memory file";
         const answer = await askDialog(els.dlgMemory);
         if (answer !== "store" && answer !== "dont") return; // Esc: abort the save
@@ -696,6 +747,10 @@
       await invoke("memory_save", {
         server: {
           host: server.host,
+          protocol: server.protocol,
+          private_key: server.private_key,
+          private_key_passphrase: server.private_key_passphrase,
+          known_hosts: server.known_hosts,
           port,
           mode: server.mode,
           user: server.user,
@@ -706,7 +761,7 @@
         store_credentials: storeCredentials,
       });
       const answered = storeCredentials !== null ? storeCredentials : status && status.store_credentials;
-      const withoutLogin = Boolean(server.user) && answered === false;
+      const withoutLogin = hasCredentials && answered === false;
       toast(withoutLogin ? "Saved to memory, without the login" : "Saved to memory");
     } catch (e) {
       toastError("Could not save to memory", e);
@@ -721,7 +776,14 @@
         return;
       }
       els.host.value = saved.host || "";
-      els.port.value = String(saved.port == null ? 21 : saved.port);
+      els.protocol.value = ["ftps_explicit", "ftps_implicit", "sftp"].includes(saved.protocol) ? saved.protocol : "ftp";
+      els.protocol.dataset.previous = els.protocol.value;
+      els.privateKey.value = saved.private_key || "";
+      els.privateKeyPassphrase.value = saved.private_key_passphrase || "";
+      els.verifyHostKey.checked = saved.known_hosts != null;
+      els.knownHosts.value = saved.known_hosts || "";
+      updateProtocolFields();
+      els.port.value = String(saved.port == null ? defaultPort(els.protocol.value) : saved.port);
       setMode(saved.mode === "active" ? "active" : "passive");
       els.directory.value = saved.directory || "";
       els.mkdir.checked = Boolean(saved.mkdir);
@@ -751,6 +813,7 @@
 
   function newJob(config) {
     return {
+      config,
       archiveName: basename(config.archive),
       cursor: 0, // next log sequence to fetch
       pollSeq: 0, // id of the latest poll request
@@ -804,7 +867,7 @@
     setHidden(els.tArrow, true);
     setHidden(els.tTarget, true);
     setText(els.tTarget, "");
-    setText(els.tSub, `${capitalize(config.mode)} mode · ${config.user || "anonymous"}`);
+    setText(els.tSub, `${config.protocol === "sftp" ? "SFTP" : capitalize(config.mode) + " mode"} · ${config.user || (config.protocol === "sftp" ? "current local user" : "anonymous")}`);
 
     setHidden(els.batchBlock, true);
     els.batchBlock.open = false;
@@ -1029,7 +1092,7 @@
       setHidden(els.tTarget, false);
       setHidden(els.tArrow, false);
     }
-    if (snap.mode && snap.user) setText(els.tSub, `${capitalize(snap.mode)} mode · ${snap.user}`);
+    if (snap.mode && snap.user) setText(els.tSub, `${job.config.protocol === "sftp" ? "SFTP" : capitalize(snap.mode) + " mode"} · ${snap.user}`);
   }
 
   function renderPhase(job, snap) {
@@ -1465,6 +1528,12 @@
     });
     els.host.addEventListener("input", updateSubmitState);
     els.port.addEventListener("input", validatePort);
+    els.protocol.addEventListener("change", changeProtocol);
+    els.sshButton.addEventListener("click", () => els.sshDialog.showModal());
+    els.privateKeyButton.addEventListener("click", () => chooseSshFile(els.privateKey));
+    els.knownHostsButton.addEventListener("click", () => chooseSshFile(els.knownHosts));
+    els.verifyHostKey.addEventListener("change", updateProtocolFields);
+    updateProtocolFields();
     els.buffer.addEventListener("input", validateBuffer);
     els.buffer.addEventListener("change", saveBuffer);
     els.retries.addEventListener("input", validateRetries);

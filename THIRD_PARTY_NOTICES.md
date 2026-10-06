@@ -10,8 +10,9 @@ and CLI11 are not in the GUI, and Tauri and the Rust crates are not in the
 `streamextract` binary. The LZMA SDK (7-Zip's code) reads the 7z archives, with
 zlib, bzip2 and Zstandard for the methods it lacks. libarchive reads the ZIP and
 tar archives, with zlib, bzip2, liblzma (XZ Utils), Zstandard and LZ4 for
-decompression, and with mbed TLS for encrypted ZIP files in the Linux builds
-only.
+decompression. OpenSSL provides FTPS and SSH cryptography on every platform and
+encrypted ZIP support on Linux. libssh2 provides libcurl's SFTP backend. These
+libraries are linked statically into both the CLI and the GUI core.
 
 ## Completion sound (GUI only)
 
@@ -81,6 +82,9 @@ by use of this software.
 
 Copyright (c) 1996 - 2026, Daniel Stenberg and many contributors. curl license
 (an MIT/X derivative): <https://curl.se/docs/copyright.html>.
+
+The bundled 8.22.0 source has SSH passphrase and zero-byte SFTP stat fixes in
+`cmake/CurlPatches.cmake`; all transfer protocols use this same build.
 
 ## FTXUI
 
@@ -235,12 +239,73 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## mbed TLS (Linux builds only)
+## OpenSSL 3.5.9
 
-Copyright The Mbed TLS Contributors. Only its crypto library is linked, for
-AES-encrypted ZIP files. Dual-licensed Apache-2.0 or GPL-2.0-or-later; used here
-under the Apache License 2.0: <https://www.apache.org/licenses/LICENSE-2.0>.
-Source: <https://github.com/Mbed-TLS/mbedtls>.
+Copyright (c) 1998-2026 The OpenSSL Project Authors. All rights reserved.
+Statically linked for FTPS, SSH cryptography and encrypted ZIP files on Linux.
+Licensed under Apache-2.0: <https://www.apache.org/licenses/LICENSE-2.0>.
+Source and notices: <https://github.com/openssl/openssl/tree/openssl-3.5.9>.
+
+## libssh2 1.11.1
+
+Statically linked as libcurl's SFTP backend. Source: <https://libssh2.org/>.
+Licensed under BSD-3-Clause:
+
+```
+/* Copyright (C) 2004-2007 Sara Golemon <sarag@libssh2.org>
+ * Copyright (C) 2005,2006 Mikhail Gusarov <dottedmag@dottedmag.net>
+ * Copyright (C) 2006-2007 The Written Word, Inc.
+ * Copyright (C) 2007 Eli Fant <elifantu@mail.ru>
+ * Copyright (C) 2009-2023 Daniel Stenberg
+ * Copyright (C) 2008, 2009 Simon Josefsson
+ * Copyright (C) 2000 Markus Friedl
+ * Copyright (C) 2015 Microsoft Corp.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms,
+ * with or without modification, are permitted provided
+ * that the following conditions are met:
+ *
+ *   Redistributions of source code must retain the above
+ *   copyright notice, this list of conditions and the
+ *   following disclaimer.
+ *
+ *   Redistributions in binary form must reproduce the above
+ *   copyright notice, this list of conditions and the following
+ *   disclaimer in the documentation and/or other materials
+ *   provided with the distribution.
+ *
+ *   Neither the name of the copyright holder nor the names
+ *   of any other contributors may be used to endorse or
+ *   promote products derived from this software without
+ *   specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+ * CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+ * OF SUCH DAMAGE.
+ */
+```
+
+libssh2 also includes the following notices for encrypted OpenSSH key support:
+
+```
+/* $OpenBSD: bcrypt_pbkdf.c,v 1.4 2013/07/29 00:55:53 tedu Exp $ */
+```
+
+```
+/* $OpenBSD: blowfish.c,v 1.18 2004/11/02 17:23:26 hshoexer Exp $ */
+```
 
 ## Tauri and Rust crates (`streamextract-gui` only)
 

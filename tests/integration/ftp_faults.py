@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Local FTP resume and fault tests; no Docker or external archivers required.
+"""Docker FTP resume and fault tests; no external archivers required.
 
 python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
 """
 
 import argparse
 import io
-import posixpath
 import re
 import socket
-import socketserver
 import subprocess
 import tarfile
 import tempfile
-import threading
 import unittest
 import warnings
 import zipfile
@@ -21,174 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from run import Library, LibJob, lib_log_text
-
-
-class FtpHandler(socketserver.StreamRequestHandler):
-    def handle(self):
-        cwd = "/"
-        passive = None
-
-        def reply(text):
-            self.wfile.write((text + "\r\n").encode("utf-8"))
-            self.wfile.flush()
-
-        def path(arg):
-            return posixpath.normpath(arg if arg.startswith("/") else cwd + "/" + arg)
-
-        reply("220 Local test server")
-        try:
-            for line in self.rfile:
-                command, _, arg = line.decode("utf-8").rstrip("\r\n").partition(" ")
-                self.server.commands.append((command, arg))
-                if command == "USER":
-                    reply("331 Password required")
-                elif command == "PASS":
-                    self.server.login_attempts += 1
-                    if self.server.stall_login_retry and self.server.login_attempts > 1:
-                        self.server.pause()
-                    if self.server.fail_logins > 0:
-                        self.server.fail_logins -= 1
-                        reply("530 Login temporarily unavailable")
-                        return
-                    reply("230 Logged in")
-                elif command == "PWD":
-                    reply('257 "/"')
-                elif command == "SYST":
-                    reply("215 UNIX Type: L8")
-                elif command in ("OPTS", "TYPE", "REST", "MFMT"):
-                    reply("200 OK")
-                elif command == "CWD":
-                    if path(arg) == self.server.stall_directory:
-                        self.server.pause()
-                    cwd = path(arg)
-                    reply("250 Directory changed")
-                elif command == "SIZE":
-                    if self.server.stall_retry_size and self.server.failed_uploads:
-                        self.server.pause()
-                    contents = self.server.files.get(path(arg))
-                    reply(f"213 {len(contents)}" if contents is not None else "550 File not found")
-                elif command == "MDTM":
-                    reply("213 20260101000000")
-                elif command == "EPSV":
-                    passive = socket.socket()
-                    passive.settimeout(10)
-                    passive.bind(("127.0.0.1", 0))
-                    passive.listen()
-                    reply(f"229 Extended Passive Mode (|||{passive.getsockname()[1]}|)")
-                elif command == "NLST":
-                    if self.server.stall_listing:
-                        self.server.pause()
-                    reply("150 Listing")
-                    with passive.accept()[0] as data:
-                        names = [posixpath.basename(p) for p in self.server.files if posixpath.dirname(p) == cwd]
-                        data.sendall("".join(name + "\r\n" for name in names).encode("utf-8"))
-                    passive.close()
-                    passive = None
-                    reply("226 Listing complete")
-                elif command in ("STOR", "APPE"):
-                    target = path(arg)
-                    fail_upload = (self.server.fail_uploads > 0 and
-                                   (self.server.fail_target is None or target == self.server.fail_target))
-                    if fail_upload:
-                        self.server.fail_uploads -= 1
-                    with passive.accept()[0] as data:
-                        data.settimeout(10)
-                        if self.server.reject_upload:
-                            reply("550 Overwrite refused")
-                        else:
-                            if command == "STOR":
-                                self.server.files[target] = b""
-                            else:
-                                self.server.files.setdefault(target, b"")
-                            payload = bytearray()
-                            reply("150 Upload accepted")
-                            while True:
-                                limit = min(65536, self.server.drop_after - len(payload)) if fail_upload else 65536
-                                chunk = data.recv(limit)
-                                if not chunk:
-                                    break
-                                payload.extend(chunk)
-                                with self.server.files_lock:
-                                    # Cleanup can unlink the upload while queued data is still arriving.
-                                    if target in self.server.files:
-                                        self.server.files[target] += chunk
-                                if fail_upload and len(payload) >= self.server.drop_after:
-                                    break
-                            self.server.uploads.append((command, target, bytes(payload)))
-                    passive.close()
-                    passive = None
-                    if fail_upload and not self.server.reject_upload:
-                        self.server.failed_uploads += 1
-                        if self.server.after_failure:
-                            self.server.after_failure(self.server, target)
-                        reply("426 Data connection interrupted")
-                        return  # Drop the control connection too; retry must reconnect.
-                    if not self.server.reject_upload:
-                        if self.server.stall_confirmation:
-                            self.server.pause()
-                        reply("226 Upload complete")
-                elif command == "DELE":
-                    target = path(arg)
-                    self.server.deleted.append(target)
-                    if self.server.reject_delete:
-                        reply("550 Delete refused")
-                    else:
-                        with self.server.files_lock:
-                            self.server.files.pop(target, None)
-                        reply("250 File deleted")
-                elif command == "QUIT":
-                    reply("221 Goodbye")
-                    break
-                else:
-                    reply("500 Unsupported command")
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, socket.timeout):
-            pass  # Expected when the client cancels a stalled command.
-        finally:
-            if passive is not None:
-                passive.close()
-
-
-class FtpServer(socketserver.ThreadingTCPServer):
-    daemon_threads = True
-
-    def __init__(self, *, files=None, reject_upload=False, reject_delete=False, stall_directory=None,
-                 stall_listing=False, stall_confirmation=False, fail_uploads=0, drop_after=65539,
-                 fail_target=None, stall_retry_size=False, after_failure=None, fail_logins=0,
-                 stall_login_retry=False):
-        super().__init__(("127.0.0.1", 0), FtpHandler)
-        self.files = dict(files or {})
-        self.files_lock = threading.Lock()
-        self.commands = []
-        self.uploads = []
-        self.deleted = []
-        self.reject_upload = reject_upload
-        self.reject_delete = reject_delete
-        self.stall_directory = stall_directory
-        self.stall_listing = stall_listing
-        self.stall_confirmation = stall_confirmation
-        self.fail_uploads = fail_uploads
-        self.failed_uploads = 0
-        self.drop_after = drop_after
-        self.fail_target = fail_target
-        self.stall_retry_size = stall_retry_size
-        self.after_failure = after_failure
-        self.fail_logins = fail_logins
-        self.login_attempts = 0
-        self.stall_login_retry = stall_login_retry
-        self.stalled = threading.Event()
-        self.release = threading.Event()
-        self.thread = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
-        self.thread.start()
-
-    def pause(self):
-        self.stalled.set()
-        self.release.wait(10)
-
-    def __exit__(self, *args):
-        self.release.set()
-        self.shutdown()
-        self.thread.join()
-        super().__exit__(*args)
+from docker_server import FtpServer
 
 
 class FtpFaultTests(unittest.TestCase):
@@ -222,7 +52,7 @@ class FtpFaultTests(unittest.TestCase):
         return str(archive)
 
     def job(self, archive, server, retries=None, **options):
-        return LibJob(self.lib, {"archive": archive, "host": "127.0.0.1", "port": server.server_address[1],
+        return LibJob(self.lib, {"archive": archive, "host": getattr(server, "host", "127.0.0.1"), "port": server.server_address[1],
                                  "directory": "/upload", "buffer_mib": 1, **options}, retries=retries)
 
     def assert_cancelled(self, job, server):
@@ -248,7 +78,7 @@ class FtpFaultTests(unittest.TestCase):
                         self.assertEqual(job.result["status"], "failed", job.describe())
                         self.assertEqual(job.result["files_uploaded"], 0)
                 else:
-                    result = subprocess.run([ARGS.sext, "--file", archive, "--host", "127.0.0.1",
+                    result = subprocess.run([ARGS.sext, "--file", archive, "--host", server.host,
                                              "--port", str(server.server_address[1]), "--directory", "/upload",
                                              "--no-tui"], capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -258,7 +88,7 @@ class FtpFaultTests(unittest.TestCase):
                 self.assertEqual(attempts, ["APPE"] * 3)
 
     def cli(self, archive, server, *options):
-        return subprocess.run([ARGS.sext, "--file", archive, "--host", "127.0.0.1",
+        return subprocess.run([ARGS.sext, "--file", archive, "--host", getattr(server, "host", "127.0.0.1"),
                                "--port", str(server.server_address[1]), "--directory", "/upload",
                                "--no-tui", "--buffer", "1", *options],
                               capture_output=True, text=True, timeout=15)
