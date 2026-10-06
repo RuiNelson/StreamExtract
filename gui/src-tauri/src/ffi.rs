@@ -231,6 +231,7 @@ mod tests {
             verbose: false,
             buffer_mib: 0,
             retries: 3,
+            prevent_sleep: true,
             units: crate::preferences::Units::Binary,
         }
     }

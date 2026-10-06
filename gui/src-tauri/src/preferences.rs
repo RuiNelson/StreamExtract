@@ -21,6 +21,10 @@ pub(crate) fn default_retries() -> u32 {
     3
 }
 
+pub(crate) fn default_prevent_sleep() -> bool {
+    true
+}
+
 fn default_completion_sound() -> bool {
     true
 }
@@ -32,6 +36,8 @@ pub struct Preferences {
     pub buffer_mib: u32,
     #[serde(default = "default_retries")]
     pub retries: u32,
+    #[serde(default = "default_prevent_sleep")]
+    pub prevent_sleep: bool,
     #[serde(default = "default_completion_sound")]
     pub completion_sound: bool,
     #[serde(default)]
@@ -47,6 +53,7 @@ impl Default for Preferences {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
             retries: default_retries(),
+            prevent_sleep: default_prevent_sleep(),
             completion_sound: true,
             show_passwords: false,
             check_updates: None,
@@ -74,6 +81,9 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| *value > 0)
             .unwrap_or_else(default_retries),
+        prevent_sleep: !ini
+            .get("transfer", "prevent_sleep")
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")),
         show_passwords: ini
             .get("display", "show_passwords")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("true")),
@@ -110,8 +120,8 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     crate::ini::write_atomic(
         path,
         &format!(
-            "[display]\nunits={units}\nshow_passwords={}\n\n[transfer]\nbuffer_mib={}\nretries={}\n\n[notifications]\ncompletion_sound={}\n{updates}",
-            preferences.show_passwords, preferences.buffer_mib, preferences.retries, preferences.completion_sound
+            "[display]\nunits={units}\nshow_passwords={}\n\n[transfer]\nbuffer_mib={}\nretries={}\nprevent_sleep={}\n\n[notifications]\ncompletion_sound={}\n{updates}",
+            preferences.show_passwords, preferences.buffer_mib, preferences.retries, preferences.prevent_sleep, preferences.completion_sound
         ),
     )
 }
@@ -141,6 +151,7 @@ mod tests {
                 units: Units::Binary,
                 buffer_mib: 128,
                 retries: 5,
+                prevent_sleep: false,
                 completion_sound: false,
                 show_passwords: true,
                 check_updates: Some(false),
@@ -149,6 +160,7 @@ mod tests {
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
         assert_eq!(load(&path).unwrap().retries, 5);
+        assert!(!load(&path).unwrap().prevent_sleep);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
         assert!(!load(&path).unwrap().completion_sound);
         assert!(load(&path).unwrap().show_passwords);
@@ -174,6 +186,7 @@ mod tests {
             serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
         assert!(legacy.completion_sound);
         assert_eq!(legacy.retries, 3);
+        assert!(legacy.prevent_sleep);
         assert!(!legacy.show_passwords);
         assert_eq!(legacy.check_updates, None);
         for (value, expected) in [
@@ -259,6 +272,10 @@ mod tests {
         )
         .is_err());
         assert_eq!(load(&path).unwrap().retries, u32::MAX);
+        for (value, enabled) in [("FALSE", false), ("true", true), ("invalid", true)] {
+            fs::write(&path, format!("[transfer]\nprevent_sleep={value}\n")).unwrap();
+            assert_eq!(load(&path).unwrap().prevent_sleep, enabled);
+        }
         fs::remove_file(&path).unwrap();
         fs::create_dir(&path).unwrap();
         assert!(load(&path).is_err());

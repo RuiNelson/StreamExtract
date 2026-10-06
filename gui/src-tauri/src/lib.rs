@@ -6,6 +6,7 @@ mod ffi;
 mod ini;
 mod memory;
 mod preferences;
+mod sleep_inhibitor;
 mod updates;
 
 use std::path::PathBuf;
@@ -95,6 +96,8 @@ pub struct TransferConfig {
     pub buffer_mib: u32,
     #[serde(default = "preferences::default_retries")]
     pub retries: u32,
+    #[serde(default = "preferences::default_prevent_sleep")]
+    pub prevent_sleep: bool,
     #[serde(default)]
     pub units: preferences::Units,
 }
@@ -506,6 +509,7 @@ mod tests {
             verbose: false,
             buffer_mib: 1,
             retries: 3,
+            prevent_sleep: true,
             units: preferences::Units::Binary,
         }
     }

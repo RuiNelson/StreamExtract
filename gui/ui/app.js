@@ -66,6 +66,7 @@
     bufferError: $("buffer-error"),
     retries: $("retries"),
     retriesError: $("retries-error"),
+    preventSleep: $("prevent-sleep"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
     memRecall: $("btn-mem-recall"),
@@ -135,6 +136,7 @@
     units: "si",
     bufferMib: 64,
     retries: 3,
+    preventSleep: true,
     completionSound: true,
     showPasswords: false,
     checkUpdates: null, // no GitHub request until the user chooses
@@ -169,6 +171,8 @@
     }
     els.buffer.disabled = state.preferencesBusy;
     els.retries.disabled = state.preferencesBusy;
+    els.preventSleep.disabled = state.preferencesBusy;
+    els.preventSleep.checked = state.preventSleep;
     els.completionSound.disabled = state.preferencesBusy;
     els.completionSound.checked = state.completionSound;
     els.checkUpdates.disabled = state.preferencesBusy;
@@ -186,6 +190,7 @@
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
       state.retries = preferences.retries ?? 3;
+      state.preventSleep = preferences.prevent_sleep ?? true;
       state.completionSound = preferences.completion_sound ?? true;
       state.showPasswords = preferences.show_passwords ?? false;
       state.checkUpdates = preferences.check_updates ?? null;
@@ -199,24 +204,27 @@
   }
 
   async function savePreferences(units, bufferMib, completionSound = state.completionSound,
-    showPasswords = state.showPasswords, retries = state.retries, checkUpdates = state.checkUpdates) {
+    showPasswords = state.showPasswords, retries = state.retries, checkUpdates = state.checkUpdates,
+    preventSleep = state.preventSleep) {
     if (state.preferencesBusy) return false;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
     els.retries.disabled = true;
+    els.preventSleep.disabled = true;
     els.completionSound.disabled = true;
     els.checkUpdates.disabled = true;
     for (const input of els.passwordVisibility) input.disabled = true;
     try {
       await invoke("preferences_save", { preferences: {
         units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
-        retries, check_updates: checkUpdates,
+        retries, check_updates: checkUpdates, prevent_sleep: preventSleep,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
       state.retries = retries;
+      state.preventSleep = preventSleep;
       state.completionSound = completionSound;
       state.showPasswords = showPasswords;
       state.checkUpdates = checkUpdates;
@@ -252,6 +260,11 @@
 
   function savePasswordVisibility(event) {
     return savePreferences(state.units, state.bufferMib, state.completionSound, event.target.checked);
+  }
+
+  function savePreventSleep(event) {
+    return savePreferences(state.units, state.bufferMib, state.completionSound,
+      state.showPasswords, state.retries, state.checkUpdates, event.target.checked);
   }
 
   /* --------------------------------------------------------- release checks */
@@ -645,6 +658,7 @@
       verbose: els.verbose.checked,
       buffer_mib: buffer,
       retries,
+      prevent_sleep: state.preventSleep,
       units: state.units,
     };
   }
@@ -1538,6 +1552,7 @@
     els.buffer.addEventListener("change", saveBuffer);
     els.retries.addEventListener("input", validateRetries);
     els.retries.addEventListener("change", saveRetries);
+    els.preventSleep.addEventListener("change", savePreventSleep);
     els.btnChoose.addEventListener("click", chooseArchive);
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
     els.completionSound.addEventListener("change", saveCompletionSound);

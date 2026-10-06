@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::{ffi::Job, is_finished, TransferConfig};
+use crate::{ffi::Job, is_finished, sleep_inhibitor::SleepInhibitor, TransferConfig};
 
 const LOG_LIMIT: usize = 5000;
 
@@ -112,6 +112,10 @@ impl Batch {
         let worker = thread::Builder::new()
             .name("archive-batch".into())
             .spawn(move || {
+                // Windows execution requirements are tied to the calling thread, so this guard
+                // must be created and dropped by the batch controller itself. It remains active
+                // during cancellation cleanup as well as every archive in the batch.
+                let _sleep_inhibitor = SleepInhibitor::new(config.prevent_sleep);
                 loop {
                     {
                         let mut state = lock(&worker_state);
@@ -326,6 +330,7 @@ mod tests {
             verbose: false,
             buffer_mib: 1,
             retries: 3,
+            prevent_sleep: true,
             units: Units::Si,
         }
     }
