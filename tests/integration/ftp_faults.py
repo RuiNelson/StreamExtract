@@ -289,6 +289,40 @@ class FtpFaultTests(unittest.TestCase):
             self.assertEqual(server.files["/upload/hello.txt"], b"hello\n")
             self.assertEqual(server.deleted, [])
 
+    def test_rereading_pfs_pfsc_and_wrapped_volumes(self):
+        source = bytes(range(256)) * 4608 + b"end"
+        with zipfile.ZipFile(Path(__file__).parents[1] / "fixtures" / "pfs.zip") as fixtures:
+            for name in ("raw.ffpfsc", "nested.ffpfsc", "ufs.ffpfsc", "ufs2.ffpfsc"):
+                archive = Path(self.temp.name) / name
+                archive.write_bytes(fixtures.read(name))
+                for frontend in ("library", "cli"):
+                    with self.subTest(name=name, frontend=frontend), FtpServer(
+                            files={"/upload/large.bin": source[:19]}, fail_uploads=2, drop_after=65539,
+                            fail_target="/upload/large.bin") as server:
+                        if frontend == "library":
+                            with self.job(str(archive), server) as job:
+                                job.wait(timeout=30)
+                                self.assertEqual(job.result["status"], "success", job.describe())
+                                output = lib_log_text(job)
+                        else:
+                            result = self.cli(str(archive), server)
+                            output = result.stdout + result.stderr
+                            self.assertEqual(result.returncode, 0, output)
+                        self.assertIn("attempt 3/3", output)
+                        self.assertEqual(server.files["/upload/large.bin"], source)
+                        self.assertEqual(server.deleted, [])
+
+    def test_pfs_cancellation_removes_partial_file(self):
+        with zipfile.ZipFile(Path(__file__).parents[1] / "fixtures" / "pfs.zip") as fixtures:
+            for name in ("raw.ffpfsc", "nested.ffpfsc", "ufs.ffpfsc"):
+                archive = Path(self.temp.name) / name
+                archive.write_bytes(fixtures.read(name))
+                with self.subTest(name=name), FtpServer(fail_uploads=1, stall_retry_size=True,
+                                                       fail_target="/upload/large.bin") as server:
+                    with self.job(str(archive), server) as job:
+                        self.assert_cancelled(job, server)
+                        self.assertNotIn("/upload/large.bin", server.files)
+
     def test_retry_handles_a_lost_original_prefix_without_invalid_progress(self):
         source = bytes(range(251)) * 12000
         for streamed in (False, True):

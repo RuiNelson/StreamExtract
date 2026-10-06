@@ -15,6 +15,8 @@ FetchContent_MakeAvailable(doctest)
 set(_test_fixtures "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip")
 file(ARCHIVE_EXTRACT INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/exfat.zip" DESTINATION "${_test_fixtures}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pfs.zip")
+file(ARCHIVE_EXTRACT INPUT "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pfs.zip" DESTINATION "${_test_fixtures}")
 
 add_executable(streamextract_tests
   test_main.cpp
@@ -22,6 +24,7 @@ add_executable(streamextract_tests
   ../src/options.cpp
   test_archive.cpp
   test_exfat.cpp
+  test_pfs.cpp
   test_json.cpp
   test_pipe.cpp
   test_plan.cpp
@@ -41,6 +44,13 @@ else()
   find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
 endif()
 if(Python3_Interpreter_FOUND AND STREAMEXTRACT_BUILD_INTEGRATION_TESTS)
+  set(_pfs_library_args)
+  if(TARGET streamextractcore)
+    list(APPEND _pfs_library_args --lib $<TARGET_FILE:streamextractcore>)
+  endif()
+  add_test(NAME pfs COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/run.py" --sext $<TARGET_FILE:sext> ${_pfs_library_args} -k pfs)
+  set_tests_properties(pfs PROPERTIES TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   add_test(NAME ftps COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/ftps.py" --sext $<TARGET_FILE:sext> FtpsTests)
   add_test(NAME sftp COMMAND "${Python3_EXECUTABLE}"

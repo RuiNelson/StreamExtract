@@ -247,6 +247,23 @@ TEST_CASE("a real exFAT image is reported through the GUI's JSON contract") {
   streamextract_job_free(job);
 }
 
+TEST_CASE("PFS and UFS images are reported through the GUI's JSON contract") {
+  for (const std::string name : {"raw.ffpfsc", "exfat.ffpfsc", "ufs.ffpfsc", "volume.ufs"}) {
+    const std::string path = std::string(STREAMEXTRACT_TEST_FIXTURES) + "/" + name;
+    auto config = make_config(path, 1);
+    streamextract_job* job = streamextract_job_start(&config);
+    REQUIRE(job != nullptr);
+    const std::string json = wait_for(job, "\"phase\":\"finished\"");
+    CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));
+    CHECK(contains(json, name == "volume.ufs" ? "\"format\":\"UFS\",\"compression\":null"
+                                              : "\"format\":\"PFS\",\"compression\":\"PFSC\""));
+    CHECK(contains(json, name == "exfat.ffpfsc" ? "\"files\":19" : "\"files\":5"));
+    CHECK(contains(json, "no checksum of the file contents"));
+    CHECK(contains(json, "\"prompt\":null"));
+    streamextract_job_free(job);
+  }
+}
+
 TEST_CASE("a compressed tar archive is read as it is uploaded") {
   const TempFile archive("streamextractcore-tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz));
   const std::string path = archive.path();

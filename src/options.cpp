@@ -20,7 +20,8 @@ ParsedOptions parse_options(int argc, char** argv) {
   std::string archive_password;
 
   CLI::App app{
-      "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume image, straight to an FTP, "
+      "Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT, PFS or UFS volume image, straight to "
+      "an FTP, "
       "FTPS or SFTP server, without extracting it "
       "to disk.",
       "sext"};
@@ -28,7 +29,7 @@ ParsedOptions parse_options(int argc, char** argv) {
   app.get_formatter()->column_width(28);
 
   app.add_option("--file", o.file,
-                 "RAR, ZIP, 7z or tar archive (first volume of a set), or a single exFAT volume image")
+                 "RAR, ZIP, 7z or tar archive (first volume of a set), or a single exFAT, PFS or UFS volume image")
       ->required()
       ->check(CLI::ExistingFile.description(""))
       ->type_name("PATH");

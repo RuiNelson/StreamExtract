@@ -78,3 +78,4 @@ __pycache__/
 /gui/src-tauri/target/
 /gui/src-tauri/gen/
 *.sh
+/FreeBSD

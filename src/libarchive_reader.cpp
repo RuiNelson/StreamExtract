@@ -341,6 +341,8 @@ LibArchiveReader::LibArchiveReader(std::vector<std::string> parts, ArchiveFormat
       break;
     case ArchiveFormat::SevenZip:  // SevenZipArchive.
     case ArchiveFormat::Exfat:     // ExfatArchive.
+    case ArchiveFormat::Pfs:       // PfsArchive.
+    case ArchiveFormat::Ufs:       // UfsArchive.
     case ArchiveFormat::Rar:
       break;
   }

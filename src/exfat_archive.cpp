@@ -44,7 +44,7 @@ std::filesystem::path to_path(const std::string& path) {
 bool signature(const uint8_t* bytes) { return std::memcmp(bytes + 3, "EXFAT   ", 8) == 0; }
 
 struct Image {
-  std::ifstream file;
+  std::shared_ptr<streamextract::ImageReader> source;
   uint64_t size = 0;
   uint64_t sectors = 0;
   uint16_t sector_size = 512;
@@ -52,23 +52,16 @@ struct Image {
   uint64_t cluster_bytes = 0;
 
   bool read(uint64_t offset, uint8_t* data, size_t count) {
-    if (offset > size || count > size - offset ||
-        offset > static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()) ||
-        count > static_cast<size_t>(std::numeric_limits<std::streamsize>::max())) {
+    try {
+      source->read(offset, data, count);
+      return true;
+    } catch (const streamextract::ArchiveError&) {
       return false;
     }
-    file.clear();
-    file.seekg(static_cast<std::streamoff>(offset));
-    file.read(reinterpret_cast<char*>(data), static_cast<std::streamsize>(count));
-    return file.good();
   }
 
-  explicit Image(const std::string& path) : file(to_path(path), std::ios::binary) {
-    if (!file) exfat_error("cannot open the image");
-    file.seekg(0, std::ios::end);
-    const std::streamoff length = file.tellg();
-    if (length < 0) exfat_error("cannot determine the image size");
-    size = static_cast<uint64_t>(length);
+  explicit Image(std::shared_ptr<streamextract::ImageReader> input) : source(std::move(input)) {
+    size = source->size();
     std::array<uint8_t, 512> boot{};
     if (!read(0, boot.data(), boot.size())) exfat_error("truncated boot sector");
     if (!signature(boot.data())) {
@@ -238,7 +231,8 @@ struct ExfatArchive::Impl {
   bool pending_directory = false;
   bool aborted = false;
 
-  Impl(const std::string& path, ArchiveCallbacks cb) : image(path), callbacks(std::move(cb)) {
+  Impl(std::shared_ptr<ImageReader> source, ArchiveCallbacks cb)
+      : image(std::move(source)), callbacks(std::move(cb)) {
     flags.checksums = false;
     flags.size = image.size;
     flags.volume_count = 1;
@@ -290,7 +284,17 @@ bool ExfatArchive::recognizes(const std::string& path) {
 }
 
 ExfatArchive::ExfatArchive(const std::string& path, ArchiveCallbacks callbacks)
-    : impl_(std::make_unique<Impl>(path, std::move(callbacks))) {
+    : ExfatArchive(open_image(path), std::move(callbacks)) {}
+
+bool ExfatArchive::recognizes(ImageReader& image) {
+  if (image.size() < 11) return false;
+  std::array<uint8_t, 11> header{};
+  image.read(0, header.data(), header.size());
+  return signature(header.data());
+}
+
+ExfatArchive::ExfatArchive(std::shared_ptr<ImageReader> image, ArchiveCallbacks callbacks)
+    : impl_(std::make_unique<Impl>(std::move(image), std::move(callbacks))) {
   std::lock_guard lock(fatfs_mutex);
   Impl& m = *impl_;
   for (size_t i = 0; i < images.size(); ++i) {

@@ -489,7 +489,7 @@ TEST_CASE("compressed tar archives") {
 TEST_CASE("files that are not archives") {
   const TempDir dir;
   const unsigned char text[] = "just some text, long enough to look like a file";
-  CHECK(error_text(dir.write("text.rar", text)) == "not a RAR, ZIP, 7z or tar archive, or an exFAT image");
+  CHECK(error_text(dir.write("text.rar", text)) == "not a RAR, ZIP, 7z or tar archive, or an exFAT, PFS or UFS image");
   // A ZIP signature with nothing after it.
   const unsigned char truncated[] = {'P', 'K', 3, 4, 0, 0, 0, 0};
   CHECK(error_text(dir.write("truncated.zip", truncated)) == "not a valid ZIP archive");

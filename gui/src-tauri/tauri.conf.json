@@ -26,8 +26,8 @@
   "bundle": {
     "active": true,
     "category": "Utility",
-    "shortDescription": "Upload archives and exFAT volume images to an FTP server without extracting them",
-    "longDescription": "StreamExtract streams the contents of RAR, ZIP, 7z and tar archives, and exFAT volume images, to an FTP server without extracting anything to disk.",
+    "shortDescription": "Upload archives and exFAT, PFS or UFS images to an FTP server without extracting them",
+    "longDescription": "StreamExtract streams the contents of RAR, ZIP, 7z and tar archives, and exFAT, PFS or UFS images, to an FTP server without extracting anything to disk.",
     "copyright": "Rui Nelson",
     "publisher": "Rui Nelson",
     "license": "MIT",

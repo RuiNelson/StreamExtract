@@ -11,9 +11,9 @@
 
 namespace streamextract {
 
-enum class ArchiveFormat { Rar, Zip, SevenZip, Tar, Exfat };
+enum class ArchiveFormat { Rar, Zip, SevenZip, Tar, Exfat, Pfs, Ufs };
 
-// "RAR", "ZIP", "7z", "tar", "exFAT".
+// "RAR", "ZIP", "7z", "tar", "exFAT", "PFS", "UFS".
 const char* format_name(ArchiveFormat format);
 
 enum class EntryKind {
@@ -42,9 +42,9 @@ struct ArchiveFlags {
   // Skipping an entry still decompresses it (solid RAR and 7z).
   bool skip_decompresses = false;
   // Entries carry a checksum of their data, verified by test(). False for
-  // tar (header checksums only) and exFAT (metadata checksums only).
+  // tar (header checksums only), exFAT, unsigned PFS and UFS.
   bool checksums = true;
-  // Compressed tar: "gzip", "bzip2", "xz", "lzma", "zstd" or "lz4"; empty otherwise.
+  // PFS: "PFSC"; compressed tar: "gzip", "bzip2", "xz", "lzma", "zstd" or "lz4"; empty otherwise.
   std::string compression;
   // The entries can only be reached by decompressing everything before them
   // (compressed tar): streamextract reads such an archive once, planning each file
@@ -111,7 +111,7 @@ class Archive {
 };
 
 // Opens a RAR, ZIP, 7z or tar archive (also compressed: .tar.gz...) or a single
-// exFAT volume image, recognized
+// exFAT, unsigned PFS or UFS volume image, recognized
 // by its content. A split ZIP, 7z or tar archive (name.zip.001, name.zip.002,
 // ...) is opened through its first part. Throws ArchiveError.
 std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mode, ArchiveCallbacks callbacks);

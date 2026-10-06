@@ -28,7 +28,7 @@ extern "C" {
 typedef struct streamextract_job streamextract_job;
 
 typedef struct streamextract_job_config {
-  const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT volume image. */
+  const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT, PFS or UFS volume image. */
   const char* archive_password; /* NULL: asked through the job when needed. */
   const char* host;             /* Host name or address, without a URL scheme or a path. */
   int port;                     /* 1-65535. */

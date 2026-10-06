@@ -4,6 +4,7 @@
 #include <string>
 
 #include "archive.hpp"
+#include "image_reader.hpp"
 
 namespace streamextract {
 
@@ -12,7 +13,9 @@ namespace streamextract {
 class ExfatArchive final : public Archive {
  public:
   static bool recognizes(const std::string& path);
+  static bool recognizes(ImageReader& image);
   ExfatArchive(const std::string& path, ArchiveCallbacks callbacks);
+  ExfatArchive(std::shared_ptr<ImageReader> image, ArchiveCallbacks callbacks);
   ~ExfatArchive() override;
   ExfatArchive(const ExfatArchive&) = delete;
   ExfatArchive& operator=(const ExfatArchive&) = delete;

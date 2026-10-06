@@ -1,13 +1,12 @@
 # StreamExtract
 
-Uploads the contents of a RAR, ZIP, 7z or tar archive, or an exFAT volume
-image, straight to an FTP
-server, **without extracting it to disk first**.
+Stream files from archives and filesystem images straight to your server,
+**without extracting them to disk**.
 
 The usual way to publish a huge archive is to extract it (needing as much free
 space as the unpacked data, with the CPU busy and the network idle) and then
 upload it (network busy, CPU idle). `StreamExtract` streams each file from the
-decompressor to the FTP data connection instead:
+decompressor to the server connection instead:
 
 - **No temporary files**: nothing is written to the local disk.
 - **Automatic upload retries**: up to 3 attempts for the initial connection/login
@@ -33,6 +32,59 @@ Both are published as assets of each release on the repository's
 per platform. Extracting them needs a program that reads RAR5 (WinRAR, 7-Zip,
 Keka, `unrar`, ...).
 
+## Supported reading formats
+
+The desktop app and command-line tool read the same formats. Inputs are
+recognized by their contents, so the extensions below are examples rather than
+requirements.
+
+| Format | Typical input files | Supported features |
+|---|---|---|
+| **RAR** | `.rar`, `.part1.rar` | RAR 5.x and older formats, multi-volume and solid archives, password protection and encrypted file names. |
+| **ZIP** | `.zip`, `.zip.001` | Stored, Deflate, BZip2, LZMA, XZ, Zstandard and PPMd; Zip64; ZipCrypto and AES encryption; numbered split parts. |
+| **7z** | `.7z`, `.7z.001` | LZMA, LZMA2, PPMd, BZip2, Deflate and Zstandard with filters; solid archives; AES-256 encryption, including file names; numbered split parts. |
+| **tar** | `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.zst`, `.tar.001` | POSIX, GNU, pax and older tar variants; gzip, bzip2, xz, lzma, Zstandard and LZ4 compression; numbered split parts. |
+| **exFAT** | `.exfat` | Raw volume images, Unicode names, contiguous and fragmented files, files over 4 GiB and uninitialized data returned as zeroes. |
+| **PlayStation PFS/PFSC** | `.ffpfsc`, `.ffpfs`, `.pfs` | Unsigned PS4/PS5 MkPFS images with 32-bit contiguous inodes; raw and PFSC-compressed files; automatic reading of a single wrapped exFAT, UFS or PFS image. |
+| **UFS1 / UFS2** | `.ffpkg`, `.ufs` | Raw volumes in either byte order, indirect blocks and sparse files; also readable inside PFS/PFSC wrappers. |
+
+For split archives, select the first volume. Filesystem images must contain a
+single raw volume without a partition table; split images are not supported.
+PFS images with signatures, encryption or 64-bit inodes are rejected.
+Wrapped images are decoded in memory without an OS mount or temporary extraction.
+
+ZIP and 7z Deflate64 entries, old-style spanned ZIP sets (`.z01`, `.z02`, ...)
+and standalone compressed files that are not tar archives (such as a plain
+`.gz`) are not supported. Tar, exFAT, unsigned PFS and UFS have no complete
+file-data checksum, so their uploads include a verification warning.
+See [How it works](#how-it-works) for format details and further limits.
+
+## Supported file transfer protocols
+
+All four choices are available in the desktop app's **Protocol** field and in
+the command-line tool. FTP is the default; every protocol accepts a custom port.
+
+| Protocol | CLI selection | Default port | Connection |
+|---|---|---|---|
+| **FTP** | `--protocol ftp` (or omit it) | `21` | Unencrypted control and data connections; passive or active mode. |
+| **FTPS (explicit)** | `--protocol ftps` | `21` | Upgrades FTP to TLS with `AUTH TLS`; encrypts control and data connections; passive or active mode. |
+| **FTPS (implicit)** | `--protocol ftps --ftps-mode implicit` | `990` | Starts TLS immediately; encrypts control and data connections; passive or active mode. |
+| **SFTP** | `--protocol sftp` | `22` | Transfers over SSH with password or private-key authentication. |
+
+FTP and FTPS use passive mode by default; select active mode with `--mode active`
+or the app's **Mode** field. Both FTPS modes verify the server certificate and
+hostname. A private CA can be supplied with the CLI's `--cacert` option.
+
+SFTP supports RSA, ECDSA and Ed25519 OpenSSH keys, including encrypted private
+keys. Host-key verification is optional: use `--known-hosts` in the CLI or
+**SSH settings** in the app. SSH agents, keyboard-interactive authentication
+and SSH configuration files are not used.
+
+All protocols share the same remote-size policy: skip complete files, resume
+smaller files, and delete oversized files before uploading them again. Upload
+retries, cancellation and incomplete-file cleanup apply to every protocol.
+See [Command line](#command-line-sext) for authentication and trust options.
+
 ## Desktop app (StreamExtract)
 
 <table>
@@ -45,7 +97,8 @@ Keka, `unrar`, ...).
 The app offers:
 
 - **Archives**: drop RAR, ZIP, 7z or tar archives (also compressed: `.tar.gz`,
-  `.tgz`, `.tar.xz`...), or an exFAT volume image (`.exfat`), on the window,
+  `.tgz`, `.tar.xz`...), or an exFAT, PFS (`.ffpfsc`, `.ffpfs`) or UFS (`.ffpkg`)
+  volume image, on the window,
   or select several with **Add File**. **Remove File** removes an archive from
   the queue before uploading. Archives run in order with the same server,
   directory and other settings; a failed archive does not stop the remaining ones.
@@ -120,7 +173,8 @@ sext --file archive.rar \
 ```
 
 The input can be a RAR, ZIP, 7z or tar archive (also compressed, such as
-`backup.tar.zst`), or a single exFAT volume image (`.exfat`); it is recognized
+`backup.tar.zst`), or a single exFAT, unsigned PFS (`.ffpfsc`, `.ffpfs`) or UFS
+volume image; it is recognized
 by its content. Multi-volume and
 password-protected archives are supported:
 
@@ -130,7 +184,7 @@ password-protected archives are supported:
 
 | Option | Description |
 |---|---|
-| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT volume image (`.exfat`), recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
+| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT, unsigned PFS (`.ffpfsc`, `.ffpfs`) or UFS (`.ufs`, `.ffpkg`) image, recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
 | `--host HOST` | Server name or address (IPv4 or IPv6). |
 | `--protocol ftp\|ftps\|sftp` | Default `ftp`. `ftps` uses TLS; `sftp` transfers over SSH. Available in the CLI and GUI. |
 | `--ftps-mode explicit\|implicit` | Default `explicit` (AUTH TLS). `implicit` starts TLS immediately. Requires `--protocol ftps`. |
@@ -259,7 +313,10 @@ RAR archives are read with UnRAR's test mode, 7z archives with 7-Zip's own
 code (its LZMA SDK), ZIP and tar archives with libarchive, and exFAT volume
 images with [FatFs](https://elm-chan.org/fsw/ff/). Contents are read in memory,
 without creating local files, and go into the buffer, which the FTP upload drains.
-A file only counts as uploaded after its checksum was confirmed (tar and exFAT have none,
+Unsigned PlayStation PFS images use a built-in reader and zlib for PFSC blocks;
+UFS uses a built-in reader based on FreeBSD's on-disk layouts.
+A file only counts as uploaded after its checksum was confirmed (tar, exFAT,
+unsigned PFS and UFS have no complete checksum of each file,
 see below). On an upload failure, the engine verifies the remaining source data,
 checks the remote size, and rereads the entry to resume from that offset. Retries
 use the same bounded memory buffer; solid archives and compressed tar may need
@@ -328,9 +385,25 @@ Behaviour, in both:
   file data is returned as zeroes. FatFs supports one FAT, a contiguous allocation
   bitmap in the first root-directory cluster, at least 256 data clusters, and at
   most 32768 sectors per cluster; volumes outside these limits are rejected.
+- **PlayStation PFS**: unsigned PS4/PS5 images produced by
+  [MkPFS](https://github.com/PSBrew/MkPFS), including `.ffpfsc` and `.ffpfs`,
+  with 32-bit contiguous inodes and 4–64 KiB filesystem blocks. Both raw files
+  and PFSC files containing a mix of zlib-compressed and raw 64 KiB blocks are
+  supported. A PFS containing a single exFAT, UFS or PFS image is automatically
+  opened to upload the files inside it, directly into the chosen directory.
+  Nested wrappers are decoded on demand with bounded caches; no temporary image
+  or OS mount is needed. Other single-file payloads are uploaded as ordinary files.
+  Signed, encrypted and 64-bit-inode PFS images, and split images, are rejected.
+  Compressed blocks are checked by zlib, but unsigned PFS and raw PFSC blocks
+  have no complete file checksum, so uploads include the same warning as tar.
+- **UFS**: raw UFS1/UFS2 volumes (`.ufs`, `.ffpkg`) in either byte order,
+  including those wrapped in PFS/PFSC. Direct, single-, double- and triple-indirect
+  blocks and sparse holes are supported. Superblock and inode checksums are verified when
+  present; UFS has no file-data checksum. Links and special files are skipped
+  by the existing planner. Partition tables and split images are not supported.
 - The **format** is recognized by the content of the file, not by its extension.
 - **Names** of ZIP and tar archives are uploaded as Unicode NFC, the same
-  whatever system runs StreamExtract; RAR, 7z and exFAT names are uploaded as the archive
+  whatever system runs StreamExtract; RAR, 7z, exFAT, PFS and UFS names are uploaded as the archive
   stores them.
 - **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
   control characters never escape the destination directory.
@@ -514,10 +587,15 @@ tests resume, retry and cancellation using controlled scenarios in that image:
 python3 tests/integration/ftps.py --sext build/sext
 python3 tests/integration/sftp.py --sext build/sext --lib build/libstreamextractcore.dylib
 python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
+python3 tests/integration/run.py --sext build/sext --lib build/libstreamextractcore.dylib -k pfs
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol sftp
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps
 python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps --ftps-mode implicit
 ```
+
+The PFS-only run (`-k pfs`) uses checked-in MkPFS and makefs fixtures and needs
+no external archiver. It checks PFS, PFSC, wrapped exFAT/UFS images and nested
+wrappers through both the CLI and C API, including re-runs, resume and replacement.
 
 To register the Docker suites with CTest, configure with
 `-DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON` (and
@@ -549,8 +627,9 @@ The Rust side has its own unit tests, which link the built library:
 | [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
 | [LZMA SDK](https://www.7-zip.org/sdk.html) | 7z reading (7-Zip's own code) | Public domain |
 | [FatFs](https://elm-chan.org/fsw/ff/) | exFAT volume image reading | FatFs license (BSD-style) |
+| [FreeBSD UFS layouts](https://cgit.freebsd.org/src/tree/sys/ufs) | UFS volume image reading | BSD-2-Clause and BSD-3-Clause |
 | [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
-| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive (and BZip2, Deflate and Zstandard in 7z) | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
+| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive, PFSC, and BZip2, Deflate and Zstandard in 7z | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
 | [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
 | [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client | curl (MIT/X derivative) |

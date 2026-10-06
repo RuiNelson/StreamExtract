@@ -8,8 +8,10 @@
 
 #include "exfat_archive.hpp"
 #include "libarchive_reader.hpp"
+#include "pfs_archive.hpp"
 #include "rar_archive.hpp"
 #include "sevenzip_archive.hpp"
+#include "ufs_archive.hpp"
 #include "util/text.hpp"
 
 namespace streamextract {
@@ -48,6 +50,10 @@ const char* format_name(ArchiveFormat format) {
       return "tar";
     case ArchiveFormat::Exfat:
       return "exFAT";
+    case ArchiveFormat::Pfs:
+      return "PFS";
+    case ArchiveFormat::Ufs:
+      return "UFS";
   }
   return "RAR";
 }
@@ -96,6 +102,19 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
     return std::make_unique<ExfatArchive>(path, std::move(callbacks));
   }
 
+  if (file_exists(parts.front())) {
+    auto image = open_image(parts.front());
+    const bool pfs = PfsArchive::recognizes(*image);
+    const bool ufs = !pfs && UfsArchive::recognizes(*image);
+    if (pfs || ufs) {
+      if (parts.size() != 1)
+        throw ArchiveError(ArchiveError::Kind::Other,
+                           "split PFS/UFS images are not supported; use a single image");
+      if (pfs) return std::make_unique<PfsArchive>(std::move(image), std::move(callbacks));
+      return std::make_unique<UfsArchive>(std::move(image), std::move(callbacks));
+    }
+  }
+
   // The formats libarchive reads are recognized by libarchive itself. Anything
   // else goes to UnRAR, which also finds RAR archives inside self-extracting
   // executables, and reports the file as unreadable or not an archive.
@@ -112,13 +131,20 @@ std::unique_ptr<Archive> open_archive(const std::string& path, Archive::Mode mod
                                    "are supported",
                                    file_name_of(path)));
   }
-  if (path.size() >= 6) {
-    std::string extension = path.substr(path.size() - 6);
+  const size_t extension_start = path.find_last_of('.');
+  if (extension_start != std::string::npos) {
+    std::string extension = path.substr(extension_start);
     for (char& c : extension) {
       if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
     }
     if (extension == ".exfat") {
       return std::make_unique<ExfatArchive>(path, std::move(callbacks));
+    }
+    if (extension == ".ffpfsc" || extension == ".ffpfs" || extension == ".pfs") {
+      return std::make_unique<PfsArchive>(open_image(path), std::move(callbacks));
+    }
+    if (extension == ".ufs" || extension == ".ffpkg") {
+      return std::make_unique<UfsArchive>(open_image(path), std::move(callbacks));
     }
   }
   return std::make_unique<RarArchive>(path, mode, std::move(callbacks));

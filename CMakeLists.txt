@@ -43,15 +43,18 @@ add_library(streamextract_core STATIC
   src/archive.cpp
   src/exfat_archive.cpp
   src/ftp_client.cpp
+  src/image_reader.cpp
   src/libarchive_reader.cpp
   src/logger.cpp
   src/plan.cpp
+  src/pfs_archive.cpp
   src/progress.cpp
   src/rar_archive.cpp
   src/sevenzip_archive.cpp
   src/sevenzip_methods.cpp
   src/summary.cpp
   src/transfer.cpp
+  src/ufs_archive.cpp
   src/util/json.cpp
   src/util/remote_path.cpp
   src/util/ssh_settings.cpp

@@ -74,7 +74,11 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
     }
     if (!listing.flags.checksums) {
       log.warn("{} {} have no checksum of the file contents: files are uploaded without verification",
-               format_name(listing.format), listing.format == ArchiveFormat::Exfat ? "images" : "archives");
+               format_name(listing.format),
+               listing.format == ArchiveFormat::Exfat || listing.format == ArchiveFormat::Pfs ||
+                       listing.format == ArchiveFormat::Ufs
+                   ? "images"
+                   : "archives");
     }
     if (listing.flags.stream_only) {
       return listing;  // Listing would decompress it all: the transfer plans each file as it reads it.

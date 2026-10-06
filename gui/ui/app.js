@@ -15,7 +15,7 @@
   const UNKNOWN_TIME = "--:--:--";
   const LEVELS = ["debug", "info", "warn", "error"];
   // What the file dialog offers; .001 is the first part of a split ZIP, 7z or tar archive.
-  const ARCHIVE_EXTENSIONS = ["rar", "zip", "7z", "tar", "exfat", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "lzma",
+  const ARCHIVE_EXTENSIONS = ["rar", "zip", "7z", "tar", "exfat", "ffpfsc", "ffpfs", "pfs", "ufs", "ffpkg", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "lzma",
     "zst", "tzst", "lz4", "001"];
 
   const $ = (id) => document.getElementById(id);
@@ -554,7 +554,7 @@
     setHidden(els.archiveList, count === 0);
     const unusual = paths.some((path) => !new RegExp(`\\.(${ARCHIVE_EXTENSIONS.join("|")})$`, "i").test(path));
     setText(els.archiveHint, unusual
-      ? "Some files do not look like archives or exFAT images. StreamExtract will still try to read them." : "");
+      ? "Some files do not look like archives or filesystem images. StreamExtract will still try to read them." : "");
     setHidden(els.archiveHint, !unusual);
     updateSubmitState();
   }
@@ -580,7 +580,7 @@
       const selected = await tauri.dialog.open({
         multiple: true,
         directory: false,
-        filters: [{ name: "Archives and exFAT images", extensions: ARCHIVE_EXTENSIONS }],
+        filters: [{ name: "Archives and filesystem images", extensions: ARCHIVE_EXTENSIONS }],
       });
       if (selected) addArchives(Array.isArray(selected) ? selected : [selected]);
     } catch (e) {

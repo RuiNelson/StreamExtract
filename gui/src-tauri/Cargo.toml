@@ -1,7 +1,7 @@
 [package]
 name = "StreamExtract"
 version = "2.5.0"
-description = "Desktop front-end for StreamExtract: uploads the contents of a RAR, ZIP, 7z or tar archive to an FTP server without extracting it to disk"
+description = "Desktop front-end for StreamExtract: uploads the contents of a RAR, ZIP, 7z or tar archive, or exFAT, PFS or UFS image, to an FTP server without extracting it to disk"
 authors = ["Rui Nelson"]
 license = "MIT"
 edition = "2021"

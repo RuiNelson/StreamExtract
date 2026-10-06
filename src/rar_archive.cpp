@@ -148,7 +148,7 @@ std::string rar_error_message(int code) {
     case ERAR_BAD_DATA:
       return "corrupt data (checksum mismatch)";
     case ERAR_BAD_ARCHIVE:
-      return "not a RAR, ZIP, 7z or tar archive, or an exFAT image";
+      return "not a RAR, ZIP, 7z or tar archive, or an exFAT, PFS or UFS image";
     case ERAR_UNKNOWN_FORMAT:
       return "unsupported archive format or compression method";
     case ERAR_EOPEN:
