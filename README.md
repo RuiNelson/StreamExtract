@@ -522,7 +522,7 @@ python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol
 To register the Docker suites with CTest, configure with
 `-DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON` (and
 `-DSTREAMEXTRACT_BUILD_LIBRARY=ON` for the fault suite). The normal unit and
-C API smoke tests do not require Docker. Linux CI enables the Docker suites.
+C API smoke tests do not require Docker; CI runs only those unit-level tests.
 
 `--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
 container address is reachable directly; Docker Desktop only publishes ports.
