@@ -72,7 +72,11 @@ class SftpTests(unittest.TestCase):
                 for name, data in entries:
                     info = tarfile.TarInfo(name)
                     info.size, info.mtime = len(data), 1700000000
-                    archive.addfile(info, io.BytesIO(data))
+                    if name.endswith("/"):
+                        info.type = tarfile.DIRTYPE
+                        archive.addfile(info)
+                    else:
+                        archive.addfile(info, io.BytesIO(data))
         else:
             with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for name, data in entries:
@@ -84,7 +88,10 @@ class SftpTests(unittest.TestCase):
         command = [ARGS.sext, "--file", str(archive), "--host", self.server.host,
                    "--port", str(self.server.ssh_port), "--protocol", "sftp", "--no-tui", "--retries", "1"]
         for name, value in options.items():
-            if value is not None:
+            if isinstance(value, bool):
+                if value:
+                    command += ["--" + name.replace("_", "-")]
+            elif value is not None:
                 command += ["--" + name.replace("_", "-"), str(value)]
         return subprocess.run(command, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
 
@@ -125,6 +132,119 @@ class SftpTests(unittest.TestCase):
         self.success(result)
         self.assertIn("Logged in as " + getpass.getuser(), result.stdout)
         self.assertEqual((self.remote / "default-user.txt").read_bytes(), b"local username")
+
+    def test_staging_resumes_then_renames_with_quoted_paths(self):
+        entries = [("same.txt", b"same"), ("resume.txt", b"abcdef"),
+                   ('spaces 日本語/a "quote" #%.txt', b"escaped"), ("empty.txt", b"")]
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                directory = f"staging-{streamed}"
+                destination = self.remote / directory
+                stage = destination / '.stage "quoted"'
+                stage.mkdir(parents=True)
+                (stage / "same.txt").write_bytes(b"same")
+                (stage / "resume.txt").write_bytes(b"XY")
+                (stage / "unrelated.txt").write_bytes(b"keep")
+                (destination / "resume.txt").write_bytes(b"final!")
+                self.server.sync()
+                result = self.transfer(self.archive(entries, streamed), user=USER, password=PASSWORD,
+                                       directory=directory, staging=directory + '/.stage "quoted"')
+                self.success(result)
+                self.assertIn("Resuming resume.txt at byte 2", result.stdout)
+                for name, contents in entries:
+                    self.assertEqual((destination / name).read_bytes(), b"XYcdef" if name == "resume.txt" else contents)
+                    self.assertFalse((stage / name).exists())
+                self.assertEqual((stage / "unrelated.txt").read_bytes(), b"keep")
+
+    def test_mkdir_controls_both_staging_and_destination(self):
+        archive = self.archive([("file.txt", b"file")])
+        for destination_exists, staging_exists in ((True, False), (False, True), (False, False)):
+            with self.subTest(destination_exists=destination_exists, staging_exists=staging_exists):
+                name = f"mkdir-{destination_exists}-{staging_exists}"
+                destination = self.remote / (name + "-destination")
+                staging = self.remote / (name + "-staging")
+                if destination_exists:
+                    destination.mkdir()
+                if staging_exists:
+                    staging.mkdir()
+                self.server.sync()
+                options = dict(user=USER, password=PASSWORD, directory=destination.name, staging=staging.name)
+                result = self.transfer(archive, **options)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("does not exist", result.stdout + result.stderr)
+                self.assertEqual(destination.is_dir(), destination_exists)
+                self.assertEqual(staging.is_dir(), staging_exists)
+                self.success(self.transfer(archive, mkdir=True, **options))
+                self.assertEqual((destination / "file.txt").read_bytes(), b"file")
+                self.assertEqual(list(staging.iterdir()), [])
+
+    def test_staging_moves_whole_folders_and_keeps_unrelated_hidden_files(self):
+        entries = [('whole 日本語/a "quote".txt', b"a"), ("whole 日本語/sub/b.txt", b"b"),
+                   ("whole 日本語/empty/", b""), ("existing/subtree/file.txt", b"new"),
+                   ("mixed/file.txt", b"file")]
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                name = f"folder-moves-{streamed}"
+                destination = self.remote / (name + "-destination")
+                stage = self.remote / (name + "-stage")
+                (destination / "existing").mkdir(parents=True)
+                (destination / "existing/unrelated.txt").write_bytes(b"preserve")
+                (stage / "mixed").mkdir(parents=True)
+                (stage / "mixed/.unrelated.txt").write_bytes(b"keep")
+                self.server.sync()
+                result = self.transfer(self.archive(entries, streamed), user=USER, password=PASSWORD,
+                                       directory=destination.name, staging=stage.name)
+                self.success(result)
+                for entry, contents in entries:
+                    if entry.endswith("/"):
+                        self.assertTrue((destination / entry).is_dir())
+                    else:
+                        self.assertEqual((destination / entry).read_bytes(), contents)
+                    self.assertFalse((stage / entry).exists())
+                self.assertEqual((destination / "existing/unrelated.txt").read_bytes(), b"preserve")
+                self.assertEqual((stage / "mixed/.unrelated.txt").read_bytes(), b"keep")
+                self.assertFalse((destination / "mixed/.unrelated.txt").exists())
+                self.assertIn("Moved directory " + HOME + "/" + stage.name + "/whole 日本語 with its contents", result.stdout)
+                self.assertIn("Moved directory " + HOME + "/" + stage.name + "/existing/subtree with its contents", result.stdout)
+                self.assertNotIn("Moved directory " + HOME + "/" + stage.name + "/mixed with its contents", result.stdout)
+
+    def test_staging_recovers_contents_split_between_stage_and_destination(self):
+        entries = [("moved/file.txt", b"moved"), ("moved/empty/", b""),
+                   ("mixed/already.txt", b"already"), ("mixed/pending.txt", b"pending"),
+                   ("mixed/resume.txt", b"abcdef"), ("not-complete.txt", b"complete"), ("empty.txt", b"")]
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                name = f"recovery-{streamed}"
+                destination = self.remote / (name + "-destination")
+                stage = self.remote / (name + "-stage")
+                (destination / "moved/empty").mkdir(parents=True)
+                (destination / "moved/file.txt").write_bytes(b"moved")
+                moved_time = (destination / "moved/file.txt").stat().st_mtime_ns
+                (destination / "mixed").mkdir()
+                (destination / "mixed/already.txt").write_bytes(b"already")
+                (destination / "mixed/resume.txt").write_bytes(b"final!")
+                (destination / "not-complete.txt").write_bytes(b"much larger old data")
+                (destination / "empty.txt").write_bytes(b"")
+                (stage / "mixed").mkdir(parents=True)
+                (stage / "mixed/pending.txt").write_bytes(b"pending")
+                (stage / "mixed/resume.txt").write_bytes(b"XY")
+                self.server.sync()
+                result = self.transfer(self.archive(entries, streamed), user=USER, password=PASSWORD,
+                                       directory=destination.name, staging=stage.name)
+                self.success(result)
+                self.assertIn("Resuming mixed/resume.txt at byte 2", result.stdout)
+                self.assertNotIn("Uploaded moved/file.txt", result.stdout)
+                self.assertNotIn("Uploaded mixed/already.txt", result.stdout)
+                self.assertNotIn("Uploaded empty.txt", result.stdout)
+                for entry, contents in entries:
+                    if entry.endswith("/"):
+                        self.assertTrue((destination / entry).is_dir())
+                    else:
+                        self.assertEqual((destination / entry).read_bytes(),
+                                         b"XYcdef" if entry == "mixed/resume.txt" else contents)
+                    self.assertFalse((stage / entry).exists())
+                self.assertEqual((destination / "moved/file.txt").stat().st_mtime_ns, moved_time)
+                self.assertFalse((stage / "moved").exists())
 
     def test_explicit_rsa_private_key_without_public_key_file(self):
         key = self.key("rsa", "rsa", pem=True)

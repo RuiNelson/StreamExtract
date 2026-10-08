@@ -29,7 +29,11 @@ class FtpsTests(unittest.TestCase):
                 for name, payload in entries:
                     header = tarfile.TarInfo(name)
                     header.size = len(payload)
-                    archive.addfile(header, io.BytesIO(payload))
+                    if name.endswith("/"):
+                        header.type = tarfile.DIRTYPE
+                        archive.addfile(header)
+                    else:
+                        archive.addfile(header, io.BytesIO(payload))
         else:
             with zipfile.ZipFile(target, "w") as archive:
                 for name, payload in entries:
@@ -105,6 +109,201 @@ class FtpsTests(unittest.TestCase):
                         if not implicit:
                             self.assertEqual(server.commands[0], ("AUTH", "TLS"))
 
+    def test_real_server_staging_for_ftp_explicit_and_implicit_ftps(self):
+        root = Path(self.temp.name) / "remote"
+        server = Server(root)
+        self.addCleanup(server.close)
+        entries = [("same.txt", b"same"), ("resume.txt", b"abcdef"),
+                   ('nested 日本語/a "quote" #%.txt', b"nested"), ("empty.txt", b"")]
+        for protocol, mode in (("ftp", "explicit"), ("ftps", "explicit"), ("ftps", "implicit")):
+            for streamed in (False, True):
+                with self.subTest(protocol=protocol, mode=mode, streamed=streamed):
+                    directory = f"staging-{protocol}-{mode}-{streamed}"
+                    destination = root / directory
+                    stage = destination / ".staging"
+                    stage.mkdir(parents=True)
+                    (stage / "same.txt").write_bytes(b"same")
+                    (stage / "resume.txt").write_bytes(b"XY")
+                    (stage / "unrelated.txt").write_bytes(b"keep")
+                    (destination / "resume.txt").write_bytes(b"final!")
+                    server.sync()
+                    port = server.implicit_port if mode == "implicit" else server.port
+                    command = [ARGS.sext, "--file", str(self.archive(entries, streamed)),
+                               "--host", server.host, "--port", str(port), "--user", USER, "--password", PASSWORD,
+                               "--directory", HOME + "/" + directory, "--staging", directory + "/.staging",
+                               "--no-tui", "--verbose"]
+                    if protocol == "ftps":
+                        command += ["--protocol", "ftps", "--ftps-mode", mode,
+                                    "--cacert", str(FIXTURES / "server-cert.pem")]
+                    result = self.transfer(command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("Resuming resume.txt at byte 2", result.stdout)
+                    for name, contents in entries:
+                        self.assertEqual((destination / name).read_bytes(), b"XYcdef" if name == "resume.txt" else contents)
+                        self.assertFalse((stage / name).exists())
+                    self.assertEqual((stage / "unrelated.txt").read_bytes(), b"keep")
+
+    def test_real_server_creates_staging_and_preserves_empty_directories(self):
+        root = Path(self.temp.name) / "remote"
+        server = Server(root)
+        self.addCleanup(server.close)
+        (root / "destination").mkdir()
+        (root / "new").mkdir()
+        server.sync()
+        archive = Path(self.temp.name) / "directories.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("empty/sub/", b"")
+            output.writestr("nested/file.txt", b"file")
+        result = self.transfer([ARGS.sext, "--file", str(archive), "--host", server.host,
+                                "--port", str(server.port), "--user", USER, "--password", PASSWORD,
+                                "--directory", "destination", "--staging", "new/stage", "--mkdir", "--no-tui"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((root / "destination/empty/sub").is_dir())
+        self.assertEqual((root / "destination/nested/file.txt").read_bytes(), b"file")
+        self.assertEqual(list((root / "new/stage").iterdir()), [])
+
+    def test_real_server_mkdir_controls_destination_and_staging(self):
+        root = Path(self.temp.name) / "remote"
+        server = Server(root)
+        self.addCleanup(server.close)
+        archive = self.archive([("file.txt", b"file")])
+        for destination_exists, staging_exists in ((True, False), (False, True), (False, False), (True, True)):
+            with self.subTest(destination_exists=destination_exists, staging_exists=staging_exists):
+                name = f"mkdir-{destination_exists}-{staging_exists}"
+                destination = root / (name + "-destination")
+                staging = root / (name + "-staging")
+                if destination_exists:
+                    destination.mkdir()
+                if staging_exists:
+                    staging.mkdir()
+                server.sync()
+                command = [ARGS.sext, "--file", str(archive), "--host", server.host,
+                           "--port", str(server.port), "--user", USER, "--password", PASSWORD,
+                           "--directory", destination.name, "--staging", staging.name, "--no-tui"]
+                result = self.transfer(command)
+                if destination_exists and staging_exists:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("does not exist", result.stdout + result.stderr)
+                    self.assertEqual(destination.is_dir(), destination_exists)
+                    self.assertEqual(staging.is_dir(), staging_exists)
+                    self.assertFalse((destination / "file.txt").exists())
+                created = self.transfer(command + ["--mkdir"])
+                self.assertEqual(created.returncode, 0, created.stdout + created.stderr)
+                self.assertEqual((destination / "file.txt").read_bytes(), b"file")
+                self.assertEqual(list(staging.iterdir()), [])
+        # mkdir preserves its existing single-directory behavior for staging as well.
+        nested = root / "missing-parent/stage"
+        rejected = self.transfer([ARGS.sext, "--file", str(archive), "--host", server.host,
+                                  "--port", str(server.port), "--user", USER, "--password", PASSWORD,
+                                  "--directory", destination.name, "--staging", "missing-parent/stage",
+                                  "--mkdir", "--no-tui"])
+        self.assertEqual(rejected.returncode, 1, rejected.stdout + rejected.stderr)
+        self.assertFalse(nested.parent.exists())
+
+    def test_staging_moves_whole_directories_and_merges_existing_folders(self):
+        root = Path(self.temp.name) / "remote"
+        server = Server(root)
+        self.addCleanup(server.close)
+        entries = [("whole/nested/a.txt", b"a"), ("whole/nested/b.txt", b"b"),
+                   ("whole/.hidden/file.txt", b"hidden"), ("whole/empty/", b""),
+                   ("existing/subtree/a.txt", b"new"), ("existing/replace.txt", b"replacement"),
+                   ("mixed/expected.txt", b"expected"), ("mixed/safe/a.txt", b"safe"),
+                   ("outer/inner/expected.txt", b"nested"), ("root.txt", b"root"),
+                   ("directory-only/", b"")]
+        for protocol, mode in (("ftp", "explicit"), ("ftps", "explicit"), ("ftps", "implicit")):
+            for streamed in (False, True):
+                with self.subTest(protocol=protocol, mode=mode, streamed=streamed):
+                    name = f"directory-moves-{protocol}-{mode}-{streamed}"
+                    destination = root / (name + "-destination")
+                    stage = root / (name + "-stage")
+                    (destination / "existing").mkdir(parents=True)
+                    (destination / "existing/unrelated.txt").write_bytes(b"preserve")
+                    (destination / "existing/replace.txt").write_bytes(b"old")
+                    (stage / "mixed").mkdir(parents=True)
+                    (stage / "mixed/.unrelated.txt").write_bytes(b"keep")
+                    (stage / "outer/inner").mkdir(parents=True)
+                    (stage / "outer/inner/.unrelated.txt").write_bytes(b"keep nested")
+                    server.sync()
+                    port = server.implicit_port if mode == "implicit" else server.port
+                    command = [ARGS.sext, "--file", str(self.archive(entries, streamed)),
+                               "--host", server.host, "--port", str(port), "--user", USER, "--password", PASSWORD,
+                               "--directory", destination.name, "--staging", stage.name, "--no-tui", "--verbose"]
+                    if protocol == "ftps":
+                        command += ["--protocol", "ftps", "--ftps-mode", mode,
+                                    "--cacert", str(FIXTURES / "server-cert.pem")]
+                    result = self.transfer(command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    for entry, contents in entries:
+                        if entry.endswith("/"):
+                            self.assertTrue((destination / entry).is_dir())
+                        else:
+                            self.assertEqual((destination / entry).read_bytes(), contents)
+                        self.assertFalse((stage / entry).exists())
+                    self.assertEqual((destination / "existing/unrelated.txt").read_bytes(), b"preserve")
+                    self.assertEqual((stage / "mixed/.unrelated.txt").read_bytes(), b"keep")
+                    self.assertEqual((stage / "outer/inner/.unrelated.txt").read_bytes(), b"keep nested")
+                    self.assertFalse((destination / "mixed/.unrelated.txt").exists())
+                    self.assertFalse((destination / "outer/inner/.unrelated.txt").exists())
+                    renamed = [line.split("DEBUG > RNFR ", 1)[1] for line in result.stdout.splitlines()
+                               if "DEBUG > RNFR " in line]
+                    prefix = HOME + "/" + stage.name + "/"
+                    for directory in ("whole", "existing/subtree", "mixed/safe", "directory-only"):
+                        self.assertIn(prefix + directory, renamed)
+                    for directory in ("existing", "mixed", "outer", "outer/inner"):
+                        self.assertNotIn(prefix + directory, renamed)
+                    self.assertNotIn(prefix + "whole/nested/a.txt", renamed)
+                    self.assertNotIn(prefix + "whole/nested/b.txt", renamed)
+
+    def test_staging_recovers_contents_split_between_stage_and_destination(self):
+        root = Path(self.temp.name) / "remote"
+        server = Server(root)
+        self.addCleanup(server.close)
+        entries = [("moved/file.txt", b"moved"), ("moved/empty/", b""),
+                   ("mixed/already.txt", b"already"), ("mixed/pending.txt", b"pending"),
+                   ("mixed/resume.txt", b"abcdef"), ("not-complete.txt", b"complete"), ("empty.txt", b"")]
+        for protocol, mode in (("ftp", "explicit"), ("ftps", "explicit"), ("ftps", "implicit")):
+            for streamed in (False, True):
+                with self.subTest(protocol=protocol, mode=mode, streamed=streamed):
+                    name = f"recovery-{protocol}-{mode}-{streamed}"
+                    destination = root / (name + "-destination")
+                    stage = root / (name + "-stage")
+                    (destination / "moved/empty").mkdir(parents=True)
+                    (destination / "moved/file.txt").write_bytes(b"moved")
+                    moved_time = (destination / "moved/file.txt").stat().st_mtime_ns
+                    (destination / "mixed").mkdir()
+                    (destination / "mixed/already.txt").write_bytes(b"already")
+                    (destination / "mixed/resume.txt").write_bytes(b"final!")
+                    (destination / "not-complete.txt").write_bytes(b"much larger old data")
+                    (destination / "empty.txt").write_bytes(b"")
+                    (stage / "mixed").mkdir(parents=True)
+                    (stage / "mixed/pending.txt").write_bytes(b"pending")
+                    (stage / "mixed/resume.txt").write_bytes(b"XY")
+                    server.sync()
+                    port = server.implicit_port if mode == "implicit" else server.port
+                    command = [ARGS.sext, "--file", str(self.archive(entries, streamed)), "--host", server.host,
+                               "--port", str(port), "--user", USER, "--password", PASSWORD,
+                               "--directory", destination.name, "--staging", stage.name, "--no-tui", "--verbose"]
+                    if protocol == "ftps":
+                        command += ["--protocol", "ftps", "--ftps-mode", mode,
+                                    "--cacert", str(FIXTURES / "server-cert.pem")]
+                    result = self.transfer(command)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("Resuming mixed/resume.txt at byte 2", result.stdout)
+                    self.assertNotIn("Uploaded moved/file.txt", result.stdout)
+                    self.assertNotIn("Uploaded mixed/already.txt", result.stdout)
+                    self.assertNotIn("Uploaded empty.txt", result.stdout)
+                    for entry, contents in entries:
+                        if entry.endswith("/"):
+                            self.assertTrue((destination / entry).is_dir())
+                        else:
+                            self.assertEqual((destination / entry).read_bytes(),
+                                             b"XYcdef" if entry == "mixed/resume.txt" else contents)
+                        self.assertFalse((stage / entry).exists())
+                    self.assertEqual((destination / "moved/file.txt").stat().st_mtime_ns, moved_time)
+                    self.assertFalse((stage / "moved").exists())
+
     def test_ftps_does_not_fall_back_to_plain_ftp(self):
         archive = self.archive([("hello.txt", b"hello")])
         with FtpServer() as server:
@@ -172,6 +371,8 @@ class LibraryFtpsTests(FtpsTests):
         parser.add_argument("--host")
         parser.add_argument("--port", type=int)
         parser.add_argument("--directory")
+        parser.add_argument("--staging")
+        parser.add_argument("--mkdir", action="store_true")
         parser.add_argument("--user")
         parser.add_argument("--password")
         parser.add_argument("--protocol", default="ftp")
@@ -187,6 +388,8 @@ class LibraryFtpsTests(FtpsTests):
         with LibJob(self.lib, {
                 "archive": options.file, "host": options.host, "port": options.port,
                 "directory": options.directory, "user": options.user, "password": options.password,
+                "staging": options.staging,
+                "mkdir": options.mkdir,
                 "active_mode": options.mode == "active", "verbose": options.verbose,
                 "buffer_mib": options.buffer, "protocol": protocol,
                 "ca_certificate": options.cacert}, retries=options.retries) as job:

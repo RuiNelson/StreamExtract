@@ -87,6 +87,178 @@ class FtpFaultTests(unittest.TestCase):
                 attempts = [command for command, _ in server.commands if command in ("STOR", "APPE")]
                 self.assertEqual(attempts, ["APPE"] * 3)
 
+    def test_staging_resumes_and_skips_only_in_staging_and_moves_after_all_uploads(self):
+        entries = [("same.txt", b"same"), ("resume.txt", b"abcdef"), ("large.txt", b"new"),
+                   ("nested/a 日本語.txt", b"nested"), ("empty.txt", b""), ("empty-dir/", None),
+                   ("duplicate.txt", b"first"), ("duplicate.txt", b"last")]
+        initial = {"/stage/same.txt": b"same", "/stage/resume.txt": b"XY",
+                   "/stage/large.txt": b"much larger old data", "/stage/unrelated.txt": b"keep",
+                   "/upload/resume.txt": b"final!", "/upload/large.txt": b"old",
+                   "/upload/unrelated.txt": b"preserve"}
+        for streamed in (False, True):
+            for frontend in ("library", "cli"):
+                with self.subTest(streamed=streamed, frontend=frontend), FtpServer(files=initial) as server:
+                    archive = self.archive(entries, streamed=streamed)
+                    if frontend == "library":
+                        with self.job(archive, server, staging="/stage") as job:
+                            job.wait(timeout=15)
+                            self.assertEqual(job.result["status"], "success", job.describe())
+                            self.assertEqual(job.result["skipped_files"], 1)
+                    else:
+                        result = self.cli(archive, server, "--staging", "/stage")
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    expected = {"same.txt": b"same", "resume.txt": b"XYcdef", "large.txt": b"new",
+                                "nested/a 日本語.txt": b"nested", "empty.txt": b"", "duplicate.txt": b"last"}
+                    for name, contents in expected.items():
+                        self.assertEqual(server.files["/upload/" + name], contents)
+                        self.assertNotIn("/stage/" + name, server.files)
+                    self.assertEqual(server.files["/stage/unrelated.txt"], b"keep")
+                    self.assertEqual(server.files["/upload/unrelated.txt"], b"preserve")
+                    uploads = [(index, command, arg) for index, (command, arg) in enumerate(server.commands)
+                               if command in ("STOR", "APPE")]
+                    first_move = next(i for i, (command, _) in enumerate(server.commands) if command == "RNFR")
+                    self.assertTrue(all(i < first_move for i, _, _ in uploads))
+                    self.assertIn(("APPE", "resume.txt"), [(command, arg) for _, command, arg in uploads])
+                    self.assertFalse(any(arg == "same.txt" for _, _, arg in uploads))
+                    self.assertEqual(sum(command == "RNTO" for command, _ in server.commands), len(expected))
+
+    def test_staging_all_complete_still_moves_files(self):
+        archive = self.archive([("done.txt", b"done")])
+        with FtpServer(files={"/stage/done.txt": b"done"}) as server, self.job(archive, server, staging="/stage") as job:
+            job.wait(timeout=5)
+            self.assertEqual(job.result["status"], "success", job.describe())
+            self.assertEqual(job.result["files_uploaded"], 0)
+            self.assertEqual(server.files, {"/upload/done.txt": b"done"})
+
+    def test_staging_upload_failure_does_not_move_completed_files(self):
+        archive = self.archive([("first.txt", b"first"), ("broken.txt", b"broken")])
+        with FtpServer(files={"/upload/first.txt": b"original"}, fail_uploads=3,
+                       fail_target="/stage/broken.txt", drop_after=1) as server:
+            with self.job(archive, server, staging="/stage") as job:
+                job.wait(timeout=15)
+                self.assertEqual(job.result["status"], "failed", job.describe())
+            self.assertEqual(server.files["/stage/first.txt"], b"first")
+            self.assertEqual(server.files["/upload/first.txt"], b"original")
+            self.assertFalse(any(command == "RNFR" for command, _ in server.commands))
+
+    def test_staging_move_failure_and_cancellation_leave_staged_files(self):
+        archive = self.archive([("done.txt", b"done")])
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel), FtpServer(reject_rename=not cancel, stall_rename=cancel) as server:
+                with self.job(archive, server, staging="/stage") as job:
+                    if cancel:
+                        self.assert_cancelled(job, server)
+                    else:
+                        job.wait(timeout=5)
+                        self.assertEqual(job.result["status"], "failed", job.describe())
+                        self.assertIn("cannot move staged path", job.result["error"])
+                    if not cancel:
+                        self.assertEqual(server.files, {"/stage/done.txt": b"done"})
+
+    def test_staging_path_validation_prevents_unsafe_moves(self):
+        for stage, entries in (("/upload", [("file.txt", b"file")]),
+                               ("/", [("file.txt", b"file")]),
+                               ("/upload/stage", [("stage/file.txt", b"file")])):
+            with self.subTest(stage=stage), FtpServer() as server:
+                with self.job(self.archive(entries), server, staging=stage) as job:
+                    job.wait(timeout=5)
+                    self.assertEqual(job.result["status"], "failed", job.describe())
+                self.assertFalse(any(command == "RNFR" for command, _ in server.commands))
+
+    def test_staging_recovery_after_a_directory_move_and_a_later_failure(self):
+        entries = [("a-folder/one.txt", b"one"), ("a-folder/two.txt", b"two"),
+                   ("a-folder/empty/", None), ("b-folder/three.txt", b"three"), ("tail.txt", b"tail")]
+        for streamed in (False, True):
+            for frontend in ("library", "cli"):
+                for lost_reply in (False, True):
+                    with self.subTest(streamed=streamed, frontend=frontend, lost_reply=lost_reply):
+                        archive = self.archive(entries, streamed=streamed)
+                        fault = {"lose_rename_reply_after": 1} if lost_reply else {"fail_rename_after": 1}
+                        with FtpServer(files={"/stage/unrelated.txt": b"keep", "/upload/unrelated.txt": b"preserve"},
+                                       directories=["/stage", "/upload"], **fault) as server:
+                            if frontend == "library":
+                                with self.job(archive, server, staging="/stage") as job:
+                                    job.wait(timeout=15)
+                                    self.assertEqual(job.result["status"], "failed", job.describe())
+                            else:
+                                result = self.cli(archive, server, "--staging", "/stage")
+                                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                            self.assertEqual(server.files["/upload/a-folder/one.txt"], b"one")
+                            self.assertNotIn("/stage/a-folder/one.txt", server.files)
+                            self.assertEqual(server.files["/stage/b-folder/three.txt"], b"three")
+                            state = {"files": dict(server.files), "directories": server.get("directories")}
+                        # A fresh process/client resumes from the remote state, including a lost RNTO reply.
+                        for rerun in (0, 1):
+                            with FtpServer(**state) as server:
+                                if frontend == "library":
+                                    with self.job(archive, server, staging="/stage") as job:
+                                        job.wait(timeout=15)
+                                        self.assertEqual(job.result["status"], "success", job.describe())
+                                        self.assertEqual(job.result["files_uploaded"], 0)
+                                        self.assertEqual(job.result["bytes_uploaded"], 0)
+                                        self.assertEqual(job.result["skipped_files"], 4)
+                                else:
+                                    result = self.cli(archive, server, "--staging", "/stage")
+                                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                                    if not streamed:
+                                        self.assertIn("To upload: 0 file(s)", result.stdout)
+                                self.assertEqual(server.uploads, [])
+                                self.assertFalse(any(command == "RNFR" and arg.startswith("/stage/a-folder")
+                                                     for command, arg in server.commands))
+                                if rerun == 1:
+                                    self.assertFalse(any(command == "RNFR" for command, _ in server.commands))
+                                for name, contents in entries:
+                                    if contents is not None:
+                                        self.assertEqual(server.files["/upload/" + name], contents)
+                                        self.assertNotIn("/stage/" + name, server.files)
+                                self.assertEqual(server.files["/stage/unrelated.txt"], b"keep")
+                                self.assertEqual(server.files["/upload/unrelated.txt"], b"preserve")
+                                state = {"files": dict(server.files), "directories": server.get("directories")}
+
+    def test_staging_recovery_prioritizes_staged_copies_and_only_skips_complete_destination_files(self):
+        entries = [("moved/file.txt", b"moved"), ("same.txt", b"same"), ("resume.txt", b"abcdef"),
+                   ("replace.txt", b"new"), ("empty.txt", b""), ("missing.txt", b"missing")]
+        initial = {"/upload/moved/file.txt": b"moved", "/upload/empty.txt": b"", "/upload/missing.txt": b"x",
+                   "/stage/same.txt": b"same", "/upload/same.txt": b"old!",
+                   "/stage/resume.txt": b"XY", "/upload/resume.txt": b"final!",
+                   "/stage/replace.txt": b"much larger", "/upload/replace.txt": b"old"}
+        for streamed in (False, True):
+            for frontend in ("library", "cli"):
+                with self.subTest(streamed=streamed, frontend=frontend), FtpServer(files=initial) as server:
+                    archive = self.archive(entries, streamed=streamed)
+                    if frontend == "library":
+                        with self.job(archive, server, staging="/stage") as job:
+                            job.wait(timeout=15)
+                            self.assertEqual(job.result["status"], "success", job.describe())
+                            self.assertEqual(job.result["files_uploaded"], 3)
+                            self.assertEqual(job.result["skipped_files"], 3)
+                    else:
+                        result = self.cli(archive, server, "--staging", "/stage")
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    for name, contents in entries:
+                        self.assertEqual(server.files["/upload/" + name], b"XYcdef" if name == "resume.txt" else contents)
+                        self.assertNotIn("/stage/" + name, server.files)
+                    self.assertEqual({target for _, target, _ in server.uploads},
+                                     {"/stage/resume.txt", "/stage/replace.txt", "/stage/missing.txt"})
+                    self.assertIn(("APPE", "/stage/resume.txt", b"cdef"), server.uploads)
+                    self.assertIn(("STOR", "/stage/missing.txt", b"missing"), server.uploads)
+                    self.assertFalse(any(command == "RNFR" and arg in ("/stage/moved/file.txt", "/stage/empty.txt")
+                                         for command, arg in server.commands))
+
+    def test_staging_recovery_keeps_duplicate_entries_in_archive_order(self):
+        entries = [("duplicate.txt", b"first"), ("duplicate.txt", b"first"),
+                   ("duplicate.txt", b"first-more"), ("duplicate.txt", b"last")]
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed), FtpServer(files={"/upload/duplicate.txt": b"first"}) as server:
+                with self.job(self.archive(entries, streamed=streamed), server, staging="/stage") as job:
+                    job.wait(timeout=15)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                    self.assertEqual(job.result["files_uploaded"], 2)
+                    self.assertEqual(job.result["skipped_files"], 2)
+                self.assertEqual(server.files, {"/upload/duplicate.txt": b"last"})
+                self.assertEqual(server.uploads, [("STOR", "/stage/duplicate.txt", b"first-more"),
+                                                 ("STOR", "/stage/duplicate.txt", b"last")])
+
     def cli(self, archive, server, *options):
         return subprocess.run([ARGS.sext, "--file", archive, "--host", getattr(server, "host", "127.0.0.1"),
                                "--port", str(server.server_address[1]), "--directory", "/upload",

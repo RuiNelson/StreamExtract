@@ -90,9 +90,14 @@ class FtpClient {
   // Creates `dir` and any missing parent.
   void ensure_directory(const std::string& dir);
   // File names in `dir` (NLST); std::nullopt if the listing failed.
-  std::optional<std::vector<std::string>> list_names(const std::string& dir);
+  // `include_hidden` requests NLST -a for FTP/FTPS; failure disables directory moves.
+  std::optional<std::vector<std::string>> list_names(const std::string& dir, bool include_hidden = false);
   RemoteFile stat_file(const std::string& path);
   bool delete_file(const std::string& path);
+  // Server-side rename of a file or a directory with all its contents; throws on failure.
+  void move_path(const std::string& source, const std::string& destination);
+  // Removes only an empty directory. Failure is harmless during staging cleanup.
+  bool remove_directory(const std::string& dir);
 
   // Uploads `size` bytes pulled from `read` to `path`, creating missing
   // directories. If `mtime` (Unix seconds) is non-zero the remote modification

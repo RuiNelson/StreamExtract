@@ -23,6 +23,7 @@ struct Options {
   std::string private_key_passphrase;
   std::optional<std::string> known_hosts;
   std::optional<std::string> directory;
+  std::optional<std::string> staging;
   bool mkdir = false;
   std::optional<std::string> archive_password;
   std::string extraction_root;

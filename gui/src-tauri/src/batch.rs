@@ -344,6 +344,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             directory: "/batch".into(),
+            staging: None,
             mkdir: false,
             verbose: false,
             buffer_mib: 1,

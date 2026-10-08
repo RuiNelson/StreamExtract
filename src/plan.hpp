@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -86,6 +87,7 @@ struct PlannedEntry {
   Action action = Action::Upload;
   uint64_t resume_offset = 0;         // Discard this prefix locally, then append the remaining bytes.
   bool delete_before_upload = false;  // The remote file is larger than the archive entry.
+  bool already_published = false;     // Absent from staging, complete in the destination; do not move again.
   bool excluded = false;              // Outside the extraction root; does not count as an ignored entry.
 };
 
@@ -138,8 +140,10 @@ TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& l
 // the listed names and dotfiles (which some servers omit from NLST).
 class RemoteProbe {
  public:
-  RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log);
+  RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log, std::string destination_root = "");
   void check(PlannedEntry& planned);
+  // A directory absent from staging and already present in the destination.
+  bool directory_published(const std::string& relative);
 
  private:
   struct Directory {
@@ -157,11 +161,14 @@ class RemoteProbe {
   // A successful transfer leaves each checked path at this size. Later copies
   // of the same name must use it, rather than the size before the first copy.
   std::unordered_map<std::string, uint64_t> expected_sizes_;
+  // Staging transfers: only absent staging files may be complete in the destination.
+  std::unique_ptr<RemoteProbe> destination_;
 };
 
 // Skips equal-size files, resumes smaller ones, and replaces larger ones.
 // `on_progress(done, total)` is called after each checked file.
 void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
-                  const std::function<void(size_t, size_t)>& on_progress);
+                  const std::function<void(size_t, size_t)>& on_progress,
+                  const std::string& destination_root = "");
 
 }  // namespace streamextract

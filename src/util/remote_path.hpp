@@ -33,6 +33,10 @@ std::string normalize_remote_path(std::string_view path);
 // Resolves `path` (absolute or relative) against the absolute `base`.
 std::string resolve_remote_path(std::string_view base, std::string_view path);
 
+// Both paths must be normalized. Staging may be inside the destination, but
+// cannot be the destination itself or contain it.
+void validate_staging_path(const std::string& staging, const std::string& destination);
+
 // "/dir" + "a/b" -> "/dir/a/b"; "/" + "a" -> "/a".
 std::string join_remote_path(std::string_view dir, std::string_view relative);
 

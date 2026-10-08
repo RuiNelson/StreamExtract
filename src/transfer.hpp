@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -44,7 +45,7 @@ struct TransferResult {
 class Transfer {
  public:
   Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& passwords, Logger& log, Progress& progress,
-           size_t buffer_bytes, unsigned attempts = 3);
+           size_t buffer_bytes, unsigned attempts = 3, std::string destination_root = "");
   ~Transfer();
   Transfer(const Transfer&) = delete;
   Transfer& operator=(const Transfer&) = delete;
@@ -67,6 +68,7 @@ class Transfer {
   const PlannedEntry& entry(size_t index);
   void run_uploader();
   void upload_loop();
+  void publish_staging();
   bool upload_file(const PlannedEntry& planned, uint64_t number);
   bool await_file_end(const PlannedEntry& planned);
   bool discard_file();
@@ -81,6 +83,7 @@ class Transfer {
   Progress& progress_;
   Pipe pipe_;
   const unsigned attempts_;
+  const std::string destination_root_;  // Empty: upload directly; otherwise plan_.remote_root is staging.
 
   // Keep the original reader at the file boundary so retries can use the same
   // bounded pipe and extractor thread, without buffering a whole file.
@@ -105,6 +108,7 @@ class Transfer {
   std::mutex entries_mutex_;
   std::deque<PlannedEntry> streamed_;
   std::unique_ptr<RemoteProbe> probe_;
+  std::set<std::string> published_directories_;  // Uploader only: directories already in the destination.
   const Archive* reading_ = nullptr;  // Extractor only: for the position in the archive.
   uint64_t unpacking_size_ = 0;       // Extractor only: sizes buffers for the current file.
   uint64_t files_uploaded_ = 0;

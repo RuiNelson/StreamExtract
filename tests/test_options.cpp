@@ -27,6 +27,17 @@ TEST_CASE("CLI defaults to FTP on port 21") {
   CHECK(result.options->port == 21);
 }
 
+TEST_CASE("CLI staging is optional and requires a remote path") {
+  REQUIRE(parse({}).options);
+  CHECK_FALSE(parse({}).options->staging);
+  const auto result = parse({"--staging", "../incoming", "--directory", "/published"});
+  REQUIRE(result.options);
+  CHECK(result.options->staging == "../incoming");
+  CHECK(result.options->directory == "/published");
+  CHECK_FALSE(parse({"--staging", ""}).options);
+  CHECK_FALSE(parse({"--staging"}).options);
+}
+
 TEST_CASE("CLI extraction root is optional and independent of the destination") {
   REQUIRE(parse({}).options);
   CHECK(parse({}).options->extraction_root.empty());

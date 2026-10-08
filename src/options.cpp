@@ -17,6 +17,7 @@ ParsedOptions parse_options(int argc, char** argv) {
   std::string private_key;
   std::string known_hosts;
   std::string directory;
+  std::string staging;
   std::string archive_password;
 
   CLI::App app{
@@ -73,7 +74,12 @@ ParsedOptions parse_options(int argc, char** argv) {
   CLI::Option* directory_option =
       app.add_option("--directory", directory, "Remote destination directory (default: the login directory)")
           ->type_name("DIR");
-  app.add_flag("--mkdir", o.mkdir, "Create the destination directory if missing (one MKD, not recursive)");
+  app.add_flag("--mkdir", o.mkdir,
+               "Create destination and staging directories if missing (one MKD each, not recursive)");
+  CLI::Option* staging_option =
+      app.add_option("--staging", staging,
+                     "Upload and resume in this remote directory, then move files to the destination on success")
+          ->type_name("DIR");
   app.add_option("--extraction-root", o.extraction_root,
                  "Upload only this archive directory's contents, without its path prefix (default: archive root)")
       ->type_name("DIR");
@@ -149,6 +155,13 @@ ParsedOptions parse_options(int argc, char** argv) {
       return {std::nullopt, 2};
     }
     o.directory = directory;
+  }
+  if (staging_option->count() > 0) {
+    if (staging.empty()) {
+      std::fprintf(stderr, "--staging: empty path\n");
+      return {std::nullopt, 2};
+    }
+    o.staging = staging;
   }
   if (archive_password_option->count() > 0 && rar_password_option->count() > 0) {
     std::fprintf(stderr, "--rar-password is another name for --archive-password: pass only one\n");

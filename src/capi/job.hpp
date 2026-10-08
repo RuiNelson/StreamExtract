@@ -36,6 +36,7 @@ struct JobConfig {
   std::string private_key_passphrase;
   std::optional<std::string> known_hosts;
   std::string directory;  // Empty: the login directory.
+  std::string staging;    // Empty: upload directly to the destination.
   bool mkdir = false;
   bool verbose = false;
   unsigned buffer_mib = 0;  // 0: the default.

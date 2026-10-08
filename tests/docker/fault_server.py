@@ -13,6 +13,7 @@ class FtpHandler(socketserver.StreamRequestHandler):
         passive = None
         active = None
         protected = False
+        rename_source = None
 
         def start_tls():
             self.rfile.close()
@@ -40,7 +41,7 @@ class FtpHandler(socketserver.StreamRequestHandler):
             self.wfile.flush()
 
         def path(arg):
-            return posixpath.normpath(arg if arg.startswith("/") else cwd + "/" + arg)
+            return posixpath.normpath(arg if arg.startswith("/") else posixpath.join(cwd, arg))
 
         try:
             if self.server.implicit_tls:
@@ -83,8 +84,12 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 elif command == "CWD":
                     if path(arg) == self.server.stall_directory:
                         self.server.pause()
-                    cwd = path(arg)
-                    reply("250 Directory changed")
+                    directory = path(arg)
+                    if self.server.directories is not None and directory not in self.server.directories:
+                        reply("550 Directory not found")
+                    else:
+                        cwd = directory
+                        reply("250 Directory changed")
                 elif command == "SIZE":
                     if self.server.stall_retry_size and self.server.failed_uploads:
                         self.server.pause()
@@ -105,6 +110,9 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     reply("150 Listing")
                     with accept_data() as data:
                         names = [posixpath.basename(p) for p in self.server.files if posixpath.dirname(p) == cwd]
+                        if self.server.directories is not None:
+                            names += [posixpath.basename(p) for p in self.server.directories
+                                      if p != cwd and posixpath.dirname(p) == cwd]
                         data.sendall("".join(name + "\r\n" for name in names).encode("utf-8"))
                     if passive is not None:
                         passive.close()
@@ -166,6 +174,60 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         with self.server.files_lock:
                             self.server.files.pop(target, None)
                         reply("250 File deleted")
+                elif command == "RNFR":
+                    rename_source = path(arg)
+                    exists = rename_source in self.server.files or (self.server.directories is not None
+                                                                   and rename_source in self.server.directories)
+                    reply("350 Ready to rename" if exists else "550 File not found")
+                elif command == "RNTO":
+                    if self.server.stall_rename:
+                        self.server.pause()
+                    target = path(arg)
+                    directory = self.server.directories is not None and rename_source in self.server.directories
+                    fail = (self.server.fail_rename_after is not None
+                            and self.server.successful_renames >= self.server.fail_rename_after)
+                    if self.server.reject_rename or fail or (not directory and rename_source not in self.server.files):
+                        reply("550 Rename refused")
+                    else:
+                        with self.server.files_lock:
+                            if directory:
+                                if target in self.server.directories or target in self.server.files:
+                                    reply("550 Directory already exists")
+                                    continue
+                                prefix = rename_source + "/"
+                                files = {name: data for name, data in self.server.files.items() if name.startswith(prefix)}
+                                for name, data in files.items():
+                                    self.server.files[target + name[len(rename_source):]] = data
+                                    del self.server.files[name]
+                                directories = {name for name in self.server.directories
+                                               if name == rename_source or name.startswith(prefix)}
+                                self.server.directories.difference_update(directories)
+                                self.server.directories.update(target + name[len(rename_source):] for name in directories)
+                            else:
+                                self.server.files[target] = self.server.files.pop(rename_source)
+                            self.server.successful_renames += 1
+                        if self.server.successful_renames == self.server.lose_rename_reply_after:
+                            return  # The rename succeeded, but the client never receives its acknowledgement.
+                        reply("250 File renamed")
+                    rename_source = None
+                elif command == "MKD":
+                    directory = path(arg)
+                    if self.server.directories is not None:
+                        if posixpath.dirname(directory) not in self.server.directories:
+                            reply("550 Parent not found")
+                            continue
+                        self.server.directories.add(directory)
+                    reply("257 Directory created")
+                elif command == "RMD":
+                    directory = path(arg)
+                    if self.server.directories is not None:
+                        if (directory not in self.server.directories
+                                or any(name.startswith(directory + "/") for name in self.server.files)
+                                or any(name.startswith(directory + "/") for name in self.server.directories)):
+                            reply("550 Directory missing or not empty")
+                            continue
+                        self.server.directories.remove(directory)
+                    reply("250 Directory removed")
                 elif command == "QUIT":
                     reply("221 Goodbye")
                     break
@@ -192,16 +254,30 @@ class FtpServer(socketserver.ThreadingTCPServer):
                  stall_listing=False, stall_confirmation=False, fail_uploads=0, drop_after=65539,
                  fail_target=None, stall_retry_size=False, after_failure=None, fail_logins=0,
                  stall_login_retry=False, tls_context=None, implicit_tls=False, reject_private_data=False,
+                 reject_rename=False, stall_rename=False,
+                 fail_rename_after=None, lose_rename_reply_after=None, directories=None,
                  control_port=0, passive_ports=range(30000, 30010)):
         self.passive_ports = passive_ports
         super().__init__(("0.0.0.0", control_port), FtpHandler)
         self.files = dict(files or {})
+        self.directories = None if directories is None else set(directories) | {"/"}
+        if self.directories is not None:
+            for name in list(self.directories) + list(self.files):
+                directory = posixpath.dirname(name)
+                while directory not in ("", "/"):
+                    self.directories.add(directory)
+                    directory = posixpath.dirname(directory)
         self.files_lock = threading.Lock()
         self.commands = []
         self.uploads = []
         self.deleted = []
         self.reject_upload = reject_upload
         self.reject_delete = reject_delete
+        self.reject_rename = reject_rename
+        self.stall_rename = stall_rename
+        self.fail_rename_after = fail_rename_after
+        self.lose_rename_reply_after = lose_rename_reply_after
+        self.successful_renames = 0
         self.stall_directory = stall_directory
         self.stall_listing = stall_listing
         self.stall_confirmation = stall_confirmation
@@ -245,4 +321,3 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.shutdown()
         self.thread.join()
         super().__exit__(*args)
-

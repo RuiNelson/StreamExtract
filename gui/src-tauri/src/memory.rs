@@ -295,6 +295,7 @@ fn legacy_server(parsed: Parsed) -> Result<ServerSettings, String> {
         user: parsed.user,
         password: parsed.password,
         directory: parsed.directory.unwrap_or_default(),
+        staging: None,
         mkdir: parsed
             .mkdir
             .and_then(|value| parse_bool(&value))
@@ -350,6 +351,7 @@ mod tests {
             user: user.map(str::to_string),
             password: password.map(str::to_string),
             directory: "/up loads/dir;#=x".into(),
+            staging: None,
             mkdir: true,
         }
     }
@@ -477,6 +479,7 @@ mod tests {
         let mut settings = server(Some(" al;ice#=1 "), Some("  secret;#= x:y\nnext line  "));
         settings.host = "yes".into();
         settings.directory = "[null] : # /日本語".into();
+        settings.staging = Some("/incoming 日本語/stage".into());
         save(&path, None, &settings, Some(true)).unwrap();
         assert_eq!(recall(&path, slot(&path, 0)).unwrap(), settings);
         let summary = serde_json::to_value(status(&path).unwrap()).unwrap();

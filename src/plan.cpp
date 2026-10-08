@@ -294,8 +294,10 @@ TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& l
   return plan;
 }
 
-RemoteProbe::RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log)
-    : ftp_(ftp), remote_root_(std::move(remote_root)), log_(log) {}
+RemoteProbe::RemoteProbe(FtpClient& ftp, std::string remote_root, Logger& log, std::string destination_root)
+    : ftp_(ftp), remote_root_(std::move(remote_root)), log_(log) {
+  if (!destination_root.empty()) destination_ = std::make_unique<RemoteProbe>(ftp, destination_root, log);
+}
 
 bool RemoteProbe::under_missing(std::string dir) const {
   while (true) {
@@ -342,8 +344,22 @@ void RemoteProbe::check(PlannedEntry& planned) {
   planned.action = PlannedEntry::Action::Upload;
   planned.resume_offset = 0;
   planned.delete_before_upload = false;
+  planned.already_published = false;
   const auto previous = expected_sizes_.find(planned.remote);
   const RemoteFile remote = previous == expected_sizes_.end() ? stat(planned) : RemoteFile{true, previous->second};
+  if (!remote.exists && destination_) {
+    PlannedEntry published = planned;
+    published.remote = join_remote_path(destination_->remote_root_, planned.relative);
+    const RemoteFile final = destination_->stat(published);
+    if (final.exists && final.size && *final.size == planned.entry.size) {
+      planned.action = PlannedEntry::Action::Skip;
+      planned.already_published = true;
+      log_.debug(fmt::format("already complete in the destination: {}", planned.relative));
+      // No staged copy was created. A later duplicate must still check the
+      // destination, rather than assume this copy exists in staging.
+      return;
+    }
+  }
   expected_sizes_[planned.remote] = planned.entry.size;
   if (!remote.exists) {
     return;
@@ -363,8 +379,13 @@ void RemoteProbe::check(PlannedEntry& planned) {
   }
 }
 
+bool RemoteProbe::directory_published(const std::string& relative) {
+  return destination_ && !ftp_.directory_exists(join_remote_path(remote_root_, relative)) &&
+         ftp_.directory_exists(join_remote_path(destination_->remote_root_, relative));
+}
+
 void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
-                  const std::function<void(size_t, size_t)>& on_progress) {
+                  const std::function<void(size_t, size_t)>& on_progress, const std::string& destination_root) {
   // Directory by directory (parents sort before children), so that a missing
   // directory spares checking anything below it.
   std::map<std::string, std::vector<size_t>> by_dir;
@@ -375,7 +396,7 @@ void probe_remote(TransferPlan& plan, FtpClient& ftp, Logger& log,
       ++total;
     }
   }
-  RemoteProbe probe(ftp, plan.remote_root, log);
+  RemoteProbe probe(ftp, plan.remote_root, log, destination_root);
   size_t done = 0;
   for (const auto& [dir, indices] : by_dir) {
     for (const size_t i : indices) {

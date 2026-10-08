@@ -5,6 +5,7 @@
 #include <clocale>
 #include <cstdio>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -130,6 +131,7 @@ int run(const Options& options) {
   // 2. FTP: log in and check the destination directory.
   FtpClient ftp(ftp_config, log, options.verbose);
   std::string target;
+  std::string upload_root;
   try {
     if (is_ssh(options.protocol))
       log.info("Connecting to {}:{} (SFTP)", options.host, options.port);
@@ -145,41 +147,49 @@ int run(const Options& options) {
     } else {
       target = resolve_remote_path(home, *options.directory);
     }
-    if (!ftp.directory_exists(target)) {
+    upload_root = options.staging ? resolve_remote_path(home, *options.staging) : target;
+    if (options.staging) validate_staging_path(upload_root, target);
+    const auto check_directory = [&](const std::string& dir) {
+      if (ftp.directory_exists(dir)) return;
       if (!options.mkdir) {
-        log.error("the remote directory {} does not exist (use --mkdir to create it)", target);
-        return kExitError;
+        throw std::runtime_error(
+            fmt::format("the remote directory {} does not exist (use --mkdir to create it)", dir));
       }
-      log.info("Creating the remote directory {}", target);
-      ftp.make_directory(target);
-      if (!ftp.directory_exists(target)) {
-        log.error("the remote directory {} is not accessible after creating it", target);
-        return kExitError;
+      log.info("Creating the remote directory {}", dir);
+      ftp.make_directory(dir);
+      if (!ftp.directory_exists(dir)) {
+        throw std::runtime_error(fmt::format("the remote directory {} is not accessible after creating it", dir));
       }
-    }
-  } catch (const FtpError& error) {
+    };
+    check_directory(target);
+    if (options.staging) check_directory(upload_root);
+  } catch (const std::exception& error) {
     log.error(error.what());
     return kExitError;
   }
   log.info("Destination: {}", ftp.url_for(target));
+  if (options.staging) log.info("Staging: {}", ftp.url_for(upload_root));
 
   // 3. Plan: map entries to remote paths, skip what is already there (for a
   //    streamed archive, the transfer does it file by file).
-  TransferPlan plan = build_plan(options.file, listing, target, log, options.extraction_root);
+  TransferPlan plan = build_plan(options.file, listing, upload_root, log, options.extraction_root);
   if (!plan.streamed && plan.upload_files > 0) {
     const bool live = stdout_is_terminal();
     size_t last_shown = 0;
     try {
-      probe_remote(plan, ftp, log, [&](size_t done, size_t total) {
-        if (live && (done == total || done - last_shown >= std::max<size_t>(1, total / 200))) {
-          last_shown = done;
-          std::fprintf(stdout, "\rChecking the files already on the server: %zu/%zu", done, total);
-          if (done == total) {
-            std::fputs("\n", stdout);
-          }
-          std::fflush(stdout);
-        }
-      });
+      probe_remote(
+          plan, ftp, log,
+          [&](size_t done, size_t total) {
+            if (live && (done == total || done - last_shown >= std::max<size_t>(1, total / 200))) {
+              last_shown = done;
+              std::fprintf(stdout, "\rChecking the files already on the server: %zu/%zu", done, total);
+              if (done == total) {
+                std::fputs("\n", stdout);
+              }
+              std::fflush(stdout);
+            }
+          },
+          options.staging ? target : "");
     } catch (const FtpError& error) {
       if (live) {
         std::fputs("\n", stdout);
@@ -198,7 +208,8 @@ int run(const Options& options) {
 
   // 4. Transfer.
   Progress progress;
-  Transfer transfer(plan, ftp, passwords, log, progress, options.buffer_mib << 20, options.retries);
+  Transfer transfer(plan, ftp, passwords, log, progress, options.buffer_mib << 20, options.retries,
+                    options.staging ? target : "");
   install_interrupt_handler();
   if (use_tui) {
     log.set_sink(nullptr);  // The dashboard shows the log.

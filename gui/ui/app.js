@@ -80,6 +80,9 @@
     user: $("user"),
     password: $("password"),
     directory: $("directory"),
+    staging: $("staging"),
+    stagingInfo: $("btn-staging-info"),
+    stagingHelpDialog: $("dlg-staging-help"),
     mkdir: $("mkdir"),
     advanced: $("advanced"),
     buffer: $("buffer"),
@@ -802,6 +805,7 @@
       user: els.user.value.trim(),
       password: els.password.value,
       directory: els.directory.value.trim(),
+      staging: els.staging.value.trim() || null,
       mkdir: els.mkdir.checked,
     };
   }
@@ -843,6 +847,7 @@
       user: server.user,
       password: server.password,
       directory: server.directory,
+      staging: server.staging,
       mkdir: server.mkdir,
       verbose: els.verbose.checked,
       buffer_mib: buffer,
@@ -859,7 +864,7 @@
   }
 
   function anyDialogOpen() {
-    return els.dlgMemorySlots.open || els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open || els.dlgExtractionRoot.open || els.archiveMenu.open || els.dlgFilePassword.open;
+    return els.stagingHelpDialog.open || els.dlgMemorySlots.open || els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open || els.dlgExtractionRoot.open || els.archiveMenu.open || els.dlgFilePassword.open;
   }
 
   async function initDragDrop() {
@@ -1010,6 +1015,7 @@
           user: server.user,
           password: server.password,
           directory: server.directory,
+          staging: server.staging,
           mkdir: server.mkdir,
         },
         store_credentials: storeCredentials,
@@ -1039,6 +1045,7 @@
       els.port.value = String(saved.port == null ? defaultPort(els.protocol.value) : saved.port);
       setMode(saved.mode === "active" ? "active" : "passive");
       els.directory.value = saved.directory || "";
+      els.staging.value = saved.staging || "";
       els.mkdir.checked = Boolean(saved.mkdir);
       els.user.value = saved.user || "";
       els.password.value = saved.password || "";
@@ -1786,6 +1793,7 @@
       startTransfer();
     });
     els.host.addEventListener("input", updateSubmitState);
+    els.stagingInfo.addEventListener("click", () => els.stagingHelpDialog.showModal());
     els.port.addEventListener("input", validatePort);
     els.protocol.addEventListener("change", changeProtocol);
     els.sshButton.addEventListener("click", () => els.sshDialog.showModal());

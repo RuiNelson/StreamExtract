@@ -77,6 +77,8 @@ pub struct TransferConfig {
     pub user: String,
     pub password: String,
     pub directory: String,
+    #[serde(default)]
+    pub staging: Option<String>,
     pub mkdir: bool,
     pub verbose: bool,
     pub buffer_mib: u32,
@@ -106,6 +108,8 @@ pub struct ServerSettings {
     pub user: Option<String>,
     pub password: Option<String>,
     pub directory: String,
+    #[serde(default)]
+    pub staging: Option<String>,
     pub mkdir: bool,
 }
 
@@ -554,6 +558,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             directory: String::new(),
+            staging: None,
             mkdir: false,
             verbose: false,
             buffer_mib: 1,

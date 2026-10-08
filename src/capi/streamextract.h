@@ -36,7 +36,7 @@ typedef struct streamextract_job_config {
   const char* user;             /* NULL or "": anonymous for FTP/FTPS; local username for SFTP. */
   const char* password;         /* NULL: empty for FTP/FTPS; no supplied password for SFTP. */
   const char* directory;        /* NULL or "": the login directory. */
-  int mkdir;                    /* Create the destination if missing (one MKD). */
+  int mkdir;                    /* Create destination and staging if missing (one MKD each). */
   int verbose;                  /* Log every FTP command and reply. */
   unsigned buffer_mib;          /* Buffer between decompression and upload; 0: 64. */
 } streamextract_job_config;
@@ -107,6 +107,23 @@ STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_connection(
 STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_extraction_root(
     const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
     const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root);
+
+/* Like start_with_extraction_root, with a remote staging directory (NULL/"":
+ * disabled). Relative paths use the login directory. config->mkdir controls
+ * creation of both destination and staging (one MKD each, not recursive).
+ * Resume/skip checks use staging first. An absent staged file with a same-size
+ * destination copy is already complete and is not uploaded or moved again. After
+ * the entire archive succeeds, its files are renamed into the destination,
+ * replacing matching files where the server supports it. A failed move fails
+ * the job; files not yet moved remain in staging. The staging root is retained.
+ * Whole archive directories are renamed together when the destination folder
+ * is missing and staging contains no unrelated entries. Existing folders are
+ * merged. Each rename is server-side; the complete set of moves is not atomic.
+ * The original config layout and entry points are unchanged. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_staging(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
+    const char* staging);
 
 /* Reads archive directories for a folder picker, including implicit parents
  * and empty directories. No server connection or disk extraction. Compressed

@@ -412,6 +412,10 @@ class Library:
             ctypes.c_int, ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions),
             ctypes.c_char_p]
         dll.streamextract_job_start_with_extraction_root.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_staging.argtypes = [ctypes.POINTER(StreamExtractJobConfig),
+            ctypes.c_int, ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions),
+            ctypes.c_char_p, ctypes.c_char_p]
+        dll.streamextract_job_start_with_staging.restype = ctypes.c_void_p
         dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.streamextract_job_poll.restype = ctypes.c_void_p
         dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -465,6 +469,7 @@ class LibJob:
     def __init__(self, lib, config, si_units=False, retries=None):
         config = dict(config)
         extraction_root = config.pop("extraction_root", None)
+        staging = config.pop("staging", None)
         protocol = config.pop("protocol", None)
         ca_certificate = config.pop("ca_certificate", None)
         ssh_values = {name: config.pop(name, None) for name in ("private_key", "private_key_passphrase", "known_hosts")}
@@ -483,7 +488,14 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        if extraction_root is not None:
+        if staging is not None:
+            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
+            self.handle = lib.dll.streamextract_job_start_with_staging(
+                ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol or "ftp"],
+                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None, ctypes.byref(ssh),
+                extraction_root.encode("utf-8") if extraction_root is not None else None,
+                staging.encode("utf-8"))
+        elif extraction_root is not None:
             protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
             self.handle = lib.dll.streamextract_job_start_with_extraction_root(
                 ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol or "ftp"],

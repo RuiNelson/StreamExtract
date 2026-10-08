@@ -41,7 +41,7 @@ pub struct StreamExtractSshOptions {
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_extraction_root(
+    pub fn streamextract_job_start_with_staging(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
@@ -49,6 +49,7 @@ extern "C" {
         ca_certificate: *const c_char,
         ssh: *const StreamExtractSshOptions,
         extraction_root: *const c_char,
+        staging: *const c_char,
     ) -> *mut StreamExtractJob;
     pub fn streamextract_archive_directories(
         archive: *const c_char,
@@ -150,6 +151,13 @@ impl Job {
                 .map_or(ptr::null(), |value| value.as_ptr()),
         };
         let directory = c_string("The directory", &config.directory)?;
+        let staging = config
+            .staging
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| c_string("The staging directory", value))
+            .transpose()?;
         let port =
             c_int::try_from(config.port).map_err(|_| "The port is out of range".to_string())?;
         let buffer_mib = c_uint::try_from(config.buffer_mib)
@@ -181,7 +189,7 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_extraction_root(
+            streamextract_job_start_with_staging(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
@@ -194,6 +202,7 @@ impl Job {
                 ptr::null(), // Use the system certificate trust store.
                 &ssh,
                 extraction_root.as_ptr(),
+                staging.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
             )
         };
         NonNull::new(job)
@@ -255,6 +264,7 @@ mod tests {
             user: String::new(),
             password: String::new(),
             directory: String::new(),
+            staging: None,
             mkdir: false,
             verbose: false,
             buffer_mib: 0,
@@ -286,6 +296,18 @@ mod tests {
         assert!(Job::start(&bad).is_err());
         let mut bad = config();
         bad.retries = 0;
+        assert!(Job::start(&bad).is_err());
+    }
+
+    #[test]
+    fn empty_staging_is_disabled_and_nul_is_rejected() {
+        for value in ["", "  "] {
+            let mut empty = config();
+            empty.staging = Some(value.to_string());
+            assert!(Job::start(&empty).is_ok());
+        }
+        let mut bad = config();
+        bad.staging = Some("/stage\0".to_string());
         assert!(Job::start(&bad).is_err());
     }
 

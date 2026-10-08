@@ -550,17 +550,26 @@ Job::Result Job::pipeline() {
   } else {
     target = resolve_remote_path(home, config_.directory);
   }
-  if (!ftp.directory_exists(target)) {
+  const std::string upload_root = config_.staging.empty() ? target : resolve_remote_path(home, config_.staging);
+  if (!config_.staging.empty()) validate_staging_path(upload_root, target);
+  const auto check_directory = [&](const std::string& dir) {
+    throw_if_cancelled();
+    if (ftp.directory_exists(dir)) return;
     if (!config_.mkdir) {
       throw std::runtime_error(
-          fmt::format("the remote directory {} does not exist (enable \"Create directory if missing\")", target));
+          fmt::format("the remote directory {} does not exist (enable \"Create directory if missing\")", dir));
     }
     throw_if_cancelled();
-    log_.info("Creating the remote directory {}", target);
-    ftp.make_directory(target);
-    if (!ftp.directory_exists(target)) {
-      throw std::runtime_error(fmt::format("the remote directory {} is not accessible after creating it", target));
+    log_.info("Creating the remote directory {}", dir);
+    ftp.make_directory(dir);
+    if (!ftp.directory_exists(dir)) {
+      throw std::runtime_error(fmt::format("the remote directory {} is not accessible after creating it", dir));
     }
+  };
+  check_directory(target);
+  if (!config_.staging.empty()) {
+    check_directory(upload_root);
+    log_.info("Staging: {}", ftp.url_for(upload_root));
   }
   throw_if_cancelled();
   const std::string url = ftp.url_for(target);
@@ -572,17 +581,20 @@ Job::Result Job::pipeline() {
 
   // 3. Plan: map entries to remote paths, skip what is already there.
   set_phase(Phase::Checking);
-  TransferPlan plan = build_plan(config_.archive, listing, target, log_, config_.extraction_root);
+  TransferPlan plan = build_plan(config_.archive, listing, upload_root, log_, config_.extraction_root);
   if (!plan.streamed && plan.upload_files > 0) {
     const auto set_probe = [this](size_t done, size_t total) {
       std::lock_guard lock(state_mutex_);
       probe_ = std::make_pair(done, total);
     };
     set_probe(0, plan.upload_files);
-    probe_remote(plan, ftp, log_, [&](size_t done, size_t total) {
-      throw_if_cancelled();
-      set_probe(done, total);
-    });
+    probe_remote(
+        plan, ftp, log_,
+        [&](size_t done, size_t total) {
+          throw_if_cancelled();
+          set_probe(done, total);
+        },
+        config_.staging.empty() ? "" : target);
   }
   throw_if_cancelled();
   if (plan.skip_files > 0) {
@@ -597,7 +609,8 @@ Job::Result Job::pipeline() {
   const size_t buffer_mib =
       config_.buffer_mib == 0 ? kDefaultBufferMib : std::min(config_.buffer_mib, kMaxBufferMib);
   ftp.set_cancel_check(nullptr);  // The transfer handles cancellation by itself.
-  Transfer transfer(plan, ftp, *passwords, log_, progress_, buffer_mib << 20, config_.retries);
+  Transfer transfer(plan, ftp, *passwords, log_, progress_, buffer_mib << 20, config_.retries,
+                    config_.staging.empty() ? "" : target);
   struct Unpublish {
     Job& job;
     ~Unpublish() {

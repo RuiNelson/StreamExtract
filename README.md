@@ -116,6 +116,11 @@ The app offers:
   if missing*. Choose **FTP** (default), **FTPS (explicit)**, **FTPS (implicit)** or **SFTP**
   in **Protocol** before Host. Both FTPS modes encrypt control and data connections
   and verify the server certificate using system CA trust.
+  Enter a **Staging directory (optional)** to upload and resume there first;
+  files move to the **Destination directory** after each archive succeeds.
+  Leave staging empty to upload directly to the destination. **Create directory
+  if missing** applies to both directories. Memory Save/Recall includes staging.
+  The info button beside the staging label opens help about staging and resuming.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
@@ -207,13 +212,38 @@ password-protected archives are supported:
 | `--private-key-passphrase PASSPHRASE` | Passphrase for an encrypted SFTP private key; never prompted. The spelling `--private-key-passphare` is also accepted. |
 | `--known-hosts PATH` | Verify SFTP host keys against this file. An empty string uses `~/.ssh/known_hosts`; omitting the option accepts any host key. |
 | `--directory DIR` | Destination, absolute or relative to the login directory. Without it the login directory is used and a warning says which one. |
-| `--mkdir` | Create the destination if it does not exist, with a single `MKD` (not recursive). Without it, a missing destination is an error. |
+| `--staging DIR` | Upload and resume in this remote directory, then move the archive's files to the destination after the entire archive succeeds. Omit it to upload directly to the destination. |
+| `--mkdir` | Create destination and staging directories if missing, with one `MKD` each (not recursive). Without it, either missing directory is an error. |
 | `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
 | `--extraction-root DIR` | Upload only this directory's contents from inside the archive, removing its path prefix. Omitted, empty or `/`: upload all contents. |
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
 | `--verbose` | Log connection and protocol details (credentials are masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
 | `--retries N` | Total attempts for connection/login and each file upload, including the first. Default `3`; `1` disables retries. |
+
+For example, `--directory /uploads --staging /incoming` uploads into `/incoming`
+and then moves the completed files into `/uploads`, preserving their folders and
+empty directories. Both paths may be absolute or relative to the login directory.
+When staging is enabled, skips and resumes check staging first. If a file is
+absent there but has the expected size in the destination, it is considered
+complete and skipped. Existing staging copies take priority, including partial
+ones; their final rename replaces matching files in the destination. Destination
+files with a different or unknown size are uploaded into staging from the beginning.
+Only entries from the archive are moved; unrelated files in either directory are
+kept. The staging root is retained for reuse, and its empty archive subdirectories
+are removed.
+
+Staging must differ from the destination and cannot contain it. It may be inside
+the destination (for example `/uploads/.staging`), provided no archive entry would
+move into that staging directory. The server must support renaming between the
+two locations, normally on the same filesystem. Moves begin only after all
+uploads succeed. Whole archive directories move with their contents in one
+server-side rename when the destination folder is missing and the staging
+folder contains no unrelated entries. Existing destination folders are merged;
+unrelated staging entries are kept in place. If a move fails or is
+cancelled, files already moved stay in the destination and the rest stay in
+staging. A subsequent run skips complete destination files whose staging copies
+are absent, resumes incomplete staged uploads, and moves the remaining contents.
 
 For explicit FTPS, add `--protocol ftps` to the command. For implicit FTPS,
 add `--protocol ftps --ftps-mode implicit`. Either accepts a custom `--port`.

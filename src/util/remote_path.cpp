@@ -1,5 +1,6 @@
 #include "util/remote_path.hpp"
 
+#include <stdexcept>
 #include <vector>
 
 namespace streamextract {
@@ -209,6 +210,15 @@ std::string ftp_url(std::string_view base_url, std::string_view absolute_path, b
     url += '/';
   }
   return url;
+}
+
+void validate_staging_path(const std::string& staging, const std::string& destination) {
+  for (const unsigned char c : staging) {
+    if (c < 32 || c == 127) throw std::runtime_error("the staging directory contains control characters");
+  }
+  if (staging == destination || staging == "/" || destination.compare(0, staging.size() + 1, staging + "/") == 0) {
+    throw std::runtime_error("the staging directory must differ from the destination and cannot contain it");
+  }
 }
 
 }  // namespace streamextract

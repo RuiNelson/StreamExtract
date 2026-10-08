@@ -437,11 +437,14 @@ void FtpClient::ensure_directory(const std::string& dir) {
   }
 }
 
-std::optional<std::vector<std::string>> FtpClient::list_names(const std::string& dir) {
+std::optional<std::vector<std::string>> FtpClient::list_names(const std::string& dir, bool include_hidden) {
   std::string listing;
   impl_->prepare(impl_->path_url(dir, true));
   impl_->listing = &listing;
   curl_easy_setopt(impl_->curl, CURLOPT_DIRLISTONLY, 1L);
+  if (include_hidden && !is_ssh(impl_->config.protocol)) {
+    curl_easy_setopt(impl_->curl, CURLOPT_CUSTOMREQUEST, "NLST -a");
+  }
   const CURLcode code = impl_->perform();
   impl_->listing = nullptr;
   if (code != CURLE_OK) {
@@ -493,6 +496,25 @@ bool FtpClient::delete_file(const std::string& path) {
       impl_->quote({is_ssh(impl_->config.protocol) ? "rm " + sftp_quote_path(path) : "DELE " + path});
   if (code != CURLE_OK) {
     impl_->log.debug(fmt::format("cannot delete {}: {}", path, impl_->describe(code)));
+  }
+  return code == CURLE_OK;
+}
+
+void FtpClient::move_path(const std::string& source, const std::string& destination) {
+  const CURLcode code = impl_->quote(is_ssh(impl_->config.protocol)
+                                       ? std::vector<std::string>{"rename " + sftp_quote_path(source) + " " +
+                                                                  sftp_quote_path(destination)}
+                                       : std::vector<std::string>{"RNFR " + source, "RNTO " + destination});
+  if (code != CURLE_OK) {
+    impl_->fail(fmt::format("cannot move staged path {} to {}", source, destination), code);
+  }
+}
+
+bool FtpClient::remove_directory(const std::string& dir) {
+  const CURLcode code =
+      impl_->quote({is_ssh(impl_->config.protocol) ? "rmdir " + sftp_quote_path(dir) : "RMD " + dir});
+  if (code != CURLE_OK) {
+    impl_->log.debug(fmt::format("cannot remove staging directory {}: {}", dir, impl_->describe(code)));
   }
   return code == CURLE_OK;
 }

@@ -185,6 +185,9 @@ class Api(BaseHTTPRequestHandler):
         if name == "files":
             with server.files_lock:
                 value = {key: base64.b64encode(data).decode() for key, data in server.files.items()}
+        elif name == "directories":
+            with server.files_lock:
+                value = None if server.directories is None else sorted(server.directories)
         elif name == "uploads":
             value = [(cmd, path, base64.b64encode(data).decode()) for cmd, path, data in server.uploads]
         elif name == "stalled":

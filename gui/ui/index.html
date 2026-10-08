@@ -101,7 +101,23 @@
           </div>
 
           <div class="field">
-            <label for="directory">Directory</label>
+            <div class="field-label">
+              <label for="staging">Staging directory (optional)</label>
+              <button type="button" id="btn-staging-info" class="info-button" title="Staging directory help"
+                      aria-label="Staging directory help" aria-haspopup="dialog" aria-controls="dlg-staging-help">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6.5" stroke="currentColor" />
+                  <path d="M8 7v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                  <circle cx="8" cy="4.5" r="0.8" fill="currentColor" />
+                </svg>
+              </button>
+            </div>
+            <input id="staging" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+                   spellcheck="false" placeholder="Leave empty to upload directly to the destination">
+          </div>
+
+          <div class="field">
+            <label for="directory">Destination directory</label>
             <input id="directory" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
           </div>
 
@@ -338,6 +354,25 @@
         <button type="submit" value="cancel" class="btn" formnovalidate>Cancel</button>
         <button type="submit" id="root-select" value="select" class="btn btn-primary" disabled>Use this folder</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-staging-help" class="dialog help-dialog" aria-labelledby="dlg-staging-help-title">
+    <form method="dialog">
+      <h2 id="dlg-staging-help-title">Staging directory</h2>
+      <p>Leave the field empty to upload directly to the destination.</p>
+      <p>With staging, each archive uploads there first. After the entire archive succeeds, its files
+         move to the destination, keeping their folders.</p>
+      <p>Resume and skip checks use staging first. If a file is missing there but has the expected size
+         in the destination, it is already complete and stays there. A rerun can finish interrupted moves.</p>
+      <p>Use a directory on the same server, such as <code>/incoming</code>. Paths may be absolute or
+         relative to your login directory. Staging must differ from the destination and cannot contain it.</p>
+      <p>Enable <strong>Create directory if missing</strong> to create either directory. Their parent
+         directories must already exist.</p>
+      <p>Whole folders move together when the destination folder is missing. Existing folders are
+         merged, keeping unrelated files. If a move fails or you cancel, some contents may be in the
+         destination and the rest in staging.</p>
+      <div class="dialog-actions"><button type="submit" value="close" class="btn btn-primary" autofocus>Close</button></div>
     </form>
   </dialog>
 

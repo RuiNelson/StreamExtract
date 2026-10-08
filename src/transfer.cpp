@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstring>
 #include <exception>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -14,6 +16,7 @@
 #include "ftp_client.hpp"
 #include "logger.hpp"
 #include "progress.hpp"
+#include "util/remote_path.hpp"
 #include "util/text.hpp"
 
 namespace streamextract {
@@ -31,14 +34,15 @@ std::string file_name_of(const std::string& path) {
 }  // namespace
 
 Transfer::Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& passwords, Logger& log,
-                   Progress& progress, size_t buffer_bytes, unsigned attempts)
+                   Progress& progress, size_t buffer_bytes, unsigned attempts, std::string destination_root)
     : plan_(plan),
       ftp_(ftp),
       passwords_(passwords),
       log_(log),
       progress_(progress),
       pipe_(buffer_bytes),
-      attempts_(std::max(1u, attempts)) {
+      attempts_(std::max(1u, attempts)),
+      destination_root_(std::move(destination_root)) {
   progress_.set_buffer_capacity(buffer_bytes);
 }
 
@@ -523,19 +527,36 @@ void Transfer::upload_loop() {
       return;  // Aborted.
     }
     switch (message->kind) {
-      case PipeMessage::Kind::EnsureDir:
-        ftp_.ensure_directory(entry(message->entry).remote);
+      case PipeMessage::Kind::EnsureDir: {
+        const PlannedEntry& planned = entry(message->entry);
+        if (!destination_root_.empty()) {
+          if (!probe_) probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_, destination_root_);
+          if (probe_->directory_published(planned.relative)) {
+            published_directories_.insert(planned.remote);
+            break;
+          }
+        }
+        ftp_.ensure_directory(planned.remote);
         break;
+      }
       case PipeMessage::Kind::FileBegin: {
         PlannedEntry planned = entry(message->entry);
         if (plan_.streamed) {
           if (!probe_) {
-            probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_);
+            probe_ = std::make_unique<RemoteProbe>(ftp_, plan_.remote_root, log_, destination_root_);
           }
           probe_->check(planned);
+          {
+            std::lock_guard lock(entries_mutex_);
+            // The extractor keeps the original action while reading this file.
+            // Publication needs the uploader's decision after extraction ends.
+            streamed_[message->entry].already_published = planned.already_published;
+          }
           if (planned.action == PlannedEntry::Action::Skip) {
             progress_.add_skipped(planned.entry.size);
-            progress_.set_activity(fmt::format("Skipping {} (already on the server)", planned.relative));
+            progress_.set_activity(fmt::format("Skipping {} ({})", planned.relative,
+                                              planned.already_published ? "already in the destination"
+                                                                        : "already on the server"));
             {
               std::lock_guard lock(mutex_);
               ++skipped_files_;
@@ -557,12 +578,123 @@ void Transfer::upload_loop() {
       }
       case PipeMessage::Kind::End:
         progress_.set_totals_known();
+        if (!destination_root_.empty() && !cancel_requested_ && !pipe_.aborted()) publish_staging();
         return;
       case PipeMessage::Kind::Data:
       case PipeMessage::Kind::FileEnd:
         throw std::logic_error("internal error: unexpected data outside of a file");
     }
   }
+}
+
+void Transfer::publish_staging() {
+  // End is sent only after all entries have completed. Include same-size files
+  // skipped in staging, and publish each duplicate path only once (its last contents).
+  std::set<std::string> files;
+  std::set<std::string> staged_directories;
+  const auto collect = [&](const PlannedEntry& planned) {
+    if (planned.action == PlannedEntry::Action::Ignore) return;
+    const std::string destination = join_remote_path(destination_root_, planned.relative);
+    if (destination == plan_.remote_root ||
+        destination.compare(0, plan_.remote_root.size() + 1, plan_.remote_root + "/") == 0) {
+      throw std::runtime_error("an archive entry would move into the staging directory: " + planned.relative);
+    }
+    if (planned.already_published || (planned.action == PlannedEntry::Action::MakeDir &&
+                                     published_directories_.count(planned.remote) != 0)) {
+      return;
+    }
+    if (planned.action != PlannedEntry::Action::MakeDir) {
+      files.insert(planned.relative);
+    }
+    std::string dir =
+        planned.action == PlannedEntry::Action::MakeDir ? planned.remote : remote_parent(planned.remote);
+    while (dir != plan_.remote_root) {
+      staged_directories.insert(dir);
+      dir = remote_parent(dir);
+    }
+  };
+  if (plan_.streamed) {
+    std::lock_guard lock(entries_mutex_);
+    for (const auto& planned : streamed_) collect(planned);
+  } else {
+    for (const auto& planned : plan_.entries) collect(planned);
+  }
+  // Expected immediate children, including implicit parents and empty folders.
+  std::map<std::string, std::set<std::string>> children;
+  children[plan_.remote_root];
+  for (const auto& dir : staged_directories) {
+    children[dir];
+    children[remote_parent(dir)].insert(remote_basename(dir));
+  }
+  for (const auto& relative : files) {
+    const std::string path = join_remote_path(plan_.remote_root, relative);
+    children[remote_parent(path)].insert(remote_basename(path));
+  }
+
+  // Only rename a whole directory if all of its contents belong to this archive.
+  // Check hidden names as well; unavailable listings fall back to individual moves.
+  std::map<std::string, bool> owned;
+  const std::function<bool(const std::string&)> archive_directory = [&](const std::string& dir) {
+    if (cancel_requested_) return false;
+    const auto cached = owned.find(dir);
+    if (cached != owned.end()) return cached->second;
+    const auto names = ftp_.list_names(dir, true);
+    bool complete = names && std::set<std::string>(names->begin(), names->end()) == children.at(dir);
+    if (complete) {
+      for (const auto& name : children.at(dir)) {
+        const std::string child = join_remote_path(dir, name);
+        if (staged_directories.count(child) != 0 && !archive_directory(child)) {
+          complete = false;
+          break;
+        }
+      }
+    }
+    owned.emplace(dir, complete);
+    return complete;
+  };
+
+  log_.info("Moving {} staged file(s) to {}", files.size(), destination_root_);
+  progress_.set_activity("Moving staged contents to the destination");
+  std::set<std::string> moved_directories;
+  const std::function<void(const std::string&, const std::string&)> publish =
+      [&](const std::string& source_dir, const std::string& destination_dir) {
+        for (const auto& name : children.at(source_dir)) {
+          if (cancel_requested_) return;
+          const std::string source = join_remote_path(source_dir, name);
+          const std::string destination = join_remote_path(destination_dir, name);
+          const bool directory = staged_directories.count(source) != 0;
+          if (directory && ftp_.directory_exists(destination)) {
+            publish(source, destination);  // Merge into an existing folder.
+          } else if (directory && !archive_directory(source)) {
+            ftp_.ensure_directory(destination);
+            publish(source, destination);  // Keep unrelated staging contents in place.
+          } else {
+            progress_.set_activity(fmt::format("Moving {} to the destination", source));
+            ftp_.move_path(source, destination);
+            if (directory) {
+              moved_directories.insert(source);
+              log_.info("Moved directory {} with its contents", source);
+            }
+          }
+        }
+      };
+  publish(plan_.remote_root, destination_root_);
+
+  // Children sort after parents; remove only empty directories used by this archive.
+  // Leave the staging root and any unrelated files available for future uploads.
+  for (auto it = staged_directories.rbegin(); it != staged_directories.rend(); ++it) {
+    if (cancel_requested_) return;
+    bool moved = false;
+    for (std::string dir = *it; dir != plan_.remote_root; dir = remote_parent(dir)) {
+      if (moved_directories.count(dir) != 0) {
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) ftp_.remove_directory(*it);
+  }
+  progress_.set_activity("");
+  log_.info("Staged files moved to the destination");
 }
 
 bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {

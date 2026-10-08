@@ -63,6 +63,16 @@ TEST_CASE("resolve_remote_path") {
   CHECK(resolve_remote_path("/", ".") == "/");
 }
 
+TEST_CASE("staging paths cannot contain the destination or command control characters") {
+  CHECK_NOTHROW(validate_staging_path("/incoming", "/published"));
+  CHECK_NOTHROW(validate_staging_path("/upload/.staging", "/upload"));
+  CHECK_NOTHROW(validate_staging_path("/upload", "/uploads"));
+  CHECK_THROWS(validate_staging_path("/upload", "/upload"));
+  CHECK_THROWS(validate_staging_path("/upload", "/upload/nested"));
+  CHECK_THROWS(validate_staging_path("/", "/upload"));
+  CHECK_THROWS(validate_staging_path("/incoming\r\nDELE /file", "/upload"));
+}
+
 TEST_CASE("join, parent and basename") {
   CHECK(join_remote_path("/", "a/b") == "/a/b");
   CHECK(join_remote_path("/dir", "a") == "/dir/a");

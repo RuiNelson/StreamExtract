@@ -195,6 +195,8 @@ TEST_CASE("protocol selection rejects invalid values before reading the archive"
 TEST_CASE("a missing config is refused and NULL handles are ignored") {
   CHECK(streamextract_job_start(nullptr) == nullptr);
   CHECK(streamextract_job_start_with_options(nullptr, 1, 5) == nullptr);
+  CHECK(streamextract_job_start_with_staging(nullptr, 0, 3, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr,
+                                          nullptr, "/stage") == nullptr);
   CHECK(streamextract_job_poll(nullptr, 0) == nullptr);
   streamextract_job_answer_password(nullptr, "x");
   streamextract_job_cancel(nullptr);
