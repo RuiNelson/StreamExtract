@@ -9,6 +9,7 @@ mod preferences;
 mod sleep_inhibitor;
 mod updates;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -59,6 +60,8 @@ impl Protocol {
 #[serde(rename_all = "snake_case")]
 pub struct TransferConfig {
     pub archive: String,
+    #[serde(default)]
+    pub extraction_root: String,
     pub archive_password: Option<String>,
     pub host: String,
     pub port: u32,
@@ -129,7 +132,13 @@ impl AppState {
     }
 
     /// Starts a transfer, replacing a finished one; refused while a transfer is still running.
-    fn start(&self, config: &TransferConfig, archives: Vec<String>) -> Result<(), String> {
+    fn start(
+        &self,
+        config: &TransferConfig,
+        archives: Vec<String>,
+        extraction_roots: HashMap<String, String>,
+        archive_passwords: HashMap<String, String>,
+    ) -> Result<(), String> {
         let old_job = {
             let mut slot = self.lock();
             if let Some(job) = slot.as_ref() {
@@ -138,7 +147,7 @@ impl AppState {
                     return Err("A transfer is already in progress".to_string());
                 }
             }
-            let job = Batch::start(config, archives)?;
+            let job = Batch::start(config, archives, extraction_roots, archive_passwords)?;
             slot.replace(job)
         };
         drop(old_job); // finished: nothing to wait for
@@ -358,13 +367,29 @@ async fn open_releases(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+async fn archive_directories(archive: String, password: Option<String>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ffi::archive_directories(&archive, password.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command(rename_all = "snake_case")]
 async fn start_transfer(
     state: State<'_, AppState>,
     config: TransferConfig,
     archives: Option<Vec<String>>,
+    extraction_roots: Option<HashMap<String, String>>,
+    archive_passwords: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     let archives = archives.unwrap_or_else(|| vec![config.archive.clone()]);
-    state.start(&config, archives)
+    state.start(
+        &config,
+        archives,
+        extraction_roots.unwrap_or_default(),
+        archive_passwords.unwrap_or_default(),
+    )
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -484,6 +509,7 @@ pub fn run() {
             show_update_available,
             dismiss_update_prompt,
             open_releases,
+            archive_directories,
             start_transfer,
             poll_transfer,
             answer_password,
@@ -516,6 +542,7 @@ mod tests {
     fn missing_archive_config() -> TransferConfig {
         TransferConfig {
             archive: "/nonexistent/streamextract-test.rar".to_string(),
+            extraction_root: String::new(),
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 1,
@@ -567,6 +594,8 @@ mod tests {
             .start(
                 &missing_archive_config(),
                 vec![missing_archive_config().archive],
+                HashMap::new(),
+                HashMap::new(),
             )
             .unwrap();
         let snapshot = wait_until_finished(&state);
@@ -579,6 +608,8 @@ mod tests {
             .start(
                 &missing_archive_config(),
                 vec![missing_archive_config().archive],
+                HashMap::new(),
+                HashMap::new(),
             )
             .unwrap();
         wait_until_finished(&state);
@@ -594,6 +625,8 @@ mod tests {
             .start(
                 &missing_archive_config(),
                 vec![missing_archive_config().archive],
+                HashMap::new(),
+                HashMap::new(),
             )
             .unwrap();
         state.cancel();

@@ -22,6 +22,7 @@ namespace streamextract {
 
 struct JobConfig {
   std::string archive;
+  std::string extraction_root;
   std::optional<std::string> archive_password;
   std::string host;
   int port = 21;

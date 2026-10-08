@@ -21,37 +21,25 @@
         </header>
 
         <!-- Archive -->
-        <section class="card" aria-labelledby="archive-title">
+        <section id="files-card" class="card files-card" aria-labelledby="archive-title">
           <div class="card-head">
-            <h2 id="archive-title">Files to upload</h2>
+            <div class="files-heading">
+              <h2 id="archive-title">Files to upload</h2>
+              <span id="archive-count" class="archive-count muted" hidden></span>
+            </div>
+            <button type="button" id="btn-choose" class="btn icon-button add-archive"
+                    aria-label="Add archives" title="Add archives">+</button>
           </div>
 
           <ul id="archive-list" class="archive-list" aria-label="Files to upload" hidden></ul>
           <div id="dropzone" class="dropzone" data-state="empty">
-            <svg class="dz-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
-                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
-              <path d="M14 3v4h4"/>
-              <path d="M10 11h2M10 14h2M10 17h2"/>
-            </svg>
             <div class="dz-text">
               <div id="dz-title" class="dz-title selectable">Drop archives here</div>
-              <div id="dz-sub" class="dz-sub muted selectable">For multi-volume sets, use the first volume (.part1.rar, zip.001, etc.).</div>
+              <div id="dz-sub" class="dz-sub muted selectable">Or use + to add files. For split archives, add the first volume.</div>
             </div>
-            <button type="button" id="btn-choose" class="btn">Add File</button>
           </div>
-          <p class="hint muted">Files run in order using the same server and directory. The batch continues if a file fails.</p>
+          <p id="archive-queue-hint" class="hint muted" hidden>Files run in order to the same destination.</p>
           <p id="archive-hint" class="hint warn-text" role="status" hidden></p>
-
-          <div class="field">
-            <label for="archive-password">Archive password</label>
-            <input id="archive-password" type="password" autocomplete="new-password" autocapitalize="off"
-                   spellcheck="false" placeholder="Used for all encrypted archives; leave blank to ask for each">
-            <label class="check">
-              <input type="checkbox" id="archive-password-visible">
-              <span>Show passwords</span>
-            </label>
-          </div>
         </section>
 
         <!-- Server -->
@@ -297,6 +285,62 @@
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
   <!-- ===================== Dialogs ===================== -->
+  <dialog id="archive-menu" class="archive-menu" role="menu" aria-label="Archive options">
+    <form method="dialog">
+      <button type="submit" value="password" role="menuitem">Set Extraction Password</button>
+      <button type="submit" value="root" role="menuitem">Select Extraction Root</button>
+      <button type="submit" id="archive-move-up" value="up" role="menuitem" class="menu-section">Move Up</button>
+      <button type="submit" id="archive-move-down" value="down" role="menuitem">Move Down</button>
+      <button type="submit" value="remove" role="menuitem" class="menu-remove">Remove</button>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-file-password" class="dialog" aria-labelledby="dlg-file-password-title">
+    <form method="dialog">
+      <h2 id="dlg-file-password-title">Extraction password</h2>
+      <p id="file-password-archive" class="path"></p>
+      <div class="field">
+        <label for="file-password">Password</label>
+        <input id="file-password" type="password" autocomplete="new-password" autocapitalize="off"
+               spellcheck="false" autofocus>
+        <label class="check">
+          <input type="checkbox" id="file-password-visible">
+          <span>Show passwords</span>
+        </label>
+      </div>
+      <p class="hint muted">Leave blank to ask when this archive needs a password.</p>
+      <div class="dialog-actions">
+        <button type="button" id="file-password-cancel" class="btn">Cancel</button>
+        <button type="submit" value="save" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-extraction-root" class="dialog" aria-labelledby="dlg-extraction-root-title">
+    <form method="dialog">
+      <h2 id="dlg-extraction-root-title">Choose extraction root</h2>
+      <p id="root-archive" class="path"></p>
+      <div class="root-navigation">
+        <button type="button" id="root-up" class="btn btn-small" disabled>Up</button>
+        <span id="root-path" class="path selectable">/</span>
+      </div>
+      <p id="root-status" class="hint muted" role="status"></p>
+      <ul id="root-folders" class="root-folders" aria-label="Archive folders"></ul>
+      <div id="root-password-field" class="field" hidden>
+        <label for="root-password">Extraction password</label>
+        <div class="grid key-row">
+          <input id="root-password" type="password" autocomplete="new-password" spellcheck="false">
+          <button type="button" id="root-unlock" class="btn">Unlock</button>
+        </div>
+      </div>
+      <p id="root-error" class="error-text" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="submit" value="cancel" class="btn" formnovalidate>Cancel</button>
+        <button type="submit" id="root-select" value="select" class="btn btn-primary" disabled>Use this folder</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-ssh" class="dialog" aria-labelledby="dlg-ssh-title">
     <form method="dialog">
       <h2 id="dlg-ssh-title">SSH settings</h2>
@@ -360,7 +404,7 @@
       <h2 id="dlg-password-title">Password required</h2>
       <p id="pw-text"></p>
       <div class="field">
-        <label for="pw-input">Archive password</label>
+        <label for="pw-input">Extraction password</label>
         <input id="pw-input" type="password" autocomplete="new-password" autocapitalize="off"
                spellcheck="false" aria-describedby="pw-error" autofocus>
         <label class="check">

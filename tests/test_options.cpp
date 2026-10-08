@@ -27,6 +27,15 @@ TEST_CASE("CLI defaults to FTP on port 21") {
   CHECK(result.options->port == 21);
 }
 
+TEST_CASE("CLI extraction root is optional and independent of the destination") {
+  REQUIRE(parse({}).options);
+  CHECK(parse({}).options->extraction_root.empty());
+  const auto result = parse({"--extraction-root", "b/nested", "--directory", "/remote/dest"});
+  REQUIRE(result.options);
+  CHECK(result.options->extraction_root == "b/nested");
+  CHECK(result.options->directory == "/remote/dest");
+}
+
 TEST_CASE("CLI selects explicit or implicit FTPS and their default ports") {
   const auto explicit_tls = parse({"--protocol", "FTPS"});
   REQUIRE(explicit_tls.options);

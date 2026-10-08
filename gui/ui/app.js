@@ -25,15 +25,25 @@
     unitsGroup: document.querySelectorAll('input[name="units"]'),
     completionSound: $("completion-sound"),
     checkUpdates: $("check-updates"),
-    passwordVisibility: [$("archive-password-visible"), $("password-visible"), $("pw-input-visible")],
+    passwordVisibility: [$("file-password-visible"), $("password-visible"), $("pw-input-visible")],
     // setup
     setupView: $("setup-view"),
+    filesCard: $("files-card"),
     dropzone: $("dropzone"),
     dzTitle: $("dz-title"),
     dzSub: $("dz-sub"),
     btnChoose: $("btn-choose"),
     archiveHint: $("archive-hint"),
     archiveList: $("archive-list"),
+    archiveCount: $("archive-count"),
+    archiveQueueHint: $("archive-queue-hint"),
+    archiveMenu: $("archive-menu"),
+    archiveMoveUp: $("archive-move-up"),
+    archiveMoveDown: $("archive-move-down"),
+    dlgFilePassword: $("dlg-file-password"),
+    filePasswordArchive: $("file-password-archive"),
+    filePassword: $("file-password"),
+    filePasswordCancel: $("file-password-cancel"),
     batchBlock: $("batch-block"),
     batchCount: $("batch-count"),
     batchPercent: $("batch-percent"),
@@ -41,7 +51,17 @@
     batchBar: $("batch-bar"),
     batchStats: $("batch-stats"),
     batchList: $("batch-list"),
-    archivePassword: $("archive-password"),
+    dlgExtractionRoot: $("dlg-extraction-root"),
+    rootArchive: $("root-archive"),
+    rootPath: $("root-path"),
+    rootUp: $("root-up"),
+    rootStatus: $("root-status"),
+    rootFolders: $("root-folders"),
+    rootPasswordField: $("root-password-field"),
+    rootPassword: $("root-password"),
+    rootUnlock: $("root-unlock"),
+    rootError: $("root-error"),
+    rootSelect: $("root-select"),
     host: $("host"),
     hostRow: $("host-row"),
     port: $("port"),
@@ -136,6 +156,9 @@
   const state = {
     view: "setup",
     archives: [], // absolute paths in batch order
+    extractionRoots: new Map(), // archive path -> selected directory inside that archive
+    archivePasswords: new Map(), // session only; never saved to Memory or preferences
+    editingArchive: null,
     info: null, // app_info()
     memory: { saved: false, configs: [] },
     memoryBusy: false,
@@ -150,6 +173,7 @@
     updateCheckStarted: false,
     preferencesBusy: true,
     starting: false,
+    rootBrowser: null,
     quitting: false,
     job: null, // the transfer being shown, see newJob()
     logStick: true, // log follows the newest line
@@ -172,7 +196,7 @@
       input.disabled = state.preferencesBusy;
       input.checked = state.showPasswords;
     }
-    for (const input of [els.archivePassword, els.password, els.pwInput, els.privateKeyPassphrase]) {
+    for (const input of [els.filePassword, els.password, els.pwInput, els.privateKeyPassphrase, els.rootPassword]) {
       input.type = state.showPasswords ? "text" : "password";
     }
     els.buffer.disabled = state.preferencesBusy;
@@ -541,7 +565,7 @@
   function updateSubmitState() {
     const host = els.host.value.trim();
     const hasArchive = state.archives.length > 0;
-    els.btnUpload.disabled = !(hasArchive && host) || state.starting || state.preferencesBusy;
+    els.btnUpload.disabled = !(hasArchive && host) || state.starting || state.preferencesBusy || Boolean(state.rootBrowser) || Boolean(state.editingArchive);
     let hint;
     if (!hasArchive && !host) hint = "Choose an archive and enter a host to continue.";
     else if (!hasArchive) hint = "Choose an archive to continue.";
@@ -555,19 +579,31 @@
     const paths = state.archives;
     const count = paths.length;
     els.dropzone.dataset.state = count ? "chosen" : "empty";
-    setText(els.dzTitle, count ? `${plural(count, "archive")} queued` : "Drop archives here");
-    setText(els.dzSub, "For multi-volume sets, use the first volume (.part1.rar, zip.001, etc.).");
+    setText(els.archiveCount, String(count));
+    setHidden(els.archiveCount, count === 0);
+    setHidden(els.dropzone, count > 0);
+    setHidden(els.archiveQueueHint, count === 0);
     els.archiveList.replaceChildren(...paths.map((path, index) => {
       const row = el("li", "archive-row");
       const details = el("div", "archive-details selectable");
       details.title = path;
-      details.append(el("div", "archive-name", basename(path)), el("div", "archive-path", path));
-      const remove = el("button", "btn btn-small", "Remove File");
-      remove.type = "button";
-      remove.disabled = state.starting;
-      remove.setAttribute("aria-label", `Remove ${basename(path)}`);
-      remove.addEventListener("click", () => removeArchive(index));
-      row.append(details, remove);
+      details.append(el("div", "archive-name", basename(path)));
+      const extractionRoot = state.extractionRoots.get(path) || "";
+      const meta = el("div", "archive-meta");
+      const rootLabel = el("span", "archive-root", extractionRoot ? `Root: /${extractionRoot}` : "All contents");
+      rootLabel.title = rootLabel.textContent;
+      meta.append(rootLabel);
+      if (state.archivePasswords.has(path)) meta.append(el("span", "archive-password-set", "Password set"));
+      details.append(meta);
+      const more = el("button", "btn icon-button archive-more", "…");
+      more.type = "button";
+      more.disabled = state.starting;
+      more.setAttribute("aria-label", `Options for ${basename(path)}`);
+      more.setAttribute("aria-haspopup", "menu");
+      more.setAttribute("aria-controls", "archive-menu");
+      more.setAttribute("aria-expanded", "false");
+      more.addEventListener("click", () => openArchiveMenu(path, more));
+      row.append(el("span", "archive-order", String(index + 1)), details, more);
       return row;
     }));
     setHidden(els.archiveList, count === 0);
@@ -589,7 +625,9 @@
 
   function removeArchive(index) {
     if (state.starting || state.view !== "setup") return;
-    state.archives.splice(index, 1);
+    const [path] = state.archives.splice(index, 1);
+    state.extractionRoots.delete(path);
+    state.archivePasswords.delete(path);
     renderArchiveList();
     els.btnChoose.focus({ preventScroll: true });
   }
@@ -604,6 +642,152 @@
       if (selected) addArchives(Array.isArray(selected) ? selected : [selected]);
     } catch (e) {
       toastError("Could not open the file dialog", e);
+    }
+  }
+
+  async function openArchiveMenu(archive, anchor) {
+    if (state.starting || anyDialogOpen() || !state.archives.includes(archive)) return;
+    const index = state.archives.indexOf(archive);
+    els.archiveMoveUp.disabled = index === 0;
+    els.archiveMoveDown.disabled = index === state.archives.length - 1;
+    els.archiveMenu.setAttribute("aria-label", `Options for ${basename(archive)}`);
+    anchor.setAttribute("aria-expanded", "true");
+    const choice = askDialog(els.archiveMenu);
+    const button = anchor.getBoundingClientRect();
+    const menu = els.archiveMenu.getBoundingClientRect();
+    els.archiveMenu.style.left = `${Math.max(8, Math.min(button.right - menu.width, window.innerWidth - menu.width - 8))}px`;
+    els.archiveMenu.style.top = `${Math.max(8, button.bottom + menu.height + 8 <= window.innerHeight ? button.bottom + 4 : button.top - menu.height - 4)}px`;
+    const action = await choice;
+    anchor.setAttribute("aria-expanded", "false");
+    if (action === "password") await editArchivePassword(archive);
+    else if (action === "root") await browseExtractionRoot(archive);
+    else if (action === "up" || action === "down") moveArchive(archive, action === "up" ? -1 : 1);
+    else if (action === "remove") {
+      const index = state.archives.indexOf(archive);
+      if (index >= 0) removeArchive(index);
+    }
+  }
+
+  function moveArchive(archive, direction) {
+    if (state.starting || state.view !== "setup") return;
+    const index = state.archives.indexOf(archive);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= state.archives.length) return;
+    [state.archives[index], state.archives[target]] = [state.archives[target], state.archives[index]];
+    renderArchiveList();
+    const row = els.archiveList.children[target];
+    row.children[2].focus({ preventScroll: true });
+    row.scrollIntoView({ block: "nearest" });
+    announce(`${basename(archive)} moved to position ${target + 1} of ${state.archives.length}.`);
+  }
+
+  async function editArchivePassword(archive) {
+    if (state.starting || state.editingArchive || !state.archives.includes(archive)) return;
+    state.editingArchive = archive;
+    updateSubmitState();
+    setText(els.filePasswordArchive, basename(archive));
+    setTitle(els.filePasswordArchive, archive);
+    els.filePassword.value = state.archivePasswords.get(archive) || "";
+    els.filePassword.type = state.showPasswords ? "text" : "password";
+    try {
+      if (await askDialog(els.dlgFilePassword) === "save" && state.archives.includes(archive)) {
+        if (els.filePassword.value) state.archivePasswords.set(archive, els.filePassword.value);
+        else state.archivePasswords.delete(archive);
+      }
+    } finally {
+      els.filePassword.value = "";
+      state.editingArchive = null;
+      renderArchiveList();
+    }
+  }
+
+  function renderRootFolders(browser) {
+    const prefix = browser.path ? `${browser.path}/` : "";
+    const children = browser.directories.filter((path) =>
+      path.startsWith(prefix) && !path.slice(prefix.length).includes("/") && path !== browser.path);
+    setText(els.rootPath, browser.path ? `/${browser.path}` : "/ (archive root)");
+    els.rootUp.disabled = !browser.path;
+    setText(els.rootStatus, children.length ? "Open a folder, then choose Use this folder." : "No subfolders. You can select this folder.");
+    els.rootFolders.replaceChildren(...children.map((path) => {
+      const row = el("li");
+      const button = el("button", "btn root-folder", `📁 ${path.slice(prefix.length)}`);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        browser.path = path;
+        renderRootFolders(browser);
+        els.rootUp.focus();
+      });
+      row.append(button);
+      return row;
+    }));
+    els.rootSelect.disabled = false;
+  }
+
+  async function loadRootFolders(browser, password) {
+    if (browser.reading) return;
+    browser.reading = true;
+    els.rootSelect.disabled = true;
+    els.rootUnlock.disabled = true;
+    setHidden(els.rootError, true);
+    setHidden(els.rootPasswordField, true);
+    setText(els.rootStatus, "Reading folders… Compressed tar archives need to be read through once.");
+    try {
+      const result = await invoke("archive_directories", { archive: browser.archive, password });
+      if (state.rootBrowser !== browser || !els.dlgExtractionRoot.open) return;
+      if (result.password_required) {
+        setText(els.rootStatus, "Enter the archive password to browse its folders.");
+        setHidden(els.rootPasswordField, false);
+        setText(els.rootError, result.error || "");
+        setHidden(els.rootError, !result.error);
+        els.rootPassword.focus();
+        return;
+      }
+      if (result.error) throw new Error(result.error);
+      browser.directories = result.directories;
+      if (!browser.directories.includes(browser.path)) browser.path = "";
+      if (password !== null && state.archives.includes(browser.archive)) {
+        state.archivePasswords.set(browser.archive, password);
+      }
+      renderRootFolders(browser);
+    } catch (error) {
+      if (state.rootBrowser !== browser || !els.dlgExtractionRoot.open) return;
+      setText(els.rootStatus, "");
+      setText(els.rootError, errText(error));
+      setHidden(els.rootError, false);
+    } finally {
+      browser.reading = false;
+      if (state.rootBrowser === browser) els.rootUnlock.disabled = false;
+    }
+  }
+
+  async function browseExtractionRoot(archive) {
+    if (!state.archives.includes(archive) || state.starting || state.rootBrowser) return;
+    const browser = {
+      archive, path: state.extractionRoots.get(archive) || "",
+      directories: [], reading: false,
+    };
+    state.rootBrowser = browser;
+    updateSubmitState();
+    setText(els.rootArchive, `Folders in ${basename(browser.archive)}`);
+    setTitle(els.rootArchive, browser.archive);
+    setText(els.rootPath, "/ (archive root)");
+    els.rootFolders.replaceChildren();
+    els.rootUp.disabled = true;
+    els.rootSelect.disabled = true;
+    els.rootPassword.value = "";
+    els.rootPassword.type = state.showPasswords ? "text" : "password";
+    setHidden(els.rootPasswordField, true);
+    setHidden(els.rootError, true);
+    const choice = askDialog(els.dlgExtractionRoot);
+    void loadRootFolders(browser, state.archivePasswords.get(archive) || null);
+    try {
+      if (await choice === "select" && state.archives.includes(archive)) {
+        state.extractionRoots.set(archive, browser.path);
+      }
+    } finally {
+      state.rootBrowser = null;
+      els.rootPassword.value = "";
+      renderArchiveList();
     }
   }
 
@@ -649,7 +833,6 @@
     }
     return {
       archive: state.archives[0],
-      archive_password: els.archivePassword.value === "" ? null : els.archivePassword.value,
       host: server.host,
       protocol: server.protocol,
       private_key: server.private_key,
@@ -672,11 +855,11 @@
   /* --------------------------------------------------- setup: drag and drop */
 
   function setDragging(on) {
-    els.dropzone.classList.toggle("drag", on && state.view === "setup");
+    els.filesCard.classList.toggle("drag", on && state.view === "setup");
   }
 
   function anyDialogOpen() {
-    return els.dlgMemorySlots.open || els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open;
+    return els.dlgMemorySlots.open || els.dlgMemory.open || els.dlgPassword.open || els.dlgQuit.open || els.sshDialog.open || els.dlgExtractionRoot.open || els.archiveMenu.open || els.dlgFilePassword.open;
   }
 
   async function initDragDrop() {
@@ -901,7 +1084,7 @@
   }
 
   async function startTransfer() {
-    if (state.starting || state.preferencesBusy) return;
+    if (state.starting || state.preferencesBusy || state.rootBrowser || state.editingArchive || els.archiveMenu.open) return;
     if (!state.archives.length || !els.host.value.trim()) return;
     const config = buildConfig();
     if (!config) return;
@@ -912,8 +1095,11 @@
     state.starting = true;
     renderArchiveList();
     const archives = [...state.archives];
+    const extraction_roots = Object.fromEntries(archives.map((path) => [path, state.extractionRoots.get(path) || ""]));
+    const archive_passwords = Object.fromEntries(archives.filter((path) => state.archivePasswords.has(path))
+      .map((path) => [path, state.archivePasswords.get(path)]));
     try {
-      await invoke("start_transfer", { config, archives });
+      await invoke("start_transfer", { config, archives, extraction_roots, archive_passwords });
     } catch (e) {
       toastError("Could not start the upload", e);
       requestAttention("failed");
@@ -1120,7 +1306,7 @@
     stats.push("Progress by archive");
     setText(els.batchStats, stats.join(" · "));
     setTitle(els.batchCount, `${batch.completed} of ${plural(batch.total, "archive")} processed`);
-    const key = JSON.stringify(batch.items.map((item) => [item.path, item.status]));
+    const key = JSON.stringify(batch.items.map((item) => [item.path, item.extraction_root, item.status]));
     if (job.batchKey === key) return;
     job.batchKey = key;
     els.batchList.replaceChildren(...batch.items.map((item) => {
@@ -1129,6 +1315,7 @@
       const details = el("div", "archive-details selectable");
       details.title = item.path;
       details.append(el("div", "archive-name", basename(item.path)));
+      if (item.extraction_root) details.append(el("div", "archive-path", `Extraction root: /${item.extraction_root}`));
       row.append(details, el("span", "archive-status", ARCHIVE_STATUSES[item.status] || item.status));
       return row;
     }));
@@ -1459,6 +1646,8 @@
     // Keep a partially cancelled queue so its remaining archives can still be retried.
     if (snap?.batch && snap.batch.completed === snap.batch.total) {
       state.archives = [];
+      state.extractionRoots.clear();
+      state.archivePasswords.clear();
       renderArchiveList();
     }
 
@@ -1610,6 +1799,43 @@
     els.retries.addEventListener("change", saveRetries);
     els.preventSleep.addEventListener("change", savePreventSleep);
     els.btnChoose.addEventListener("click", chooseArchive);
+    els.filePasswordCancel.addEventListener("click", () => els.dlgFilePassword.close("cancel"));
+    els.archiveMenu.addEventListener("click", (event) => {
+      if (event.target !== els.archiveMenu) return;
+      const rect = els.archiveMenu.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+        els.archiveMenu.close();
+      }
+    });
+    els.archiveMenu.addEventListener("keydown", (event) => {
+      const buttons = Array.from(els.archiveMenu.querySelectorAll('button[role="menuitem"]')).filter((button) => !button.disabled);
+      const index = buttons.indexOf(document.activeElement);
+      let next;
+      if (event.key === "ArrowDown") next = (index + 1) % buttons.length;
+      else if (event.key === "ArrowUp") next = (index + buttons.length - 1) % buttons.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = buttons.length - 1;
+      else return;
+      event.preventDefault();
+      buttons[next].focus();
+    });
+    els.rootUp.addEventListener("click", () => {
+      const browser = state.rootBrowser;
+      if (!browser || browser.reading) return;
+      const slash = browser.path.lastIndexOf("/");
+      browser.path = slash < 0 ? "" : browser.path.slice(0, slash);
+      renderRootFolders(browser);
+    });
+    const unlockFolders = () => {
+      if (state.rootBrowser) void loadRootFolders(state.rootBrowser, els.rootPassword.value);
+    };
+    els.rootUnlock.addEventListener("click", unlockFolders);
+    els.rootPassword.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        unlockFolders();
+      }
+    });
     for (const input of els.unitsGroup) input.addEventListener("change", saveUnits);
     els.completionSound.addEventListener("change", saveCompletionSound);
     els.checkUpdates.addEventListener("change", saveUpdateChecks);

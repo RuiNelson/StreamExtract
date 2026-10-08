@@ -1,7 +1,7 @@
 //! Runs archives in order with shared settings, independently of webview polling.
 //! The C API continues to handle one archive; only the GUI adds batch metadata.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -79,12 +79,22 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn start(config: &TransferConfig, archives: Vec<String>) -> Result<Self, String> {
+    pub fn start(
+        config: &TransferConfig,
+        archives: Vec<String>,
+        extraction_roots: HashMap<String, String>,
+        archive_passwords: HashMap<String, String>,
+    ) -> Result<Self, String> {
         if archives.is_empty() || archives.iter().any(|path| path.trim().is_empty()) {
             return Err("Choose at least one archive".to_string());
         }
         let mut config = config.clone();
         config.archive = archives[0].clone();
+        config.archive_password = archive_passwords.get(&config.archive).cloned();
+        config.extraction_root = extraction_roots
+            .get(&config.archive)
+            .cloned()
+            .unwrap_or_default();
         let job = Job::start(&config)?;
         let snapshot = job.poll(0)?;
         let mut state = BatchState {
@@ -94,6 +104,7 @@ impl Batch {
                 .into_iter()
                 .map(|path| {
                     json!({
+                        "extraction_root": extraction_roots.get(&path).cloned().unwrap_or_default(),
                         "path": path, "status": "waiting", "result": null,
                     })
                 })
@@ -141,6 +152,12 @@ impl Batch {
                             let index = state.index;
                             config.archive =
                                 state.items[index]["path"].as_str().unwrap().to_string();
+                            config.archive_password =
+                                archive_passwords.get(&config.archive).cloned();
+                            config.extraction_root = state.items[index]["extraction_root"]
+                                .as_str()
+                                .unwrap()
+                                .to_string();
                             state.items[index]["status"] = json!("running");
                             state.engine_cursor = 0;
                             match Job::start(&config) {
@@ -315,6 +332,7 @@ mod tests {
     fn config() -> TransferConfig {
         TransferConfig {
             archive: "/nonexistent/batch-first.zip".into(),
+            extraction_root: String::new(),
             archive_password: None,
             host: "127.0.0.1".into(),
             port: 1,
@@ -350,20 +368,24 @@ mod tests {
         }
     }
 
-    struct EncryptedArchive(PathBuf);
+    struct FixtureArchive(PathBuf);
 
-    impl EncryptedArchive {
+    impl FixtureArchive {
         fn new() -> Self {
+            Self::from_fixture("kAesZip")
+        }
+
+        fn from_fixture(name: &str) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!(
                 "streamextract-batch-{}-{}.zip",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
-            // Reuse the real bsdtar AES-256 ZIP fixture shared by the C++ tests.
+            // Reuse real archive fixtures shared by the C++ tests.
             let source = include_str!("../../../tests/archive_fixtures.hpp");
             let array = source
-                .split_once("kAesZip[] = {")
+                .split_once(&format!("{name}[] = {{"))
                 .unwrap()
                 .1
                 .split_once("};")
@@ -389,7 +411,7 @@ mod tests {
         }
     }
 
-    impl Drop for EncryptedArchive {
+    impl Drop for FixtureArchive {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
@@ -397,8 +419,49 @@ mod tests {
 
     #[test]
     fn empty_batches_are_rejected() {
-        assert!(Batch::start(&config(), vec![]).is_err());
-        assert!(Batch::start(&config(), vec![String::new()]).is_err());
+        assert!(Batch::start(&config(), vec![], HashMap::new(), HashMap::new()).is_err());
+        assert!(Batch::start(
+            &config(),
+            vec![String::new()],
+            HashMap::new(),
+            HashMap::new()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn every_archive_uses_its_own_root_and_missing_selections_use_the_archive_root() {
+        let first = FixtureArchive::from_fixture("kExtractionRootZip");
+        let second = FixtureArchive::from_fixture("kExtractionRootZip");
+        let third = FixtureArchive::from_fixture("kExtractionRootZip");
+        let roots = HashMap::from([
+            (first.path(), "missing-first".to_string()),
+            (second.path(), "missing-second".to_string()),
+        ]);
+        let mut settings = config();
+        settings.extraction_root = "must-not-carry-over".into();
+        let batch = Batch::start(
+            &settings,
+            vec![first.path(), second.path(), third.path()],
+            roots,
+            HashMap::new(),
+        )
+        .unwrap();
+        let snapshot = wait_for(&batch, is_finished);
+        let items = snapshot["batch"]["items"].as_array().unwrap();
+        for (index, root) in ["missing-first", "missing-second"].iter().enumerate() {
+            assert_eq!(items[index]["extraction_root"], *root);
+            assert_eq!(
+                items[index]["result"]["error"],
+                format!("extraction root \"{root}\" is not a directory in the archive")
+            );
+        }
+        assert_eq!(items[2]["extraction_root"], "");
+        assert!(items[2]["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("connect"));
+        assert_eq!(snapshot["batch"]["completed"], 3);
     }
 
     #[test]
@@ -410,6 +473,8 @@ mod tests {
                 "/nonexistent/batch-second.7z".into(),
                 "/nonexistent/batch-third.tar.gz".into(),
             ],
+            HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
         // Wait for the controller itself, without driving it with GUI polls.
@@ -446,6 +511,8 @@ mod tests {
                 "bad\0path".into(),
                 "/nonexistent/last.zip".into(),
             ],
+            HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
         let snapshot = wait_for(&batch, is_finished);
@@ -459,10 +526,12 @@ mod tests {
 
     #[test]
     fn cancelling_a_password_prompt_stops_the_batch_and_marks_waiting_archives() {
-        let archive = EncryptedArchive::new();
+        let archive = FixtureArchive::new();
         let batch = Batch::start(
             &config(),
             vec![archive.path(), "/nonexistent/never-start.zip".into()],
+            HashMap::new(),
+            HashMap::new(),
         )
         .unwrap();
         wait_for(&batch, |snap| snap["prompt"]["kind"] == "archive_password");
@@ -476,9 +545,15 @@ mod tests {
 
     #[test]
     fn passwords_are_answered_for_each_archive_and_declining_one_continues() {
-        let first = EncryptedArchive::new();
-        let second = EncryptedArchive::new();
-        let batch = Batch::start(&config(), vec![first.path(), second.path()]).unwrap();
+        let first = FixtureArchive::new();
+        let second = FixtureArchive::new();
+        let batch = Batch::start(
+            &config(),
+            vec![first.path(), second.path()],
+            HashMap::new(),
+            HashMap::new(),
+        )
+        .unwrap();
         wait_for(&batch, |snap| snap["prompt"]["kind"] == "archive_password");
         batch.answer_password(Some("wrong")).unwrap();
         let snapshot = wait_for(&batch, |snap| snap["prompt"]["error"].is_string());
@@ -496,6 +571,43 @@ mod tests {
             .unwrap()
             .contains("connect"));
         assert_eq!(snapshot["batch"]["completed"], 2);
+    }
+
+    #[test]
+    fn supplied_passwords_are_per_archive_and_never_exposed_in_snapshots() {
+        let first = FixtureArchive::new();
+        let second = FixtureArchive::new();
+        let third = FixtureArchive::new();
+        let passwords = HashMap::from([
+            (first.path(), "secret".to_string()),
+            (second.path(), "second-private-password".to_string()),
+        ]);
+        let mut settings = config();
+        settings.archive_password = Some("must-not-carry-over".into());
+        let batch = Batch::start(
+            &settings,
+            vec![first.path(), second.path(), third.path()],
+            HashMap::new(),
+            passwords,
+        )
+        .unwrap();
+        let snapshot = wait_for(&batch, |snap| {
+            snap["batch"]["current_index"] == 1 && snap["prompt"]["error"] == "Wrong password"
+        });
+        assert!(snapshot["batch"]["items"][0]["result"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("connect"));
+        for password in ["secret", "second-private-password", "must-not-carry-over"] {
+            assert!(!snapshot.to_string().contains(password));
+        }
+        batch.answer_password(None).unwrap();
+        let snapshot = wait_for(&batch, |snap| {
+            snap["batch"]["current_index"] == 2 && snap["prompt"].is_object()
+        });
+        assert!(snapshot["prompt"]["error"].is_null());
+        batch.answer_password(None).unwrap();
+        assert_eq!(wait_for(&batch, is_finished)["batch"]["completed"], 3);
     }
 
     #[test]

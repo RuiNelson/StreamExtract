@@ -45,6 +45,11 @@ class ArchivePasswordError : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+class ArchivePasswordRequired : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+
 struct ArchiveListing {
   ArchiveFormat format = ArchiveFormat::Rar;
   std::vector<ArchiveEntry> entries;  // Archive order; continuation headers excluded.
@@ -57,8 +62,15 @@ struct ArchiveListing {
 std::string describe_archive(const ArchiveListing& listing, bool encrypted, ByteUnits units = ByteUnits::Binary);
 
 // Reads every header of every volume; for a stream_only archive (compressed tar) only opens it, leaving the
-// entries empty. Throws std::runtime_error, or ArchivePasswordError when the password is wrong.
-ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log);
+// entries empty, unless read_streamed is requested by the folder browser. Throws std::runtime_error,
+// ArchivePasswordRequired for a missing password, or ArchivePasswordError when the password is wrong.
+ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log,
+                            bool read_streamed = false);
+
+// Includes implicit parents and empty directories, using the same names as the planner.
+std::vector<std::string> archive_directories(const ArchiveListing& listing);
+std::string normalize_extraction_root(ArchiveFormat format, const std::string& root);
+void validate_extraction_root(const ArchiveListing& listing, const std::string& root);
 
 struct PlannedEntry {
   enum class Action {
@@ -74,11 +86,13 @@ struct PlannedEntry {
   Action action = Action::Upload;
   uint64_t resume_offset = 0;         // Discard this prefix locally, then append the remaining bytes.
   bool delete_before_upload = false;  // The remote file is larger than the archive entry.
+  bool excluded = false;              // Outside the extraction root; does not count as an ignored entry.
 };
 
 struct TransferPlan {
   std::string archive_path;
   std::string remote_root;
+  std::string extraction_root;  // Sanitized archive directory whose contents are uploaded.
   ArchiveFormat format = ArchiveFormat::Rar;
   bool skip_decompresses = false;  // See ArchiveFlags.
   // A stream_only archive: no entries here; the transfer plans each one as it
@@ -100,13 +114,16 @@ struct TransferPlan {
 // collisions).
 class Planner {
  public:
-  Planner(ArchiveFormat format, std::string remote_root, Logger& log);
+  Planner(ArchiveFormat format, std::string remote_root, Logger& log, const std::string& extraction_root = "");
   PlannedEntry plan(const ArchiveEntry& entry);
+  bool found_root() const { return found_root_; }
 
  private:
   std::string remote_root_;
   Logger& log_;
   bool backslash_separators_;
+  std::string extraction_root_;
+  bool found_root_;
   std::unordered_set<std::string> files_seen_;
   std::unordered_map<std::string, std::string> folded_;  // Lower-cased path -> first spelling.
 };
@@ -114,7 +131,7 @@ class Planner {
 // The plan of a listed archive (Planner over every entry). For a stream_only
 // one, an empty plan marked `streamed`.
 TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& listing,
-                        const std::string& remote_root, Logger& log);
+                        const std::string& remote_root, Logger& log, const std::string& extraction_root = "");
 
 // Plans skips, resumes and replacements, one file at a time: one existence
 // check and one listing per directory, then SIZE only for

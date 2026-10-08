@@ -41,14 +41,19 @@ pub struct StreamExtractSshOptions {
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_connection(
+    pub fn streamextract_job_start_with_extraction_root(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
         protocol: c_int,
         ca_certificate: *const c_char,
         ssh: *const StreamExtractSshOptions,
+        extraction_root: *const c_char,
     ) -> *mut StreamExtractJob;
+    pub fn streamextract_archive_directories(
+        archive: *const c_char,
+        password: *const c_char,
+    ) -> *mut c_char;
     pub fn streamextract_job_poll(job: *mut StreamExtractJob, log_cursor: u64) -> *mut c_char;
     pub fn streamextract_job_answer_password(job: *mut StreamExtractJob, password: *const c_char);
     pub fn streamextract_job_cancel(job: *mut StreamExtractJob);
@@ -68,6 +73,32 @@ fn c_string(what: &str, value: &str) -> Result<CString, String> {
     CString::new(value).map_err(|_| format!("{what} must not contain NUL characters"))
 }
 
+// SAFETY: callers supply an owned library string (or NULL); always free it after parsing.
+unsafe fn parse_library_json(text: *mut c_char) -> Result<Value, String> {
+    if text.is_null() {
+        return Err("The library returned no state".to_string());
+    }
+    let parsed = serde_json::from_str(&CStr::from_ptr(text).to_string_lossy());
+    streamextract_free(text);
+    parsed.map_err(|error| format!("The library returned invalid state: {error}"))
+}
+
+pub fn archive_directories(archive: &str, password: Option<&str>) -> Result<Value, String> {
+    let archive = c_string("The archive path", archive)?;
+    let password = password
+        .map(|value| c_string("The archive password", value))
+        .transpose()?;
+    // SAFETY: the strings live through the synchronous call; the returned string is owned.
+    unsafe {
+        parse_library_json(streamextract_archive_directories(
+            archive.as_ptr(),
+            password
+                .as_ref()
+                .map_or(ptr::null(), |value| value.as_ptr()),
+        ))
+    }
+}
+
 /// A running (or finished) transfer. Dropping it cancels the job if needed, waits for it
 /// (so the partial remote file is deleted) and frees it.
 pub struct Job {
@@ -83,6 +114,7 @@ impl Job {
     /// Starts a job. The library copies the strings, so the `CString`s only live for this call.
     pub fn start(config: &TransferConfig) -> Result<Job, String> {
         let archive = c_string("The archive path", &config.archive)?;
+        let extraction_root = c_string("The extraction root", &config.extraction_root)?;
         let archive_password = config
             .archive_password
             .as_deref()
@@ -149,7 +181,7 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_connection(
+            streamextract_job_start_with_extraction_root(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
@@ -161,6 +193,7 @@ impl Job {
                 },
                 ptr::null(), // Use the system certificate trust store.
                 &ssh,
+                extraction_root.as_ptr(),
             )
         };
         NonNull::new(job)
@@ -172,14 +205,8 @@ impl Job {
     pub fn poll(&self, cursor: u64) -> Result<Value, String> {
         // SAFETY: `self.raw` is a live job.
         let text = unsafe { streamextract_job_poll(self.raw.as_ptr(), cursor) };
-        if text.is_null() {
-            return Err("The library returned no state".to_string());
-        }
-        // SAFETY: a non-NULL result is a NUL-terminated string that we own until `streamextract_free`.
-        let parsed = serde_json::from_str(&unsafe { CStr::from_ptr(text) }.to_string_lossy());
-        // SAFETY: `text` came from `streamextract_job_poll` and is not used afterwards.
-        unsafe { streamextract_free(text) };
-        parsed.map_err(|error| format!("The library returned invalid state: {error}"))
+        // SAFETY: `text` is an owned library string or NULL.
+        unsafe { parse_library_json(text) }
     }
 
     /// Answers a pending archive password prompt; `None` declines it.
@@ -216,6 +243,7 @@ mod tests {
     fn config() -> TransferConfig {
         TransferConfig {
             archive: "/nonexistent/streamextract-test.rar".to_string(),
+            extraction_root: String::new(),
             archive_password: None,
             host: "127.0.0.1".to_string(),
             port: 21,

@@ -36,9 +36,12 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
       },
       removeEventListener(type, listener) { this.events.get(type)?.delete(listener); },
       dispatch(type, event = {}) { for (const listener of this.events.get(type) || []) listener(event); },
+      getBoundingClientRect() { return { left: 10, right: 250, top: 10, bottom: 50, width: 218, height: 120 }; },
+      close(value = "") { this.returnValue = value; this.open = false; this.dispatch("close"); },
       showModal() {
         this.open = true;
         queueMicrotask(() => {
+          if (this.answer === "pending") return;
           this.onShow?.();
           if (this.answer === "escape") this.dispatch("cancel");
           else this.dispatch("submit", { submitter: { value: this.answer || "select" } });
@@ -52,7 +55,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
     return nodes.get(id);
   }
   const context = vm.createContext({
-    window: { __TAURI__: { core: { invoke }, window: windowApi, ...tauriApi }, AudioContext },
+    window: { __TAURI__: { core: { invoke }, window: windowApi, ...tauriApi }, AudioContext, innerWidth: 640, innerHeight: 840 },
     fetch: async (path) => {
       assert.equal(path, "assets/audio/completed.mp3");
       return { ok: true, arrayBuffer: async () => new ArrayBuffer(1) };
@@ -65,7 +68,8 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
         dataset: {}, children: [], attributes: {}, events: {},
         setAttribute(key, value) { this.attributes[key] = value; },
         addEventListener(type, listener) { this.events[type] = listener; },
-        append(...children) { this.children.push(...children); }, remove() {},
+        getBoundingClientRect() { return { left: 540, right: 570, top: 120, bottom: 150, width: 30, height: 30 }; },
+        append(...children) { this.children.push(...children); }, remove() {}, focus() {}, scrollIntoView() {},
       }),
       createDocumentFragment: () => ({ append() {} }),
       createTextNode: (text) => ({ textContent: text }),
@@ -74,7 +78,7 @@ function frontend(invoke = async () => ({ units: "si", buffer_mib: 64, completio
   });
   const source = readFileSync(`${__dirname}/../ui/app.js`, "utf8").replace(
     "  init();",
-    "  globalThis.api = { state, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, memorySave, memoryRecall, memoryClear, chooseMemorySlot, runMemoryAction, updateMemoryButtons, changeProtocol, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
+    "  globalThis.api = { state, openArchiveMenu, editArchivePassword, browseExtractionRoot, loadRootFolders, renderRootFolders, logLine, addArchives, removeArchive, chooseArchive, initDragDrop, startTransfer, batchRatio, renderBatch, buildConfig, loadPreferences, saveUnits, saveBuffer, saveRetries, saveCompletionSound, savePasswordVisibility, saveUpdateChecks, initUpdateChecks, checkForUpdates, memorySave, memoryRecall, memoryClear, chooseMemorySlot, runMemoryAction, updateMemoryButtons, changeProtocol, renderCurrent, renderTotal, renderStatus, render, updateWindowProgress, requestAttention, flushWindowProgress: () => windowProgressQueue };"
   );
   vm.runInContext(source, context);
   context.api.state.preferencesBusy = false;
@@ -212,7 +216,7 @@ test("password visibility is shared, persists across preference changes, and kee
     calls.push({ command, args });
     return { units: "binary", buffer_mib: 128, completion_sound: false, show_passwords: true };
   });
-  const fields = ["archive-password", "password", "pw-input"];
+  const fields = ["file-password", "password", "pw-input"];
   for (const id of fields) app.node(id).value = "secret";
   await app.loadPreferences();
   for (const id of fields) {
@@ -307,7 +311,7 @@ test("the selected units are sent to the engine when a transfer starts", () => {
   assert.equal(app.buildConfig().units, "binary");
 });
 
-test("Add File appends multiple selections, ignores duplicates, and Remove File empties the queue", async () => {
+test("adding files ignores duplicates and each row's menu can remove its archive", async () => {
   const options = [];
   const app = frontend(undefined, {}, { dialog: { open: async (value) => {
     options.push(value);
@@ -320,7 +324,8 @@ test("Add File appends multiple selections, ignores duplicates, and Remove File 
   assert.equal(app.node("archive-list").children.length, 2);
   assert.equal(app.node("btn-upload").disabled, false);
   // Exercise the row button's actual handler.
-  app.node("archive-list").children[0].children[1].events.click();
+  app.node("archive-menu").answer = "remove";
+  await app.node("archive-list").children[0].children[2].events.click();
   assert.deepEqual(Array.from(app.state.archives), ["/tmp/second.7z"]);
   app.removeArchive(0);
   assert.equal(app.node("archive-list").hidden, true);
@@ -346,7 +351,7 @@ test("dropping multiple archives appends to the queue and cannot change a runnin
   assert.equal(app.state.archives.length, 3);
 });
 
-test("starting a batch sends every archive with one shared configuration", async () => {
+test("starting a batch sends shared server settings and an independent root for each archive", async () => {
   const calls = [];
   const app = frontend(async (command, args) => {
     calls.push({ command, args });
@@ -359,10 +364,21 @@ test("starting a batch sends every archive with one shared configuration", async
   app.node("host").value = "ftp.example.com";
   app.node("directory").value = "/shared";
   app.node("retries").value = "5";
-  app.addArchives(["/tmp/first.zip", "/tmp/second.7z"]);
+  app.addArchives(["/tmp/first.zip", "/tmp/second.7z", "/tmp/third.tar.gz"]);
+  app.state.extractionRoots.set("/tmp/first.zip", "a");
+  app.state.extractionRoots.set("/tmp/second.7z", "b/nested");
+  app.state.archivePasswords.set("/tmp/first.zip", "first-password");
+  app.state.archivePasswords.set("/tmp/second.7z", "second-password");
   await app.startTransfer();
   const start = calls.find((call) => call.command === "start_transfer");
-  assert.deepEqual(Array.from(start.args.archives), ["/tmp/first.zip", "/tmp/second.7z"]);
+  assert.deepEqual(Array.from(start.args.archives), ["/tmp/first.zip", "/tmp/second.7z", "/tmp/third.tar.gz"]);
+  assert.deepEqual({ ...start.args.extraction_roots }, {
+    "/tmp/first.zip": "a", "/tmp/second.7z": "b/nested", "/tmp/third.tar.gz": "",
+  });
+  assert.deepEqual({ ...start.args.archive_passwords }, {
+    "/tmp/first.zip": "first-password", "/tmp/second.7z": "second-password",
+  });
+  assert.equal(start.args.config.archive_password, undefined);
   assert.equal(start.args.config.archive, "/tmp/first.zip");
   assert.equal(start.args.config.host, "ftp.example.com");
   assert.equal(start.args.config.directory, "/shared");
@@ -853,4 +869,242 @@ test("empty memory disables recall and clear while allowing a new save", async (
   assert.equal(ui.node("btn-mem-clear").disabled, true);
   const result = await ui.chooseMemorySlot("recall", { configs: [] });
   assert.equal(result, null);
+});
+
+test("compact archive rows show independent settings and one overflow button", () => {
+  const app = frontend();
+  app.state.extractionRoots.set("/test/example.zip", "b/nested");
+  app.addArchives(["/test/example.zip", "/test/second.zip"]);
+  app.node("host").value = "example.com";
+  app.node("port").value = "21";
+  app.node("directory").value = "/remote/dest";
+  const config = app.buildConfig();
+  assert.equal(config.extraction_root, undefined);
+  assert.equal(config.directory, "/remote/dest");
+  const rows = app.node("archive-list").children;
+  assert.equal(rows[0].children[1].children[1].children[0].textContent, "Root: /b/nested");
+  assert.equal(rows[1].children[1].children[1].children[0].textContent, "All contents");
+  for (const row of rows) {
+    assert.equal(row.children[2].textContent, "…");
+    assert.equal(row.children[2].attributes["aria-haspopup"], "menu");
+  }
+  assert.equal(app.node("dropzone").hidden, true);
+  assert.equal(app.node("archive-count").textContent, "2");
+});
+
+test("the folder picker navigates implicit and empty directories and selects their archive path", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    return { directories: ["a", "a/x", "a/y", "b", "b/nested", "b2"], password_required: false, error: null };
+  });
+  app.addArchives(["/test/example.zip", "/test/second.zip"]);
+  const dialog = app.node("dlg-extraction-root");
+  dialog.answer = "pending";
+  const choice = app.browseExtractionRoot("/test/second.zip");
+  await new Promise(setImmediate);
+  assert.equal(calls[0].command, "archive_directories");
+  assert.equal(calls[0].args.archive, "/test/second.zip");
+  assert.equal(app.node("root-archive").textContent, "Folders in second.zip");
+  let folders = app.node("root-folders").children;
+  assert.equal(folders.length, 3);
+  folders[0].children[0].events.click(); // a
+  assert.equal(app.node("root-path").textContent, "/a");
+  folders = app.node("root-folders").children;
+  assert.equal(folders.length, 2);
+  folders[0].children[0].events.click(); // empty a/x
+  assert.equal(app.node("root-path").textContent, "/a/x");
+  assert.equal(app.node("root-folders").children.length, 0);
+  assert.equal(app.node("root-select").disabled, false);
+  dialog.dispatch("submit", { submitter: { value: "select" } });
+  dialog.open = false;
+  await choice;
+  assert.equal(app.state.extractionRoots.get("/test/second.zip"), "a/x");
+  assert.equal(app.state.extractionRoots.get("/test/example.zip"), undefined);
+  assert.equal(app.state.rootBrowser, null);
+});
+
+test("the folder picker retries encrypted archives and keeps passwords out of the root", async () => {
+  const app = frontend(async (_, args) => args.password === "secret"
+    ? { directories: ["a"], password_required: false, error: null }
+    : { directories: [], password_required: true, error: args.password ? "Wrong password" : null });
+  app.addArchives(["/test/encrypted.zip"]);
+  const dialog = app.node("dlg-extraction-root");
+  dialog.answer = "pending";
+  const choice = app.browseExtractionRoot("/test/encrypted.zip");
+  await new Promise(setImmediate);
+  assert.equal(app.node("root-password-field").hidden, false);
+  assert.equal(app.node("root-select").disabled, true);
+  const browser = app.state.rootBrowser;
+  await app.loadRootFolders(browser, "wrong");
+  assert.equal(app.node("root-error").textContent, "Wrong password");
+  await app.loadRootFolders(browser, "secret");
+  assert.equal(app.node("root-password-field").hidden, true);
+  assert.equal(app.node("root-select").disabled, false);
+  dialog.dispatch("submit", { submitter: { value: "select" } });
+  dialog.open = false;
+  await choice;
+  assert.equal(app.state.extractionRoots.get("/test/encrypted.zip"), ""); // archive root
+  assert.equal(app.state.archivePasswords.get("/test/encrypted.zip"), "secret");
+  assert.equal(app.node("root-password").value, "");
+});
+
+test("cancelling a folder read preserves the root and ignores its late result", async () => {
+  let finishRead;
+  const app = frontend(() => new Promise((resolve) => { finishRead = resolve; }));
+  app.addArchives(["/test/example.zip"]);
+  app.state.extractionRoots.set("/test/example.zip", "b");
+  const dialog = app.node("dlg-extraction-root");
+  dialog.answer = "pending";
+  const choice = app.browseExtractionRoot("/test/example.zip");
+  dialog.dispatch("cancel");
+  dialog.open = false;
+  await choice;
+  finishRead({ directories: ["a"], password_required: false, error: null });
+  await new Promise(setImmediate);
+  assert.equal(app.state.extractionRoots.get("/test/example.zip"), "b");
+  assert.equal(app.state.rootBrowser, null);
+  assert.equal(app.node("root-folders").children.length, 0);
+});
+
+test("removing a queued archive clears only its root and re-adding starts at the archive root", () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.state.extractionRoots.set("/test/first.zip", "a");
+  app.state.extractionRoots.set("/test/second.zip", "b");
+  app.removeArchive(0);
+  assert.equal(app.state.extractionRoots.has("/test/first.zip"), false);
+  assert.equal(app.state.extractionRoots.get("/test/second.zip"), "b");
+  app.addArchives(["/test/first.zip"]);
+  assert.equal(app.node("archive-list").children[1].children[1].children[1].children[0].textContent, "All contents");
+});
+
+test("reopening a file's root picker restores its own selection and selecting archive root resets only that file", async () => {
+  const app = frontend(async () => ({ directories: ["a", "b"], password_required: false, error: null }));
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.state.extractionRoots.set("/test/first.zip", "a");
+  app.state.extractionRoots.set("/test/second.zip", "b");
+  const dialog = app.node("dlg-extraction-root");
+  dialog.answer = "pending";
+  const choice = app.browseExtractionRoot("/test/second.zip");
+  await new Promise(setImmediate);
+  assert.equal(app.node("root-path").textContent, "/b");
+  app.state.rootBrowser.path = "";
+  app.renderRootFolders(app.state.rootBrowser);
+  dialog.dispatch("submit", { submitter: { value: "select" } });
+  dialog.open = false;
+  await choice;
+  assert.equal(app.state.extractionRoots.get("/test/first.zip"), "a");
+  assert.equal(app.state.extractionRoots.get("/test/second.zip"), "");
+});
+
+test("editing an extraction password changes only that archive and clears the dialog input", async () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.state.archivePasswords.set("/test/first.zip", "first-secret");
+  const dialog = app.node("dlg-file-password");
+  dialog.answer = "pending";
+  const choice = app.editArchivePassword("/test/second.zip");
+  assert.equal(app.node("file-password-archive").textContent, "second.zip");
+  assert.equal(app.node("file-password").value, "");
+  app.node("file-password").value = "second-secret";
+  dialog.dispatch("submit", { submitter: { value: "save" } });
+  dialog.open = false;
+  await choice;
+  assert.equal(app.state.archivePasswords.get("/test/first.zip"), "first-secret");
+  assert.equal(app.state.archivePasswords.get("/test/second.zip"), "second-secret");
+  assert.equal(app.node("file-password").value, "");
+  assert.equal(app.state.editingArchive, null);
+  for (const row of app.node("archive-list").children) {
+    assert.equal(row.children[1].children[1].children[1].textContent, "Password set");
+    assert.equal(row.children[1].title.includes("secret"), false);
+  }
+});
+
+test("password cancellation preserves the archive's value and saving blank clears only its password", async () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.state.archivePasswords.set("/test/first.zip", "first-secret");
+  app.state.archivePasswords.set("/test/second.zip", "second-secret");
+  const dialog = app.node("dlg-file-password");
+  dialog.answer = "pending";
+  let choice = app.editArchivePassword("/test/second.zip");
+  assert.equal(app.node("file-password").value, "second-secret");
+  app.node("file-password").value = "unsaved";
+  dialog.close("cancel");
+  await choice;
+  assert.equal(app.state.archivePasswords.get("/test/second.zip"), "second-secret");
+  choice = app.editArchivePassword("/test/second.zip");
+  app.node("file-password").value = "";
+  dialog.dispatch("submit", { submitter: { value: "save" } });
+  dialog.open = false;
+  await choice;
+  assert.equal(app.state.archivePasswords.has("/test/second.zip"), false);
+  assert.equal(app.state.archivePasswords.get("/test/first.zip"), "first-secret");
+});
+
+test("the overflow menu opens the password editor for the clicked archive", async () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.node("archive-menu").answer = "password";
+  app.node("dlg-file-password").answer = "save";
+  app.node("dlg-file-password").onShow = () => { app.node("file-password").value = "second-secret"; };
+  await app.node("archive-list").children[1].children[2].events.click();
+  assert.equal(app.state.archivePasswords.get("/test/second.zip"), "second-secret");
+  assert.equal(app.state.archivePasswords.has("/test/first.zip"), false);
+});
+
+test("removing an archive forgets its password while keeping other archives' credentials", () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.state.archivePasswords.set("/test/first.zip", "first-secret");
+  app.state.archivePasswords.set("/test/second.zip", "second-secret");
+  app.removeArchive(0);
+  assert.equal(app.state.archivePasswords.has("/test/first.zip"), false);
+  assert.equal(app.state.archivePasswords.get("/test/second.zip"), "second-secret");
+  app.addArchives(["/test/first.zip"]);
+  assert.equal(app.state.archivePasswords.has("/test/first.zip"), false);
+});
+
+test("moving jobs through their menus changes upload order and retains each archive's settings", async () => {
+  const calls = [];
+  const app = frontend(async (command, args) => {
+    calls.push({ command, args });
+    if (command === "poll_transfer") return new Promise(() => {});
+  }, {
+    ProgressBarStatus: { Indeterminate: "indeterminate" },
+    getCurrentWindow: () => ({ setProgressBar: async () => {}, requestUserAttention: async () => {} }),
+  });
+  app.node("port").value = "21";
+  app.node("host").value = "ftp.example.com";
+  app.addArchives(["/test/first.zip", "/test/second.zip", "/test/third.zip"]);
+  app.state.extractionRoots.set("/test/second.zip", "b");
+  app.state.archivePasswords.set("/test/second.zip", "second-secret");
+  app.node("archive-menu").answer = "up";
+  await app.node("archive-list").children[1].children[2].events.click();
+  assert.deepEqual(Array.from(app.state.archives), ["/test/second.zip", "/test/first.zip", "/test/third.zip"]);
+  app.node("archive-menu").answer = "down";
+  await app.node("archive-list").children[1].children[2].events.click();
+  await app.startTransfer();
+  const start = calls.find((call) => call.command === "start_transfer");
+  assert.deepEqual(Array.from(start.args.archives), ["/test/second.zip", "/test/third.zip", "/test/first.zip"]);
+  assert.equal(start.args.config.archive, "/test/second.zip");
+  assert.equal(start.args.extraction_roots["/test/second.zip"], "b");
+  assert.equal(start.args.archive_passwords["/test/second.zip"], "second-secret");
+});
+
+test("the queue menu disables moves at its boundaries and both moves for a single job", async () => {
+  const app = frontend();
+  app.addArchives(["/test/first.zip", "/test/second.zip"]);
+  app.node("archive-menu").answer = "escape";
+  await app.node("archive-list").children[0].children[2].events.click();
+  assert.equal(app.node("archive-move-up").disabled, true);
+  assert.equal(app.node("archive-move-down").disabled, false);
+  await app.node("archive-list").children[1].children[2].events.click();
+  assert.equal(app.node("archive-move-up").disabled, false);
+  assert.equal(app.node("archive-move-down").disabled, true);
+  app.removeArchive(1);
+  await app.node("archive-list").children[0].children[2].events.click();
+  assert.equal(app.node("archive-move-up").disabled, true);
+  assert.equal(app.node("archive-move-down").disabled, true);
 });

@@ -12,6 +12,9 @@
 
 #include "app_version.hpp"
 #include "capi/job.hpp"
+#include "logger.hpp"
+#include "plan.hpp"
+#include "util/json.hpp"
 
 struct streamextract_job {
   explicit streamextract_job(streamextract::JobConfig config) : job(std::move(config)) {}
@@ -21,6 +24,11 @@ struct streamextract_job {
 namespace {
 
 std::string copy_string(const char* text) { return text != nullptr ? std::string(text) : std::string(); }
+
+void initialize_locale() {
+  static std::once_flag locale_once;
+  std::call_once(locale_once, [] { std::setlocale(LC_CTYPE, ""); });
+}
 
 // malloc(), so that streamextract_free() is a plain free() whatever the allocator of
 // the caller's language.
@@ -68,15 +76,24 @@ streamextract_job* streamextract_job_start_with_connection(const streamextract_j
                                                            unsigned retries, int protocol,
                                                            const char* ca_certificate,
                                                            const streamextract_ssh_options* ssh) {
+  return streamextract_job_start_with_extraction_root(config, si_units, retries, protocol, ca_certificate, ssh,
+                                                      nullptr);
+}
+
+streamextract_job* streamextract_job_start_with_extraction_root(const streamextract_job_config* config,
+                                                                int si_units, unsigned retries, int protocol,
+                                                                const char* ca_certificate,
+                                                                const streamextract_ssh_options* ssh,
+                                                                const char* extraction_root) {
   if (config == nullptr) {
     return nullptr;
   }
   try {
-    static std::once_flag locale_once;
-    std::call_once(locale_once, [] { std::setlocale(LC_CTYPE, ""); });  // UnRAR converts some names with it.
+    initialize_locale();  // UnRAR converts some names with it.
 
     streamextract::JobConfig copy;
     copy.archive = copy_string(config->archive);
+    copy.extraction_root = copy_string(extraction_root);
     if (config->archive_password != nullptr) {
       copy.archive_password = std::string(config->archive_password);
     }
@@ -102,6 +119,44 @@ streamextract_job* streamextract_job_start_with_connection(const streamextract_j
     copy.retries = retries == 0 ? 3 : retries;
     copy.units = si_units != 0 ? streamextract::ByteUnits::Si : streamextract::ByteUnits::Binary;
     return new streamextract_job(std::move(copy));
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+char* streamextract_archive_directories(const char* archive, const char* password) {
+  try {
+    initialize_locale();
+    std::vector<std::string> directories;
+    bool password_required = false;
+    std::optional<std::string> error;
+    try {
+      streamextract::Logger log;
+      streamextract::PasswordSource passwords(password ? std::optional<std::string>(password) : std::nullopt, {});
+      const auto listing = streamextract::list_archive(copy_string(archive), passwords, log, true);
+      directories = streamextract::archive_directories(listing);
+    } catch (const streamextract::ArchivePasswordRequired&) {
+      password_required = true;
+    } catch (const streamextract::ArchivePasswordError&) {
+      password_required = true;
+      error = "Wrong password";
+    } catch (const std::exception& exception) {
+      error = exception.what();
+    }
+    streamextract::JsonWriter json;
+    json.begin_object();
+    json.key("directories");
+    json.begin_array();
+    for (const auto& directory : directories) json.value(directory);
+    json.end_array();
+    json.member("password_required", password_required);
+    json.key("error");
+    if (error)
+      json.value(*error);
+    else
+      json.null();
+    json.end_object();
+    return duplicate(json.str());
   } catch (...) {
     return nullptr;
   }

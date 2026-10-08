@@ -419,52 +419,35 @@ input[type="checkbox"] {
 .dropzone {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px;
+  padding: 24px 16px;
   border-radius: 8px;
-  border: 1.5px dashed var(--border-strong);
+  border: 1px dashed var(--border-strong);
   background: var(--inset);
   transition: border-color 0.12s, background-color 0.12s;
 }
 
-.dropzone[data-state="chosen"] {
-  border-style: solid;
-  border-width: 1px;
-  border-color: var(--border-strong);
-}
-
-.dropzone.drag {
-  border-style: dashed;
-  border-width: 1.5px;
+.files-card.drag {
   border-color: var(--accent-text);
   background: var(--accent-soft);
-}
-
-.dz-icon {
-  flex: none;
-  color: var(--muted);
-}
-
-.dropzone[data-state="chosen"] .dz-icon,
-.dropzone.drag .dz-icon {
-  color: var(--accent-text);
 }
 
 .dz-text {
   flex: 1;
   min-width: 0;
+  text-align: center;
 }
 
 .dz-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dz-sub {
-  font-size: 12px;
+  margin-top: 4px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -488,6 +471,32 @@ input[type="checkbox"] {
 
 .archive-row:last-child { border-bottom: 0; }
 .archive-details { flex: 1; min-width: 0; }
+.files-heading { display: flex; align-items: baseline; gap: 8px; }
+.archive-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.btn.icon-button {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  font-size: 21px;
+  line-height: 1;
+  border-color: transparent;
+  box-shadow: none;
+  background: transparent;
+  color: var(--muted);
+}
+.btn.icon-button:hover { background: var(--segment); color: var(--text); }
+.btn.icon-button:active { background: var(--btn-active); }
+.files-card .card-head { align-items: center; margin-bottom: 8px; }
+.files-card .archive-list { max-height: 260px; }
+.files-card .archive-row { padding: 11px 0; gap: 12px; }
+.files-card .archive-name { font-weight: 500; }
+.archive-order { flex: none; width: 18px; text-align: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.archive-meta { display: flex; align-items: baseline; gap: 8px; margin-top: 3px; font-size: 11px; color: var(--muted); }
+.archive-root { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archive-password-set { flex: none; }
+.archive-password-set::before { content: "·"; margin-right: 8px; }
 .archive-name, .archive-path {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1100,6 +1109,37 @@ dialog.dialog::backdrop {
   background: var(--backdrop);
 }
 
+dialog.archive-menu {
+  position: fixed;
+  margin: 0;
+  width: 218px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--dialog-shadow);
+}
+.archive-menu::backdrop { background: transparent; }
+.archive-menu button {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.archive-menu button:not(:disabled):hover { background: var(--segment); }
+.archive-menu button:disabled { color: var(--placeholder); cursor: default; }
+.archive-menu button:focus-visible { outline: none; }
+.archive-menu .menu-section { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0; }
+.archive-menu .menu-remove { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; color: var(--danger); }
+
 .dialog h2 {
   margin-bottom: 8px;
   font-size: 15px;
@@ -1124,6 +1164,13 @@ dialog.dialog::backdrop {
   gap: 8px;
   margin-top: 18px;
 }
+
+dialog#dlg-extraction-root { width: min(480px, calc(100vw - 40px)); }
+.root-navigation { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+#root-path, #root-archive { overflow-wrap: anywhere; min-width: 0; }
+.root-folders { list-style: none; padding: 0; margin: 10px 0; max-height: 260px; overflow-y: auto; }
+.root-folders li + li { margin-top: 4px; }
+.root-folder { display: block; width: 100%; text-align: left; overflow-wrap: anywhere; }
 
 #memory-slot {
   width: 100%;

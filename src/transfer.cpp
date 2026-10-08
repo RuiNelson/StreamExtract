@@ -339,7 +339,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
     ~Unset() { reading = nullptr; }
   } unset{reading_};
 
-  Planner planner(plan_.format, plan_.remote_root, log_);
+  Planner planner(plan_.format, plan_.remote_root, log_, plan_.extraction_root);
   ArchiveEntry header;
   while (archive->next(header)) {
     if (cancel_requested_ || pipe_.aborted()) {
@@ -388,7 +388,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
         case PlannedEntry::Action::Ignore: {
           {
             std::lock_guard lock(mutex_);
-            ++ignored_;
+            if (!planned.excluded) ++ignored_;
           }
           archive->skip();
           break;
@@ -402,6 +402,10 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
       return;
     }
     progress_.set_archive_read(archive->bytes_read());
+  }
+  if (!planner.found_root()) {
+    fail(fmt::format("extraction root \"{}\" is not a directory in the archive", plan_.extraction_root));
+    return;
   }
   PipeMessage end;
   end.kind = PipeMessage::Kind::End;

@@ -99,9 +99,12 @@ The app offers:
 - **Archives**: drop RAR, ZIP, 7z or tar archives (also compressed: `.tar.gz`,
   `.tgz`, `.tar.xz`...), or an exFAT, PFS (`.ffpfsc`, `.ffpfs`) or UFS (`.ffpkg`)
   volume image, on the window,
-  or select several with **Add File**. **Remove File** removes an archive from
-  the queue before uploading. Archives run in order with the same server,
-  directory and other settings; a failed archive does not stop the remaining ones.
+  or select several with the **+** button. Each queued archive has a **…** menu
+  to set its extraction password, select its extraction root, move it up or down
+  in the queue, or remove it.
+  Passwords and extraction roots are independent for every archive. Archives
+  run in order with the same server and destination; a failed archive does not
+  stop the remaining ones.
   For multi-volume sets, use the first volume
   (`.part1.rar`, `.zip.001`, `.7z.001`...).
   When the archive is encrypted and no password was typed in, the app asks for
@@ -206,6 +209,7 @@ password-protected archives are supported:
 | `--directory DIR` | Destination, absolute or relative to the login directory. Without it the login directory is used and a warning says which one. |
 | `--mkdir` | Create the destination if it does not exist, with a single `MKD` (not recursive). Without it, a missing destination is an error. |
 | `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
+| `--extraction-root DIR` | Upload only this directory's contents from inside the archive, removing its path prefix. Omitted, empty or `/`: upload all contents. |
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
 | `--verbose` | Log connection and protocol details (credentials are masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
@@ -344,6 +348,15 @@ Behaviour, in both:
   size, it is overwritten from the beginning. Progress and upload totals count
   only the bytes sent in this run.
 - **Directories** of the archive, including empty ones, are created.
+- **Extraction root** selects a directory inside the archive or filesystem image.
+  For example, `--extraction-root b --directory /remote/dest` uploads `b/xyz.bin`
+  as `/remote/dest/xyz.bin`, excluding entries outside `b`. Nested directories
+  and empty folders inside the selection are preserved. Names are case-sensitive;
+  a missing directory is an error. In the GUI, use a file's **… → Select Extraction
+  Root** menu to browse its folders independently. Its selected root appears on
+  the file's row; choose the archive root (`/`) to
+  upload all contents. Browsing a compressed tar reads through it once;
+  specifying the root directly in the CLI keeps the normal single-pass transfer.
 - **Modification times** are preserved with `MFMT` (or vsftpd's `MDTM` form)
   when the server allows it.
 - **RAR**: multi-volume, solid and encrypted (`-p`, `-hp`) archives, in every

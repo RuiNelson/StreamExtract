@@ -408,6 +408,10 @@ class Library:
         dll.streamextract_job_start_with_connection.argtypes = [ctypes.POINTER(StreamExtractJobConfig), ctypes.c_int,
             ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions)]
         dll.streamextract_job_start_with_connection.restype = ctypes.c_void_p
+        dll.streamextract_job_start_with_extraction_root.argtypes = [ctypes.POINTER(StreamExtractJobConfig),
+            ctypes.c_int, ctypes.c_uint, ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(StreamExtractSshOptions),
+            ctypes.c_char_p]
+        dll.streamextract_job_start_with_extraction_root.restype = ctypes.c_void_p
         dll.streamextract_job_poll.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
         dll.streamextract_job_poll.restype = ctypes.c_void_p
         dll.streamextract_job_answer_password.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -460,6 +464,7 @@ class LibJob:
 
     def __init__(self, lib, config, si_units=False, retries=None):
         config = dict(config)
+        extraction_root = config.pop("extraction_root", None)
         protocol = config.pop("protocol", None)
         ca_certificate = config.pop("ca_certificate", None)
         ssh_values = {name: config.pop(name, None) for name in ("private_key", "private_key_passphrase", "known_hosts")}
@@ -478,7 +483,13 @@ class LibJob:
         self.state = None  # The last state polled.
         self._phase = 0
         self._had_progress = False
-        if protocol is not None:
+        if extraction_root is not None:
+            protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
+            self.handle = lib.dll.streamextract_job_start_with_extraction_root(
+                ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol or "ftp"],
+                str(ca_certificate).encode("utf-8") if ca_certificate is not None else None, ctypes.byref(ssh),
+                extraction_root.encode("utf-8"))
+        elif protocol is not None:
             protocols = {"ftp": 0, "ftps_explicit": 1, "ftps_implicit": 2, "sftp": 3}
             self.handle = lib.dll.streamextract_job_start_with_connection(
                 ctypes.byref(self._config), int(si_units), retries or 0, protocols[protocol],
@@ -856,6 +867,59 @@ def test_smaller_remote_files_are_resumed(env):
             check("DEBUG > APPE random-5M.bin" in out, "remaining bytes were not appended", out)
         check("DEBUG > DELE " not in out, "an incomplete file was deleted", out)
         compare_trees(env.fixtures["main"], root, out)
+
+
+def test_extraction_root(env):
+    # The requested layout, with implicit a/b parents and a sibling sharing the root prefix.
+    archive = env.fixtures["archives"] / "extraction-root.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+        for name, data in (("a/x.txt", b"x\n"), ("a/x/", b""), ("a/y/", b""),
+                           ("b/xyz.bin", b"xyz\n"), ("b2/outside.txt", b"outside\n")):
+            zipped.writestr(name, data)
+    for root in ("a", "b"):
+        directory = "root-example-" + root
+        out = env.run(archive.name, "--directory", directory, "--mkdir", "--extraction-root", root)
+        target = env.remote(directory)
+        expected = {"x.txt", "x", "y"} if root == "a" else {"xyz.bin"}
+        check(set(tree_snapshot(target)) == expected, "selected root has wrong paths", out)
+        if root == "a":
+            check((target / "x").is_dir() and (target / "y").is_dir(), "empty child folders were lost", out)
+        else:
+            check((target / "xyz.bin").read_bytes() == b"xyz\n", "selected file contents differ", out)
+
+    for archive in ("basic.rar", "solid.rar", "basic.zip", "basic.7z", "basic.tar", "basic.tar.gz"):
+        env.require(archive)
+        directory = "root-" + archive.replace(".", "-")
+        args = ("--directory", directory, "--mkdir", "--extraction-root", "tree/sub")
+        out = env.run(archive, *args)
+        compare_trees(env.fixtures["main"] / "sub", env.remote(directory), out)
+        check("Not uploaded:" not in out, "excluded entries counted as unsupported", out)
+        out = env.run(archive, *args)
+        check("Skipped 1 file(s)" in out, "selected root rerun did not skip the existing file", out)
+        remote = env.remote(directory, "dir/deep.bin")
+        remote.write_bytes(remote.read_bytes()[:19])
+        out = env.run(archive, *args)
+        compare_trees(env.fixtures["main"] / "sub", env.remote(directory), out)
+        remote.write_bytes(remote.read_bytes() + b"larger")
+        out = env.run(archive, *args)
+        compare_trees(env.fixtures["main"] / "sub", env.remote(directory), out)
+        empty = directory + "-empty"
+        out = env.run(archive, "--directory", empty, "--mkdir", "--extraction-root", "tree/empty-dir")
+        check(tree_snapshot(env.remote(empty)) == {}, "selecting an empty root uploaded other entries", out)
+        out = env.run(archive, "--directory", directory, "--extraction-root", "missing", expect=1)
+        check('extraction root "missing" is not a directory' in out, "missing root was not reported", out)
+
+
+def test_lib_extraction_root(env):
+    for archive in ("basic.rar", "basic.zip", "basic.7z", "basic.tar.gz"):
+        env.require(archive)
+        directory = "lib-root-" + archive.replace(".", "-")
+        job = env.lib_run(archive, directory=directory, mkdir=1, extraction_root="tree/sub")
+        compare_trees(env.fixtures["main"] / "sub", env.remote(directory), job.describe())
+        check(job.result["files_uploaded"] == 1 and job.result["ignored"] == 0,
+              "wrong selected-root counters", job.describe())
+        job = env.lib_run(archive, directory=directory, extraction_root="tree/sub")
+        check(job.result["skipped_files"] == 1, "selected root rerun did not skip the existing file", job.describe())
 
 
 def test_solid(env):
@@ -1835,6 +1899,8 @@ TESTS = [
     test_rerun_skips_identical_files,
     test_larger_remote_file_is_uploaded_again,
     test_smaller_remote_files_are_resumed,
+    test_extraction_root,
+    test_lib_extraction_root,
     test_solid,
     test_active_mode,
     test_multivolume,

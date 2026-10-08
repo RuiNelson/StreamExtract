@@ -74,6 +74,9 @@ ParsedOptions parse_options(int argc, char** argv) {
       app.add_option("--directory", directory, "Remote destination directory (default: the login directory)")
           ->type_name("DIR");
   app.add_flag("--mkdir", o.mkdir, "Create the destination directory if missing (one MKD, not recursive)");
+  app.add_option("--extraction-root", o.extraction_root,
+                 "Upload only this archive directory's contents, without its path prefix (default: archive root)")
+      ->type_name("DIR");
   CLI::Option* archive_password_option = app.add_option("--archive-password", archive_password,
                                                         "Password of an encrypted archive; asked for when needed")
                                              ->type_name("PASSWORD");

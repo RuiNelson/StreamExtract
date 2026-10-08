@@ -110,6 +110,7 @@ int run(const Options& options) {
   try {
     log.info("Reading {}", options.file);
     listing = list_archive(options.file, passwords, log);
+    validate_extraction_root(listing, options.extraction_root);
   } catch (const std::exception& error) {
     log.error(error.what());
     return kExitError;
@@ -124,6 +125,7 @@ int run(const Options& options) {
   passwords.disable_prompt();
 
   log.info("Archive: {}", describe_archive(listing, encrypted));
+  if (!options.extraction_root.empty()) log.info("Extraction root: {}", options.extraction_root);
 
   // 2. FTP: log in and check the destination directory.
   FtpClient ftp(ftp_config, log, options.verbose);
@@ -163,7 +165,7 @@ int run(const Options& options) {
 
   // 3. Plan: map entries to remote paths, skip what is already there (for a
   //    streamed archive, the transfer does it file by file).
-  TransferPlan plan = build_plan(options.file, listing, target, log);
+  TransferPlan plan = build_plan(options.file, listing, target, log, options.extraction_root);
   if (!plan.streamed && plan.upload_files > 0) {
     const bool live = stdout_is_terminal();
     size_t last_shown = 0;

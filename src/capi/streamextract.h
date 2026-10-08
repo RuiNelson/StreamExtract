@@ -28,7 +28,7 @@ extern "C" {
 typedef struct streamextract_job streamextract_job;
 
 typedef struct streamextract_job_config {
-  const char* archive;          /* RAR, ZIP, 7z or tar archive (first volume), or a single exFAT, PFS or UFS volume image. */
+  const char* archive;          /* Archive (first volume), or a single exFAT, PFS or UFS volume image. */
   const char* archive_password; /* NULL: asked through the job when needed. */
   const char* host;             /* Host name or address, without a URL scheme or a path. */
   int port;                     /* 1-65535. */
@@ -99,6 +99,24 @@ typedef struct streamextract_ssh_options {
 STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_connection(
     const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
     const char* ca_certificate, const streamextract_ssh_options* ssh);
+
+/* Like start_with_connection, selecting an archive directory. NULL, "" or "/":
+ * all contents. Otherwise only descendants are uploaded, with the directory's
+ * prefix removed. Names are case-sensitive. The original config layout and
+ * entry points are unchanged. A missing directory fails the job. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_extraction_root(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root);
+
+/* Reads archive directories for a folder picker, including implicit parents
+ * and empty directories. No server connection or disk extraction. Compressed
+ * tar archives are read through once. Synchronous: call off the UI thread.
+ * Returns {"directories":["a","a/b"],"password_required":false,"error":null}.
+ * NULL password: none supplied. On a missing/wrong password, password_required
+ * is true; error is NULL for a missing password, "Wrong password" for a wrong
+ * one. Other failures set error and leave password_required false. Free the
+ * result with streamextract_free(). Returns NULL if memory runs out. */
+STREAMEXTRACT_API char* streamextract_archive_directories(const char* archive, const char* password);
 
 /* Current state as a JSON object, including the log lines numbered
  * `log_cursor` and later. Free the result with streamextract_free(). Returns NULL

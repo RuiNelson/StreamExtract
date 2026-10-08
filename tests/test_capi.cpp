@@ -122,6 +122,63 @@ TEST_CASE("version string") {
   CHECK(streamextract_version() == version);  // Static storage.
 }
 
+TEST_CASE("folder picker lists implicit and empty directories in ZIP and streamed tar") {
+  for (const auto& format : {std::string("zip"), std::string("tar.gz")}) {
+    const bool zip = format == "zip";
+    const std::string name = "streamextract-root-browser." + format;
+    const TempFile file(name.c_str(), zip ? fixtures::kExtractionRootZip : fixtures::kExtractionRootTarGz,
+                        zip ? sizeof(fixtures::kExtractionRootZip) : sizeof(fixtures::kExtractionRootTarGz));
+    char* raw = streamextract_archive_directories(file.path().c_str(), nullptr);
+    REQUIRE(raw != nullptr);
+    const std::string json(raw);
+    streamextract_free(raw);
+    CHECK(json ==
+          "{\"directories\":[\"a\",\"a/x\",\"a/y\",\"b\",\"b/nested\",\"b2\"],"
+          "\"password_required\":false,\"error\":null}");
+  }
+}
+
+TEST_CASE("folder picker reports password requests, wrong passwords and read errors") {
+  const TempFile file("streamextract-root-browser-encrypted.rar", kEncryptedRar, sizeof(kEncryptedRar));
+  for (const char* password : {static_cast<const char*>(nullptr), "wrong", "secret"}) {
+    char* raw = streamextract_archive_directories(file.path().c_str(), password);
+    REQUIRE(raw != nullptr);
+    const std::string json(raw);
+    streamextract_free(raw);
+    if (password == nullptr) {
+      CHECK(json == "{\"directories\":[],\"password_required\":true,\"error\":null}");
+    } else if (std::strcmp(password, "wrong") == 0) {
+      CHECK(json == "{\"directories\":[],\"password_required\":true,\"error\":\"Wrong password\"}");
+    } else {
+      CHECK(json == "{\"directories\":[],\"password_required\":false,\"error\":null}");
+    }
+  }
+  char* raw = streamextract_archive_directories("/nonexistent/streamextract-root.zip", nullptr);
+  REQUIRE(raw != nullptr);
+  const std::string json(raw);
+  streamextract_free(raw);
+  CHECK(contains(json, "\"password_required\":false"));
+  CHECK_FALSE(contains(json, "\"error\":null"));
+}
+
+TEST_CASE("extraction root is validated before any server connection") {
+  const TempFile file("streamextract-extraction-root.zip", fixtures::kExtractionRootZip,
+                      sizeof(fixtures::kExtractionRootZip));
+  const std::string path = file.path();
+  const auto config = make_config(path, 1);
+  for (const char* root : {"missing", "b/xyz.bin", "../b"}) {
+    streamextract_job* job = streamextract_job_start_with_extraction_root(
+        &config, 0, 1, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr, root);
+    REQUIRE(job != nullptr);
+    const std::string json = wait_for(job, "\"phase\":\"finished\"");
+    streamextract_job_free(job);
+    CHECK(contains(json, "\"status\":\"failed\""));
+    CHECK(contains(json, "extraction root"));
+    CHECK(contains(json, "\"target\":null"));
+    CHECK_FALSE(contains(json, "Connecting to"));
+  }
+}
+
 TEST_CASE("protocol selection rejects invalid values before reading the archive") {
   CHECK(streamextract_job_start_with_protocol(nullptr, 0, 0, STREAMEXTRACT_PROTOCOL_FTP, nullptr) == nullptr);
   const std::string path = "/nonexistent/invalid-protocol.rar";

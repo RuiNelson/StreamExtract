@@ -503,6 +503,8 @@ Job::Result Job::pipeline() {
   set_phase(Phase::Reading);
   std::optional<PasswordSource> passwords;
   const ArchiveListing listing = read_archive(passwords);
+  validate_extraction_root(listing, config_.extraction_root);
+  if (!config_.extraction_root.empty()) log_.info("Extraction root: {}", config_.extraction_root);
   throw_if_cancelled();
 
   // 2. FTP: log in and check the destination directory.
@@ -570,7 +572,7 @@ Job::Result Job::pipeline() {
 
   // 3. Plan: map entries to remote paths, skip what is already there.
   set_phase(Phase::Checking);
-  TransferPlan plan = build_plan(config_.archive, listing, target, log_);
+  TransferPlan plan = build_plan(config_.archive, listing, target, log_, config_.extraction_root);
   if (!plan.streamed && plan.upload_files > 0) {
     const auto set_probe = [this](size_t done, size_t total) {
       std::lock_guard lock(state_mutex_);

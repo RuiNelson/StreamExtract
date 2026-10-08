@@ -25,6 +25,7 @@ struct Options {
   std::optional<std::string> directory;
   bool mkdir = false;
   std::optional<std::string> archive_password;
+  std::string extraction_root;
   bool no_tui = false;
   bool verbose = false;
   size_t buffer_mib = 64;

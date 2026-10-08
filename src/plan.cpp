@@ -43,7 +43,7 @@ std::optional<std::string> PasswordSource::get() {
   return password_;
 }
 
-ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log) {
+ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, Logger& log, bool read_streamed) {
   ArchiveListing listing;
   std::string missing_volume;
 
@@ -80,7 +80,7 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
                    ? "images"
                    : "archives");
     }
-    if (listing.flags.stream_only) {
+    if (listing.flags.stream_only && !read_streamed) {
       return listing;  // Listing would decompress it all: the transfer plans each file as it reads it.
     }
     ArchiveEntry entry;
@@ -96,13 +96,51 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
       case ArchiveError::Kind::BadPassword:
         throw ArchivePasswordError("wrong archive password");
       case ArchiveError::Kind::MissingPassword:
-        throw std::runtime_error("the archive is encrypted: pass --archive-password");
+        throw ArchivePasswordRequired("the archive is encrypted: pass --archive-password");
       case ArchiveError::Kind::Other:
         break;
     }
     throw std::runtime_error(fmt::format("cannot read {}: {}", path, error.what()));
   }
   return listing;
+}
+
+std::vector<std::string> archive_directories(const ArchiveListing& listing) {
+  std::set<std::string> directories;
+  const bool backslashes = kNativeWindowsPaths || listing.format != ArchiveFormat::Rar;
+  for (const auto& entry : listing.entries) {
+    const std::string path = sanitize_archive_path(entry.name, backslashes).path;
+    for (size_t slash = path.find('/'); slash != std::string::npos; slash = path.find('/', slash + 1)) {
+      directories.insert(path.substr(0, slash));
+    }
+    if (entry.kind == EntryKind::Directory && !path.empty()) directories.insert(path);
+  }
+  return {directories.begin(), directories.end()};
+}
+
+std::string normalize_extraction_root(ArchiveFormat format, const std::string& root) {
+  if (root == "/") return "";
+  const auto safe = sanitize_archive_path(root, kNativeWindowsPaths || format != ArchiveFormat::Rar);
+  if (safe.traversal || safe.control_chars) {
+    throw std::runtime_error(
+        "the extraction root must be a relative archive directory without '..' or control characters");
+  }
+  return safe.path;
+}
+
+void validate_extraction_root(const ArchiveListing& listing, const std::string& root) {
+  const std::string normalized = normalize_extraction_root(listing.format, root);
+  if (normalized.empty() || listing.flags.stream_only) return;
+  const std::string prefix = normalized + '/';
+  const bool backslashes = kNativeWindowsPaths || listing.format != ArchiveFormat::Rar;
+  for (const auto& entry : listing.entries) {
+    const auto path = sanitize_archive_path(entry.name, backslashes).path;
+    if ((entry.kind == EntryKind::Directory && path == normalized) ||
+        path.compare(0, prefix.size(), prefix) == 0) {
+      return;
+    }
+  }
+  throw std::runtime_error(fmt::format("extraction root \"{}\" is not a directory in the archive", normalized));
 }
 
 std::string describe_archive(const ArchiveListing& listing, bool encrypted, ByteUnits units) {
@@ -148,7 +186,7 @@ void TransferPlan::recount() {
         skip_bytes += e.entry.size;
         break;
       case PlannedEntry::Action::Ignore:
-        ++ignored;
+        if (!e.excluded) ++ignored;
         break;
       case PlannedEntry::Action::MakeDir:
         break;
@@ -156,17 +194,31 @@ void TransferPlan::recount() {
   }
 }
 
-Planner::Planner(ArchiveFormat format, std::string remote_root, Logger& log)
+Planner::Planner(ArchiveFormat format, std::string remote_root, Logger& log, const std::string& extraction_root)
     : remote_root_(std::move(remote_root)),
       log_(log),
       // UnRAR gives native separators; the others use '/', but some Windows tools write '\'.
-      backslash_separators_(kNativeWindowsPaths || format != ArchiveFormat::Rar) {}
+      backslash_separators_(kNativeWindowsPaths || format != ArchiveFormat::Rar),
+      extraction_root_(normalize_extraction_root(format, extraction_root)),
+      found_root_(extraction_root_.empty()) {}
 
 PlannedEntry Planner::plan(const ArchiveEntry& entry) {
   PlannedEntry planned;
   planned.entry = entry;
 
   const SanitizedPath safe = sanitize_archive_path(entry.name, backslash_separators_);
+  std::string relative = safe.path;
+  if (!extraction_root_.empty()) {
+    if (relative == extraction_root_ && entry.kind == EntryKind::Directory) found_root_ = true;
+    const std::string prefix = extraction_root_ + '/';
+    if (relative.compare(0, prefix.size(), prefix) != 0) {
+      planned.action = PlannedEntry::Action::Ignore;
+      planned.excluded = true;
+      return planned;
+    }
+    found_root_ = true;  // Any descendant implies this parent directory, even an unsupported entry.
+    relative.erase(0, prefix.size());
+  }
   if (safe.path.empty()) {
     planned.action = PlannedEntry::Action::Ignore;
     if (entry.kind != EntryKind::Directory) {  // A directory entry for the root itself is harmless.
@@ -180,8 +232,8 @@ PlannedEntry Planner::plan(const ArchiveEntry& entry) {
   if (safe.control_chars) {
     log_.warn("\"{}\" contains control characters; using \"{}\"", entry.name, safe.path);
   }
-  planned.relative = safe.path;
-  planned.remote = join_remote_path(remote_root_, safe.path);
+  planned.relative = relative;
+  planned.remote = join_remote_path(remote_root_, relative);
 
   switch (entry.kind) {
     case EntryKind::File:
@@ -224,15 +276,17 @@ PlannedEntry Planner::plan(const ArchiveEntry& entry) {
 }
 
 TransferPlan build_plan(const std::string& archive_path, const ArchiveListing& listing,
-                        const std::string& remote_root, Logger& log) {
+                        const std::string& remote_root, Logger& log, const std::string& extraction_root) {
+  validate_extraction_root(listing, extraction_root);
   TransferPlan plan;
   plan.archive_path = archive_path;
   plan.remote_root = remote_root;
+  plan.extraction_root = normalize_extraction_root(listing.format, extraction_root);
   plan.format = listing.format;
   plan.skip_decompresses = listing.flags.skip_decompresses;
   plan.streamed = listing.flags.stream_only;
   plan.entries.reserve(listing.entries.size());
-  Planner planner(listing.format, remote_root, log);
+  Planner planner(listing.format, remote_root, log, plan.extraction_root);
   for (const auto& entry : listing.entries) {
     plan.entries.push_back(planner.plan(entry));
   }
