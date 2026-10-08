@@ -6,7 +6,7 @@ if(POLICY CMP0135)
 endif()
 
 project(StreamExtract
-  VERSION 2.6.0
+  VERSION 2.7.0
   DESCRIPTION "Uploads archives and exFAT volume images to an FTP server without extracting them to disk"
   LANGUAGES C CXX)
 

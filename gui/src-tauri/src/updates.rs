@@ -70,10 +70,10 @@ mod tests {
         for tag in ["v2.4.1", "v2.4.0", "v1.99.0", "v2.4.1+newbuild"] {
             assert_eq!(newer_release(&current, &[release(tag, false, false)]), None);
         }
-        let development = Version::parse("2.6.0-beta.1").unwrap();
+        let development = Version::parse("2.7.0-beta.1").unwrap();
         assert_eq!(
-            newer_release(&development, &[release("v2.6.0", false, false)]).as_deref(),
-            Some("2.6.0")
+            newer_release(&development, &[release("v2.7.0", false, false)]).as_deref(),
+            Some("2.7.0")
         );
     }
 }
