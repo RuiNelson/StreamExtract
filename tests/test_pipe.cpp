@@ -1,6 +1,9 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <set>
 #include <thread>
+#include <vector>
 
 #include <doctest/doctest.h>
 
@@ -26,11 +29,11 @@ TEST_CASE("pipe keeps order and bounds the buffered bytes") {
 
   std::thread producer([&] {
     for (int i = 0; i < kMessages; ++i) {
-      REQUIRE(pipe.push(data_message(1000, static_cast<uint8_t>(i))));
+      CHECK(pipe.push(data_message(1000, static_cast<uint8_t>(i))));
     }
     PipeMessage end;
     end.kind = PipeMessage::Kind::End;
-    REQUIRE(pipe.push(std::move(end)));
+    CHECK(pipe.push(std::move(end)));
   });
 
   int received = 0;
@@ -109,4 +112,74 @@ TEST_CASE("recycled buffers fit both small and large files") {
   pipe.release_buffer(std::move(again_large));
   auto again_small = pipe.acquire_buffer(4096);
   CHECK(again_small.data() == small_storage);
+}
+
+TEST_CASE("messages without data never wait for buffer space") {
+  Pipe pipe(10);
+  REQUIRE(pipe.push(data_message(10, 1)));  // Full.
+  for (const auto kind : {PipeMessage::Kind::FileEnd, PipeMessage::Kind::EnsureDir, PipeMessage::Kind::FileBegin,
+                          PipeMessage::Kind::End}) {
+    PipeMessage message;
+    message.kind = kind;
+    CHECK(pipe.push(std::move(message)));
+  }
+  CHECK(pipe.buffered() == 10);
+  CHECK(pipe.pop()->kind == PipeMessage::Kind::Data);
+  CHECK(pipe.buffered() == 0);
+  CHECK(pipe.pop()->kind == PipeMessage::Kind::FileEnd);
+  CHECK(pipe.pop()->kind == PipeMessage::Kind::EnsureDir);
+  CHECK(pipe.pop()->kind == PipeMessage::Kind::FileBegin);
+  CHECK(pipe.pop()->kind == PipeMessage::Kind::End);
+}
+
+TEST_CASE("after an oversized message the next one waits until it is taken") {
+  Pipe pipe(10);
+  REQUIRE(pipe.push(data_message(100, 1)));
+  std::atomic<bool> pushed{false};
+  std::thread producer([&] { pushed = pipe.push(data_message(1, 2)); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK_FALSE(pushed.load());  // Still blocked: 100 bytes are buffered.
+  CHECK(pipe.pop()->data.size() == 100);
+  producer.join();
+  CHECK(pushed.load());
+  CHECK(pipe.pop()->data.size() == 1);
+}
+
+TEST_CASE("abort drops pending messages and refuses new ones") {
+  Pipe pipe(100);
+  REQUIRE(pipe.push(data_message(10, 1)));
+  REQUIRE(pipe.push(data_message(10, 2)));
+  pipe.abort();
+  CHECK(pipe.buffered() == 0);
+  CHECK_FALSE(pipe.pop().has_value());
+  CHECK_FALSE(pipe.push(data_message(1, 3)));
+  pipe.abort();  // Idempotent.
+  CHECK(pipe.aborted());
+}
+
+TEST_CASE("the buffer pool is bounded and keeps no empty buffers") {
+  Pipe pipe(1 << 20);
+  std::vector<std::vector<uint8_t>> buffers;
+  for (int i = 0; i < 20; ++i) {
+    buffers.push_back(pipe.acquire_buffer(1024));
+  }
+  std::set<const uint8_t*> retained;
+  for (auto& buffer : buffers) {
+    if (retained.size() < 16) {
+      retained.insert(buffer.data());
+    }
+    pipe.release_buffer(std::move(buffer));  // The first 16 are kept.
+  }
+  pipe.release_buffer(std::vector<uint8_t>());  // No capacity: not worth keeping.
+
+  std::vector<std::vector<uint8_t>> again;
+  for (int i = 0; i < 17; ++i) {
+    again.push_back(pipe.acquire_buffer(1024));
+    CHECK(again.back().capacity() >= 1024);
+    CHECK(again.back().empty());
+  }
+  for (int i = 0; i < 16; ++i) {
+    CHECK(retained.count(again[static_cast<size_t>(i)].data()) == 1);
+  }
+  CHECK(retained.count(again[16].data()) == 0);  // A new allocation: the 16 kept ones are all in use.
 }

@@ -26,10 +26,12 @@ add_executable(streamextract_tests
   test_exfat.cpp
   test_pfs.cpp
   test_json.cpp
+  test_logger.cpp
   test_pipe.cpp
   test_plan.cpp
   test_progress.cpp
   test_remote_path.cpp
+  test_ssh_settings.cpp
   test_summary.cpp
   test_text.cpp)
 target_link_libraries(streamextract_tests PRIVATE streamextract_core doctest::doctest CLI11::CLI11)

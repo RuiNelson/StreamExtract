@@ -79,8 +79,10 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     reply('257 "/"')
                 elif command == "SYST":
                     reply("215 UNIX Type: L8")
-                elif command in ("OPTS", "TYPE", "REST", "MFMT"):
+                elif command in ("OPTS", "TYPE", "REST"):
                     reply("200 OK")
+                elif command == "MFMT":
+                    reply("200 OK" if self.server.timestamps == "mfmt" else "500 Unsupported command")
                 elif command == "CWD":
                     if path(arg) == self.server.stall_directory:
                         self.server.pause()
@@ -93,10 +95,16 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 elif command == "SIZE":
                     if self.server.stall_retry_size and self.server.failed_uploads:
                         self.server.pause()
+                    if self.server.size_unsupported:
+                        reply("502 Command not implemented")
+                        continue
                     contents = self.server.files.get(path(arg))
                     reply(f"213 {len(contents)}" if contents is not None else "550 File not found")
                 elif command == "MDTM":
-                    reply("213 20260101000000")
+                    # "MDTM <time> <path>" sets the time (vsftpd); "MDTM <path>" asks for it.
+                    setting = arg[:14].isdigit() and arg[14:15] == " "
+                    reply("550 Cannot set the time" if setting and self.server.timestamps == "none"
+                          else "213 20260101000000")
                 elif command == "EPSV":
                     passive = self.server.passive_socket()
                     reply(f"229 Extended Passive Mode (|||{passive.getsockname()[1]}|)")
@@ -107,12 +115,20 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 elif command == "NLST":
                     if self.server.stall_listing:
                         self.server.pause()
+                    if self.server.refuse_listing:
+                        if passive is not None:
+                            passive.close()
+                        passive = None
+                        reply("550 Listing refused")
+                        continue
                     reply("150 Listing")
                     with accept_data() as data:
                         names = [posixpath.basename(p) for p in self.server.files if posixpath.dirname(p) == cwd]
                         if self.server.directories is not None:
                             names += [posixpath.basename(p) for p in self.server.directories
                                       if p != cwd and posixpath.dirname(p) == cwd]
+                        if self.server.nlst_hides_dotfiles and "-a" not in arg.split():
+                            names = [name for name in names if not name.startswith(".")]
                         data.sendall("".join(name + "\r\n" for name in names).encode("utf-8"))
                     if passive is not None:
                         passive.close()
@@ -256,6 +272,7 @@ class FtpServer(socketserver.ThreadingTCPServer):
                  stall_login_retry=False, tls_context=None, implicit_tls=False, reject_private_data=False,
                  reject_rename=False, stall_rename=False,
                  fail_rename_after=None, lose_rename_reply_after=None, directories=None,
+                 size_unsupported=False, refuse_listing=False, nlst_hides_dotfiles=False, timestamps="mfmt",
                  control_port=0, passive_ports=range(30000, 30010)):
         self.passive_ports = passive_ports
         super().__init__(("0.0.0.0", control_port), FtpHandler)
@@ -280,6 +297,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.successful_renames = 0
         self.stall_directory = stall_directory
         self.stall_listing = stall_listing
+        self.size_unsupported = size_unsupported
+        self.refuse_listing = refuse_listing
+        self.nlst_hides_dotfiles = nlst_hides_dotfiles
+        self.timestamps = timestamps  # "mfmt", "mdtm" (vsftpd's "MDTM <time> <path>" only) or "none".
         self.stall_confirmation = stall_confirmation
         self.fail_uploads = fail_uploads
         self.failed_uploads = 0

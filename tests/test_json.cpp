@@ -73,3 +73,39 @@ TEST_CASE("json numbers") {
   CHECK(std::stod(number(0.1)) == 0.1);
   CHECK(std::stod(number(1e21)) == 1e21);
 }
+
+TEST_CASE("json keys are escaped and repaired like values") {
+  JsonWriter json;
+  json.begin_object();
+  json.member("a\"b", 1);
+  json.member("\xff", 2);
+  json.member("ç", 3);
+  json.end_object();
+  CHECK(json.str() == "{\"a\\\"b\":1,\"\xEF\xBF\xBD\":2,\"ç\":3}");
+}
+
+TEST_CASE("json passes DEL and every byte from 0x20 through") {
+  CHECK(json_quote("\x7f") == "\"\x7f\"");
+  CHECK(json_quote(" ~") == "\" ~\"");
+}
+
+TEST_CASE("json separates values at every nesting level") {
+  JsonWriter json;
+  json.begin_array();
+  json.begin_array();
+  json.value(1);
+  json.value(2);
+  json.end_array();
+  json.begin_array();
+  json.begin_object();
+  json.key("a");
+  json.begin_array();
+  json.end_array();
+  json.member("b", 0.5);
+  json.end_object();
+  json.end_array();
+  json.null();
+  json.value(false);
+  json.end_array();
+  CHECK(json.str() == "[[1,2],[{\"a\":[],\"b\":0.5}],null,false]");
+}

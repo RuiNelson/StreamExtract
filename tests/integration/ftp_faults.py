@@ -652,6 +652,75 @@ class FtpFaultTests(unittest.TestCase):
                         self.assertIn("copies are processed in archive order", lib_log_text(job))
 
 
+    def test_unknown_remote_sizes_are_overwritten_from_the_beginning(self):
+        source = b"hello\n"
+        for streamed in (False, True):
+            for remote in (source, source[:2], b"larger remote contents"):
+                with self.subTest(streamed=streamed, remote=remote):
+                    archive = self.archive([("hello.txt", source)], streamed=streamed)
+                    with FtpServer(files={"/upload/hello.txt": remote}, size_unsupported=True) as server:
+                        with self.job(archive, server) as job:
+                            job.wait(timeout=5)
+                            self.assertEqual(job.result["status"], "success", job.describe())
+                            self.assertEqual(job.result["files_uploaded"], 1)
+                            self.assertEqual(job.result["skipped_files"], 0)
+                            self.assertEqual(job.result["bytes_uploaded"], len(source))
+                        self.assertEqual(server.files["/upload/hello.txt"], source)
+                        self.assertEqual(server.uploads, [("STOR", "/upload/hello.txt", source)])
+                        self.assertEqual(server.deleted, [])
+
+    def test_refused_listings_fall_back_to_asking_for_each_file(self):
+        source = b"hello\n"
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                archive = self.archive([("same.txt", source), ("new.txt", source), ("short.txt", source)],
+                                       streamed=streamed)
+                files = {"/upload/same.txt": source, "/upload/short.txt": source[:2]}
+                with FtpServer(files=files, refuse_listing=True) as server, self.job(archive, server) as job:
+                    job.wait(timeout=5)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                    self.assertEqual(job.result["skipped_files"], 1)
+                    self.assertEqual(job.result["files_uploaded"], 2)
+                    self.assertEqual(job.result["bytes_uploaded"], len(source) * 2 - 2)
+                    commands = server.commands
+                    self.assertIn("NLST", [command for command, _ in commands])
+                    sized = [arg for command, arg in commands if command == "SIZE"]
+                    self.assertTrue(any(arg.endswith("new.txt") for arg in sized), sized)  # Not trusted absent.
+                    self.assertEqual(server.uploads, [("STOR", "/upload/new.txt", source),
+                                                      ("APPE", "/upload/short.txt", source[2:])])
+
+    def test_dotfiles_left_out_of_listings_are_still_checked(self):
+        source = b"hello\n"
+        for streamed in (False, True):
+            with self.subTest(streamed=streamed):
+                archive = self.archive([(".hidden", source), ("visible.txt", source)], streamed=streamed)
+                files = {"/upload/.hidden": source, "/upload/visible.txt": source}
+                with FtpServer(files=files, nlst_hides_dotfiles=True) as server, self.job(archive, server) as job:
+                    job.wait(timeout=5)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                    self.assertEqual(job.result["skipped_files"], 2)
+                    self.assertEqual(job.result["files_uploaded"], 0)
+                    self.assertEqual(server.uploads, [])
+
+    def test_file_times_use_mfmt_then_vsftpd_mdtm_or_warn_once(self):
+        archive = self.archive([("a.txt", b"a\n"), ("b.txt", b"b\n"), ("c.txt", b"c\n")])  # ZIP times.
+        expected = {"mfmt": (3, 0), "mdtm": (1, 3), "none": (1, 1)}  # MFMT and "MDTM <time> <path>" sent.
+        for timestamps, (mfmt, mdtm) in expected.items():
+            with self.subTest(timestamps=timestamps):
+                with FtpServer(timestamps=timestamps) as server, self.job(archive, server) as job:
+                    job.wait(timeout=5)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                    self.assertEqual(job.result["files_uploaded"], 3)
+                    self.assertEqual(len(server.files), 3)
+                    commands = server.commands
+                    self.assertEqual(sum(command == "MFMT" for command, _ in commands), mfmt)
+                    self.assertEqual(sum(command == "MDTM" and re.match(r"\d{14} ", arg) is not None
+                                         for command, arg in commands), mdtm)
+                    log = lib_log_text(job)
+                    warnings = log.count("the server cannot set modification times")
+                    self.assertEqual(warnings, 1 if timestamps == "none" else 0, log)
+                    self.assertNotIn("could not set the modification time", log)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sext", required=True)

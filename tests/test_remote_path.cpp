@@ -98,3 +98,43 @@ TEST_CASE("url encoding and FTP URLs") {
   // ";type=" would switch libcurl to ASCII mode if it were not encoded.
   CHECK(ftp_url("ftp://h:21", "/a/f;type=a", false) == "ftp://h:21/%2Fa/f%3Btype%3Da");
 }
+
+TEST_CASE("sanitize: drives only at the start, UNC prefixes with either separator, names of dots") {
+  CHECK(sanitize_archive_path("C:", true).path.empty());
+  CHECK(sanitize_archive_path("C:", true).traversal);
+  CHECK(sanitize_archive_path("a/C:/b", true).path == "a/C:/b");  // Not a drive past the first component.
+  CHECK(sanitize_archive_path("\\\\server\\share\\dir\\f", true).path == "dir/f");
+  CHECK(sanitize_archive_path("\\\\server\\share\\dir\\f", true).traversal);
+  CHECK(sanitize_archive_path("\\\\server\\share\\dir\\f", false).path == "\\\\server\\share\\dir\\f");
+  CHECK(sanitize_archive_path("...", false).path.empty());
+  CHECK(sanitize_archive_path("...", false).traversal);
+  CHECK(sanitize_archive_path("a/../../b/../c", false).path == "c");  // After the last "..".
+  CHECK(sanitize_archive_path("tab\there", false).path == "tab_here");
+  // Bytes of UTF-8 sequences are not control characters.
+  CHECK(sanitize_archive_path("ünï/çödé", true).path == "ünï/çödé");
+}
+
+TEST_CASE("remote paths: trailing slashes, empty directories and the root") {
+  CHECK(remote_parent("/a/b/") == "/a");
+  CHECK(remote_parent("/a//") == "/");
+  CHECK(remote_basename("/a/b//") == "b");
+  CHECK(join_remote_path("", "a") == "/a");
+  CHECK(join_remote_path("", "") == "/");
+  CHECK(resolve_remote_path("/home/bob", "") == "/home/bob");
+  CHECK(resolve_remote_path("/", "../../x") == "/x");
+}
+
+TEST_CASE("staging paths reject every control character") {
+  CHECK_THROWS(validate_staging_path("/in\tcoming", "/upload"));
+  CHECK_THROWS(validate_staging_path(std::string("/in\x7f", 4), "/upload"));
+  CHECK_THROWS(validate_staging_path(std::string("/in\0x", 5), "/upload"));
+  CHECK_NOTHROW(validate_staging_path("/ïncoming", "/upload"));
+}
+
+TEST_CASE("FTP URLs of the root, of reserved characters and of non-ASCII names") {
+  CHECK(ftp_url("ftp://h:21", "/", false) == "ftp://h:21/%2F");
+  CHECK(ftp_url("ftp://h:21", "//a//b//", true) == "ftp://h:21/%2Fa/b/");
+  CHECK(ftp_url("ftp://h:21", "/100%/#1?.txt", false) == "ftp://h:21/%2F100%25/%231%3F.txt");
+  CHECK(ftp_url("ftp://h:21", "/ação", false) == "ftp://h:21/%2Fa%C3%A7%C3%A3o");
+  CHECK(ftp_base_url("192.168.1.10", 990) == "ftp://192.168.1.10:990");
+}

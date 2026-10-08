@@ -23,6 +23,21 @@ if(NOT EXISTS "${UNRAR_SOURCE_DIR}/dll.hpp")
     "  tar -xzf unrarsrc-7.3.1.tar.gz -C unrarsrc --strip-components=1\n")
 endif()
 
+# Build a private copy with our patches (UnRARPatches.cmake), leaving the
+# downloaded sources untouched. Unchanged files are only rewritten when the
+# downloaded ones change.
+set(_unrar_dir "${CMAKE_CURRENT_BINARY_DIR}/unrar")
+include("${PROJECT_SOURCE_DIR}/cmake/UnRARPatches.cmake")
+file(GLOB _unrar_files RELATIVE "${UNRAR_SOURCE_DIR}" "${UNRAR_SOURCE_DIR}/*.cpp" "${UNRAR_SOURCE_DIR}/*.hpp")
+foreach(_file IN LISTS _unrar_files)
+  if(NOT _file IN_LIST _unrar_patched_files)
+    configure_file("${UNRAR_SOURCE_DIR}/${_file}" "${_unrar_dir}/${_file}" COPYONLY)
+  endif()
+endforeach()
+foreach(_file IN LISTS _unrar_patched_files)
+  _unrar_patch("${UNRAR_SOURCE_DIR}" "${_unrar_dir}" "${_file}")
+endforeach()
+
 # Same object list as the 'lib' target of the official makefile.
 set(_unrar_names
   rar strlist strfn pathfn smallfn global file filefn filcreat archive arcread
@@ -37,7 +52,7 @@ endif()
 
 set(_unrar_sources "")
 foreach(_name IN LISTS _unrar_names)
-  list(APPEND _unrar_sources "${UNRAR_SOURCE_DIR}/${_name}.cpp")
+  list(APPEND _unrar_sources "${_unrar_dir}/${_name}.cpp")
 endforeach()
 
 # Always a static library, whatever BUILD_SHARED_LIBS says: UnRAR is linked
@@ -47,7 +62,7 @@ add_library(unrar::unrar ALIAS unrar)
 
 # Our code only includes dll.hpp; SYSTEM keeps UnRAR's headers out of our
 # warnings.
-target_include_directories(unrar SYSTEM INTERFACE "${UNRAR_SOURCE_DIR}")
+target_include_directories(unrar SYSTEM INTERFACE "${_unrar_dir}")
 target_compile_definitions(unrar PRIVATE RARDLL UNRAR SILENT RAR_SMP
   _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE)
 set_target_properties(unrar PROPERTIES
@@ -80,4 +95,4 @@ set(UNRAR_VERSION_STRING "${_unrar_ver_MAJOR}.${_unrar_ver_MINOR}")
 if(_unrar_ver_BETA AND NOT _unrar_ver_BETA EQUAL 0)
   string(APPEND UNRAR_VERSION_STRING " beta ${_unrar_ver_BETA}")
 endif()
-message(STATUS "streamextract: UnRAR ${UNRAR_VERSION_STRING} from ${UNRAR_SOURCE_DIR}")
+message(STATUS "streamextract: UnRAR ${UNRAR_VERSION_STRING} (patched copy) from ${UNRAR_SOURCE_DIR}")

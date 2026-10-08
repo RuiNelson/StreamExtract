@@ -1,6 +1,4 @@
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <map>
 #include <memory>
 #include <optional>
@@ -16,45 +14,13 @@
 
 #include "archive.hpp"
 #include "archive_fixtures.hpp"
+#include "temp_dir.hpp"
 
 using namespace streamextract;
 
 namespace {
 
-// A file in a temporary directory of its own, removed with it.
-class TempDir {
- public:
-  TempDir() {
-    static int counter = 0;
-    path_ = std::filesystem::temp_directory_path() /
-            ("streamextract-test-archive-" + std::to_string(reinterpret_cast<uintptr_t>(this)) + "-" +
-             std::to_string(++counter));
-    std::filesystem::create_directories(path_);
-  }
-  ~TempDir() {
-    std::error_code ignored;
-    std::filesystem::remove_all(path_, ignored);
-  }
-  TempDir(const TempDir&) = delete;
-  TempDir& operator=(const TempDir&) = delete;
-
-  std::string write(const std::string& name, const unsigned char* data, size_t size) const {
-    const std::filesystem::path file = path_ / name;
-    std::ofstream out(file, std::ios::binary);
-    out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-    return file.string();
-  }
-  template <size_t N>
-  std::string write(const std::string& name, const unsigned char (&data)[N]) const {
-    return write(name, data, N);
-  }
-  std::string write(const std::string& name, const std::string& data) const {
-    return write(name, reinterpret_cast<const unsigned char*>(data.data()), data.size());
-  }
-
- private:
-  std::filesystem::path path_;
-};
+using test_support::TempDir;
 
 struct Read {
   std::vector<ArchiveEntry> entries;
@@ -284,7 +250,7 @@ TEST_CASE("7z compression methods and filters") {
                         Case{"zstd.7z", fixtures::kZstd7z, sizeof(fixtures::kZstd7z), nullptr},
                         Case{"aes-bzip2.7z", fixtures::kAesBzip27z, sizeof(fixtures::kAesBzip27z), "secret"},
                         Case{"aes-deflate.7z", fixtures::kAesDeflate7z, sizeof(fixtures::kAesDeflate7z), "secret"}}) {
-    CAPTURE(c.name);
+    CAPTURE(std::string(c.name));
     const std::optional<std::string> password =
         c.password != nullptr ? std::optional<std::string>(c.password) : std::nullopt;
     const Read read = read_all(dir.write(c.name, c.data, c.size), password);
@@ -315,7 +281,7 @@ TEST_CASE("encrypted 7z archives") {
   };
   for (const Case& c : {Case{"aes.7z", fixtures::kAes7z, sizeof(fixtures::kAes7z), false},
                         Case{"aes-headers.7z", fixtures::kAesHeaders7z, sizeof(fixtures::kAesHeaders7z), true}}) {
-    CAPTURE(c.name);
+    CAPTURE(std::string(c.name));
     const std::string path = dir.write(c.name, c.data, c.size);
 
     int prompts = 0;
@@ -424,7 +390,7 @@ TEST_CASE("split ZIP, 7z and tar archives") {
   for (const Case& c : {Case{"a.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip)},
                         Case{"a.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z)},
                         Case{"a.tar", fixtures::kTinyTar, sizeof(fixtures::kTinyTar)}}) {
-    CAPTURE(c.name);
+    CAPTURE(std::string(c.name));
     const unsigned char* data = c.data;
     const size_t size = c.size;
     const std::string base = std::string(c.name) + ".";
@@ -473,7 +439,7 @@ TEST_CASE("compressed tar archives") {
                         Case{"a.tar.lzma", fixtures::kTinyTarLzma, sizeof(fixtures::kTinyTarLzma), "lzma"},
                         Case{"a.tar.zst", fixtures::kTinyTarZst, sizeof(fixtures::kTinyTarZst), "zstd"},
                         Case{"a.tar.lz4", fixtures::kTinyTarLz4, sizeof(fixtures::kTinyTarLz4), "lz4"}}) {
-    CAPTURE(c.name);
+    CAPTURE(std::string(c.name));
     const Read read = read_all(dir.write(c.name, c.data, c.size));
     CHECK(read.format == ArchiveFormat::Tar);
     CHECK(read.flags.compression == c.compression);
@@ -493,4 +459,203 @@ TEST_CASE("files that are not archives") {
   // A ZIP signature with nothing after it.
   const unsigned char truncated[] = {'P', 'K', 3, 4, 0, 0, 0, 0};
   CHECK(error_text(dir.write("truncated.zip", truncated)) == "not a valid ZIP archive");
+}
+
+TEST_CASE("format names") {
+  CHECK(std::string(format_name(ArchiveFormat::Rar)) == "RAR");
+  CHECK(std::string(format_name(ArchiveFormat::Zip)) == "ZIP");
+  CHECK(std::string(format_name(ArchiveFormat::SevenZip)) == "7z");
+  CHECK(std::string(format_name(ArchiveFormat::Tar)) == "tar");
+  CHECK(std::string(format_name(ArchiveFormat::Exfat)) == "exFAT");
+  CHECK(std::string(format_name(ArchiveFormat::Pfs)) == "PFS");
+  CHECK(std::string(format_name(ArchiveFormat::Ufs)) == "UFS");
+}
+
+TEST_CASE("tar entry kinds, empty files and names without a declared charset") {
+  const TempDir dir;
+  const Read read = read_all(dir.write("kinds.tar", fixtures::kKindsTar));
+  CHECK(read.format == ArchiveFormat::Tar);
+  CHECK_FALSE(read.flags.checksums);
+  REQUIRE(read.entries.size() == 8);
+  const std::vector<std::pair<std::string, EntryKind>> expected = {
+      {"d/", EntryKind::Directory},    {"d/f.txt", EntryKind::File},    {"d/empty", EntryKind::File},
+      {"d/link", EntryKind::Symlink},  {"d/hard", EntryKind::Hardlink}, {"d/fifo", EntryKind::Special},
+      {"d/ação.txt", EntryKind::File},  // Valid UTF-8 is kept.
+      {"d/café.txt", EntryKind::File},  // Anything else is Latin-1.
+  };
+  for (size_t i = 0; i < expected.size(); ++i) {
+    CAPTURE(i);
+    CHECK(read.entries[i].name == expected[i].first);
+    CHECK(read.entries[i].kind == expected[i].second);
+    CHECK(read.entries[i].mtime == 1700000000);
+    CHECK_FALSE(read.entries[i].encrypted);
+  }
+  CHECK(read.entries[1].size == 5);
+  CHECK(read.entries[2].size == 0);
+  CHECK(read.contents == std::vector<std::string>{"", "data\n", "", "", "", "", "utf8\n", "latin1\n"});
+}
+
+TEST_CASE("ZIP directories, empty files and symbolic links") {
+  const TempDir dir;
+  const Read read = read_all(dir.write("kinds.zip", fixtures::kKindsZip));
+  CHECK(read.format == ArchiveFormat::Zip);
+  REQUIRE(read.entries.size() == 4);
+  CHECK(read.entries[0].name == "d/");
+  CHECK(read.entries[0].kind == EntryKind::Directory);
+  CHECK(read.entries[1].name == "d/f.txt");
+  CHECK(read.entries[1].kind == EntryKind::File);
+  CHECK(read.entries[1].size == 5000);
+  CHECK(read.entries[2].name == "d/empty");
+  CHECK(read.entries[2].kind == EntryKind::File);
+  CHECK(read.entries[2].size == 0);
+  CHECK(read.entries[3].name == "d/link");
+  CHECK(read.entries[3].kind == EntryKind::Symlink);
+  REQUIRE(read.contents.size() == 4);
+  std::string data;
+  for (int i = 0; i < 1000; ++i) {
+    data += "data\n";
+  }
+  CHECK(read.contents[1] == data);
+  CHECK(read.contents[2].empty());
+}
+
+TEST_CASE("a callback returning false stops test() and is told apart from archive errors") {
+  const TempDir dir;
+  struct Case {
+    const char* name;
+    const unsigned char* data;
+    size_t size;
+  };
+  for (const Case& c : {Case{"tiny.rar", fixtures::kTinyRar, sizeof(fixtures::kTinyRar)},
+                        Case{"tiny.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip)},
+                        Case{"tiny.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z)},
+                        Case{"solid.7z", fixtures::kSolid7z, sizeof(fixtures::kSolid7z)},
+                        Case{"tiny.tar", fixtures::kTinyTar, sizeof(fixtures::kTinyTar)},
+                        Case{"tiny.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz)}}) {
+    CAPTURE(std::string(c.name));
+    int calls = 0;
+    ArchiveCallbacks callbacks;
+    callbacks.on_data = [&](const uint8_t*, size_t) {
+      ++calls;
+      return false;
+    };
+    const std::unique_ptr<Archive> archive =
+        open_archive(dir.write(c.name, c.data, c.size), Archive::Mode::Extract, callbacks);
+    ArchiveEntry entry;
+    bool tested = false;
+    while (archive->next(entry)) {
+      if (entry.kind != EntryKind::File || entry.size == 0) {
+        archive->skip();
+        CHECK_FALSE(archive->aborted_by_callback());
+        continue;
+      }
+      CHECK_THROWS_AS(archive->test(), ArchiveError);
+      CHECK(archive->aborted_by_callback());
+      tested = true;
+      break;
+    }
+    CHECK(tested);
+    CHECK(calls == 1);
+  }
+
+  // A checksum mismatch is the archive's fault, not the callback's.
+  for (const Case& c : {Case{"bad.zip", fixtures::kBadCrcZip, sizeof(fixtures::kBadCrcZip)},
+                        Case{"bad.7z", fixtures::kBadCrc7z, sizeof(fixtures::kBadCrc7z)}}) {
+    CAPTURE(std::string(c.name));
+    ArchiveCallbacks callbacks;
+    callbacks.on_data = [](const uint8_t*, size_t) { return true; };
+    const std::unique_ptr<Archive> archive =
+        open_archive(dir.write(c.name, c.data, c.size), Archive::Mode::Extract, callbacks);
+    ArchiveEntry entry;
+    REQUIRE(archive->next(entry));
+    CHECK_THROWS_AS(archive->test(), ArchiveError);
+    CHECK_FALSE(archive->aborted_by_callback());
+  }
+}
+
+TEST_CASE("RAR archives with encrypted headers") {
+  const TempDir dir;
+  const std::string path = dir.write("encrypted.rar", fixtures::kEncryptedRar);
+  int prompts = 0;
+  const Read read = read_all(path, "secret", &prompts);
+  CHECK(read.format == ArchiveFormat::Rar);
+  CHECK(read.flags.encrypted_headers);
+  REQUIRE(read.entries.size() == 1);
+  CHECK(read.entries[0].name == "hello.txt");
+  CHECK(read.contents == std::vector<std::string>{"hello\n"});
+  CHECK(prompts == 2);  // Once per archive object: listing, then extracting.
+
+  CHECK(error_kind(path) == ArchiveError::Kind::MissingPassword);
+  CHECK(error_kind(path, "wrong") == ArchiveError::Kind::BadPassword);
+}
+
+TEST_CASE("archives cut inside file data are errors, not shorter files") {
+  const TempDir dir;
+  struct Case {
+    const char* name;
+    const unsigned char* data;
+    size_t cut;  // Bytes kept.
+  };
+  for (const Case& c : {Case{"cut.rar", fixtures::kTinyRar, 46},
+                        Case{"cut.zip", fixtures::kKindsZip, 85},  // Inside the deflated "d/f.txt".
+                        Case{"cut.7z", fixtures::kSolid7z, sizeof(fixtures::kSolid7z) * 2 / 3},
+                        Case{"cut.tar", fixtures::kKindsTar, 8 * 512 + 2},  // Inside "d/ação.txt".
+                        Case{"cut.tar.gz", fixtures::kTinyTarGz, sizeof(fixtures::kTinyTarGz) * 2 / 3}}) {
+    CAPTURE(std::string(c.name));
+    CHECK_THROWS_AS(read_all(dir.write(c.name, c.data, c.cut)), ArchiveError);
+  }
+}
+
+TEST_CASE("compressed tar reports how much of the archive was read") {
+  const TempDir dir;
+  ArchiveCallbacks callbacks;
+  callbacks.on_data = [](const uint8_t*, size_t) { return true; };
+  const std::unique_ptr<Archive> archive =
+      open_archive(dir.write("a.tar.gz", fixtures::kTinyTarGz), Archive::Mode::Extract, callbacks);
+  const uint64_t size = archive->flags().size;
+  CHECK(size == sizeof(fixtures::kTinyTarGz));
+  ArchiveEntry entry;
+  uint64_t previous = archive->bytes_read();
+  while (archive->next(entry)) {
+    archive->test();
+    CHECK(archive->bytes_read() >= previous);
+    previous = archive->bytes_read();
+  }
+  CHECK(previous > 0);
+  CHECK(previous <= size);
+}
+
+TEST_CASE("missing files, directories and empty files cannot be opened") {
+  const TempDir dir;
+  const std::string empty = dir.write("empty.zip", std::string());
+  for (const std::string& path : {(dir.path() / "missing.rar").string(), dir.path().string(), empty}) {
+    CAPTURE(path);
+    CHECK_THROWS_AS(read_all(path), ArchiveError);
+  }
+}
+
+TEST_CASE("RAR archives cut inside a header are truncated, not shorter (UnRAR patch)") {
+  const TempDir dir;
+  constexpr const char* kTruncated = "unexpected end of archive: the file is truncated";
+  // Inside the main header, the file header, the file data and the end-of-archive block.
+  for (const size_t cut : {10u, 20u, 38u, 47u, 54u}) {
+    CAPTURE(cut);
+    const std::string path = dir.write("cut.rar", fixtures::kTinyRar, cut);
+    CHECK_THROWS_WITH_AS(read_all(path), kTruncated, ArchiveError);  // Already while listing.
+  }
+
+  // The file before the cut was complete, but the archive is not: test() fails too.
+  ArchiveCallbacks callbacks;
+  callbacks.on_data = [](const uint8_t*, size_t) { return true; };
+  const auto archive =
+      open_archive(dir.write("end.rar", fixtures::kTinyRar, 54), Archive::Mode::Extract, callbacks);
+  ArchiveEntry entry;
+  REQUIRE(archive->next(entry));
+  CHECK_THROWS_WITH_AS(archive->test(), kTruncated, ArchiveError);
+  CHECK_FALSE(archive->aborted_by_callback());
+
+  // Ending exactly at a block boundary without the end-of-archive block is how RAR 1.5 and
+  // "rar -en" archives end: UnRAR accepts it, and so do we.
+  const Read boundary = read_all(dir.write("boundary.rar", fixtures::kTinyRar, 50));
+  CHECK(boundary.contents == std::vector<std::string>{"hello\n"});
 }

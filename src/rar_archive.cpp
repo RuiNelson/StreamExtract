@@ -173,6 +173,8 @@ std::string rar_error_message(int code) {
       return "wrong password";
     case ERAR_LARGE_DICT:
       return "dictionary size exceeds the allowed limit";
+    case ERAR_TRUNCATED:  // Our UnRAR patch (cmake/UnRARPatches.cmake).
+      return "unexpected end of archive: the file is truncated";
     default:
       return fmt::format("UnRAR error {}", code);
   }

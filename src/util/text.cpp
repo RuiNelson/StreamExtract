@@ -2,6 +2,8 @@
 
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 
 #include <fmt/format.h>
 
@@ -224,13 +226,20 @@ std::string format_bytes(uint64_t bytes, ByteUnits units) {
     value /= divisor;
     ++unit;
   }
-  if (value < 10.0) {
-    return fmt::format("{:.2f} {}", value, names[unit]);
+  // Three significant digits. Rounding can reach the next magnitude ("9.999"
+  // as "10.00", 1023.9 KiB as "1024"): print that magnitude instead.
+  int decimals = value < 10.0 ? 2 : value < 100.0 ? 1 : 0;
+  std::string number = fmt::format("{:.{}f}", value, decimals);
+  while (decimals > 0 && number.find('.') > static_cast<size_t>(3 - decimals)) {
+    --decimals;
+    number = fmt::format("{:.{}f}", value, decimals);
   }
-  if (value < 100.0) {
-    return fmt::format("{:.1f} {}", value, names[unit]);
+  if (decimals == 0 && std::strtoull(number.c_str(), nullptr, 10) >= base && unit + 1 < names.size()) {
+    value /= divisor;
+    ++unit;
+    number = fmt::format("{:.2f}", value);
   }
-  return fmt::format("{:.0f} {}", value, names[unit]);
+  return fmt::format("{} {}", number, names[unit]);
 }
 
 std::string format_speed(double bytes_per_second, ByteUnits units) {

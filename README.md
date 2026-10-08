@@ -506,6 +506,10 @@ curl -LO https://www.rarlab.com/rar/unrarsrc-7.3.1.tar.gz
 mkdir unrarsrc && tar -xzf unrarsrc-7.3.1.tar.gz -C unrarsrc --strip-components=1
 ```
 
+CMake builds a private copy with a small patch (`cmake/UnRARPatches.cmake`) so
+that an archive cut short inside a header is reported as truncated instead of
+ending early. The downloaded sources are unchanged.
+
 7-Zip's [LZMA SDK](https://www.7-zip.org/sdk.html), which reads the 7z
 archives, is not part of the repository either; extract it into `lzmasdk/`, with
 bsdtar (the `tar` of macOS) or 7-Zip:
@@ -600,10 +604,11 @@ xattr -dr com.apple.quarantine StreamExtract.app
 ### Continuous integration
 
 Developed and tested on macOS. The GitHub Actions workflow
-(`.github/workflows/ci.yml`) builds and tests Linux (x64 and arm64), macOS
-(universal) and Windows (x64), always with libcurl built from source and linked
-statically (Windows does not ship it), and produces one `.rar` per platform,
-for the command line and for the app. The macOS release assets are then signed
+(`.github/workflows/ci.yml`) builds and runs the unit tests on Linux (x64 and
+arm64), macOS (universal) and Windows (x64); integration tests run only
+locally. libcurl is always built from source and linked statically (Windows
+does not ship it), and the workflow produces one `.rar` per platform, for the
+command line and for the app. The macOS release assets are then signed
 and notarized before they are published.
 
 ## Testing

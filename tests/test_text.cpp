@@ -100,3 +100,65 @@ TEST_CASE("FTP timestamps") {
   CHECK(filetime_to_unix(116444736000000000ull) == 0);
   CHECK(filetime_to_unix(116444736000000000ull + 17000000000000000ull) == 1700000000);
 }
+
+TEST_CASE("UTF-8 decoding stops at U+10FFFF and rejects stray bytes") {
+  CHECK(is_valid_utf8("\xf4\x8f\xbf\xbf"));        // U+10FFFF, the last code point.
+  CHECK_FALSE(is_valid_utf8("\xf4\x90\x80\x80"));  // Past it.
+  CHECK_FALSE(is_valid_utf8("\xf5\x80\x80\x80"));
+  CHECK_FALSE(is_valid_utf8("\xf8\x88\x80\x80\x80"));  // Five-byte forms do not exist.
+  CHECK_FALSE(is_valid_utf8("\x80"));                  // A continuation byte on its own.
+  CHECK_FALSE(is_valid_utf8("\xe0\x80\xaf"));          // Overlong three-byte '/'.
+
+  // One U+FFFD per byte that cannot start a sequence.
+  CHECK(utf8_to_utf16("\xf4\x90\x80\x80") == u"\uFFFD\uFFFD\uFFFD\uFFFD");
+  CHECK(utf16_to_utf8(utf8_to_utf16("\xf4\x8f\xbf\xbf")) == "\xf4\x8f\xbf\xbf");
+}
+
+TEST_CASE("unpaired surrogates in wide strings become U+FFFD") {
+  const std::wstring high{L'a', static_cast<wchar_t>(0xD800), L'b'};
+  CHECK(to_utf8(high) == "a\uFFFDb");
+  const std::wstring low{static_cast<wchar_t>(0xDC00)};
+  CHECK(to_utf8(low) == "\uFFFD");
+  const std::u16string reversed{static_cast<char16_t>(0xDE00), static_cast<char16_t>(0xD83D)};
+  CHECK(utf16_to_utf8(reversed) == "\uFFFD\uFFFD");
+}
+
+TEST_CASE("format_bytes changes unit at every power and stops at exbibytes") {
+  CHECK(format_bytes(1ull << 20) == "1.00 MiB");
+  CHECK(format_bytes(1ull << 30) == "1.00 GiB");
+  CHECK(format_bytes(1ull << 50) == "1.00 PiB");
+  CHECK(format_bytes(1ull << 60) == "1.00 EiB");
+  CHECK(format_bytes(std::numeric_limits<uint64_t>::max()) == "16.0 EiB");
+  CHECK(format_bytes(std::numeric_limits<uint64_t>::max(), ByteUnits::Si) == "18.4 EB");
+  CHECK(format_bytes(99 * 1024) == "99.0 KiB");
+  CHECK(format_bytes(100 * 1024) == "100 KiB");
+}
+
+TEST_CASE("format_bytes keeps three digits when rounding reaches the next magnitude") {
+  CHECK(format_bytes(10234) == "9.99 KiB");
+  CHECK(format_bytes(10239) == "10.0 KiB");  // Not "10.00 KiB".
+  CHECK(format_bytes(102347) == "99.9 KiB");
+  CHECK(format_bytes(102399) == "100 KiB");  // Not "100.0 KiB".
+  CHECK(format_bytes(1023 * 1024) == "1023 KiB");
+  CHECK(format_bytes((1ull << 20) - 1) == "1.00 MiB");  // Not "1024 KiB".
+  CHECK(format_bytes((1ull << 30) - 1) == "1.00 GiB");
+  CHECK(format_bytes(999999, ByteUnits::Si) == "1.00 MB");  // Not "1000 kB".
+  CHECK(format_bytes(999499, ByteUnits::Si) == "999 kB");
+  CHECK(format_bytes(9996, ByteUnits::Si) == "10.0 kB");
+  CHECK(format_speed(1048575) == "1.00 MiB/s");
+}
+
+TEST_CASE("durations are rounded to the second and unknown past 1000 hours") {
+  CHECK(format_duration(59.4) == "00:00:59");
+  CHECK(format_duration(59.5) == "00:01:00");
+  CHECK(format_duration(999 * 3600 + 3599) == "999:59:59");
+  CHECK(format_duration(1000 * 3600) == "--:--:--");
+}
+
+TEST_CASE("FTP timestamps across centuries and FILETIMEs before 1970") {
+  CHECK(format_ftp_timestamp(4102444800) == "21000101000000");    // 2100 is not a leap year...
+  CHECK(format_ftp_timestamp(4107456000) == "21000228000000");    // ...so 28 February...
+  CHECK(format_ftp_timestamp(4107542400) == "21000301000000");    // ...is followed by 1 March.
+  CHECK(format_ftp_timestamp(253402300799) == "99991231235959");  // The last second of 9999.
+  CHECK(filetime_to_unix(0) == -11644473600);
+}

@@ -65,3 +65,25 @@ TEST_CASE("SI summary formats original uploaded and skipped byte counts") {
   result.status = TransferResult::Status::Failed;
   CHECK(summary_lines(result, ByteUnits::Si)[1] == "3 file(s), 10.5 kB uploaded before the failure.");
 }
+
+TEST_CASE("a transfer that took no time has no average speed") {
+  TransferResult result;
+  CHECK(summary_lines(result) == Lines{"Done: 0 file(s), 0 B uploaded in 00:00:00 (0 B/s on average)."});
+  result.files_uploaded = 1;
+  result.bytes_uploaded = 100;
+  CHECK(summary_lines(result) == Lines{"Done: 1 file(s), 100 B uploaded in 00:00:00 (0 B/s on average)."});
+}
+
+TEST_CASE("skipped and ignored entries follow the outcome of failed and cancelled transfers") {
+  for (const auto status : {TransferResult::Status::Failed, TransferResult::Status::Cancelled}) {
+    TransferResult result = result_with(status);
+    result.error = "boom";
+    result.skipped_files = 1;
+    result.skipped_bytes = 10;
+    result.ignored = 2;
+    const Lines lines = summary_lines(result);
+    REQUIRE(lines.size() == (status == TransferResult::Status::Failed ? 4u : 3u));
+    CHECK(lines[lines.size() - 2] == "Skipped 1 file(s), 10 B already on the server with the same size.");
+    CHECK(lines.back() == "Not uploaded: 2 link(s) or unsupported entries (see the warnings).");
+  }
+}

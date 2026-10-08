@@ -139,10 +139,12 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
 
+      # Unit tests only: integration tests (Docker, run.py) never run in CI.
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
+          -DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=OFF
           ${{ matrix.configure }}
 
       - name: Build
@@ -325,11 +327,13 @@ jobs:
           if (-not (Test-Path $linker)) { throw "MSVC linker not found: $linker" }
           "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" >> $env:GITHUB_ENV
 
+      # Unit tests only: integration tests (Docker, run.py) never run in CI.
       - name: Configure the library
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
           -DSTREAMEXTRACT_BUILD_LIBRARY=ON
+          -DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=OFF
           ${{ matrix.configure }}
 
       - name: Build the library
