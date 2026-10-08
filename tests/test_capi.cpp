@@ -350,6 +350,30 @@ TEST_CASE("a wrong ZIP password is noticed while reading the archive") {
   streamextract_job_free(job);
 }
 
+TEST_CASE("a wrong password for RAR file data is noticed while reading the archive") {
+  const TempFile archive("streamextractcore-data.rar", fixtures::kEncryptedDataRar,
+                         sizeof(fixtures::kEncryptedDataRar));
+  const std::string path = archive.path();
+  streamextract_job_config config = make_config(path, 1);
+  streamextract_job* job = streamextract_job_start(&config);
+  REQUIRE(job != nullptr);
+
+  const char* first =
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-data.rar\",\"error\":null}";
+  const char* again =
+      "\"prompt\":{\"kind\":\"archive_password\",\"archive\":\"streamextractcore-data.rar\",\"error\":\"Wrong "
+      "password\"}";
+  REQUIRE(contains(wait_for(job, first), first));
+  streamextract_job_answer_password(job, "wrong");
+  REQUIRE(contains(wait_for(job, again), again));
+  streamextract_job_answer_password(job, "secret");
+  const std::string json = wait_for(job, "\"phase\":\"finished\"");
+  CHECK(contains(json, "\"format\":\"RAR\""));
+  CHECK(contains(json, "\"encrypted\":true}"));
+  CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the FTP login.
+  streamextract_job_free(job);
+}
+
 TEST_CASE("the password prompt is asked again until it is right") {
   const TempFile archive("streamextractcore-enc.rar", kEncryptedRar, sizeof(kEncryptedRar));
   const std::string path = archive.path();

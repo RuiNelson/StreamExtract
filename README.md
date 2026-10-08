@@ -215,7 +215,7 @@ password-protected archives are supported:
 | `--staging DIR` | Upload and resume in this remote directory, then move the archive's files to the destination after the entire archive succeeds. Omit it to upload directly to the destination. |
 | `--mkdir` | Create destination and staging directories if missing, with one `MKD` each (not recursive). Without it, either missing directory is an error. |
 | `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
-| `--extraction-root DIR` | Upload only this directory's contents from inside the archive, removing its path prefix. Omitted, empty or `/`: upload all contents. |
+| `--extraction-root DIR` | Upload only this directory's contents from inside the archive, removing its path prefix. The path is relative to the archive root and must not start with `/` (`b/c`, not `/b/c`). Omitted or empty (the archive root): upload all contents; a lone `/` is also accepted as the archive root. |
 | `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
 | `--verbose` | Log connection and protocol details (credentials are masked). |
 | `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
@@ -382,7 +382,9 @@ Behaviour, in both:
   For example, `--extraction-root b --directory /remote/dest` uploads `b/xyz.bin`
   as `/remote/dest/xyz.bin`, excluding entries outside `b`. Nested directories
   and empty folders inside the selection are preserved. Names are case-sensitive;
-  a missing directory is an error. In the GUI, use a file's **… → Select Extraction
+  a missing directory is an error. The root is written relative to the archive
+  root: `b` and `b/c` are valid, while `/b` and `/b/c` are rejected; the archive
+  root itself is an empty value (or omitting the option). In the GUI, use a file's **… → Select Extraction
   Root** menu to browse its folders independently. Its selected root appears on
   the file's row; choose the archive root (`/`) to
   upload all contents. Browsing a compressed tar reads through it once;
@@ -402,7 +404,9 @@ Behaviour, in both:
   parts (`.7z.001`, ...) and archives with a password (AES-256), also with
   encrypted file names (`-mhe`). A wrong password is detected while reading the
   archive (by decrypting the names, or the start of the first file), before
-  anything is sent. They are read with 7-Zip's own code; BZip2, Deflate and
+  anything is sent; if the first encrypted file is larger than 4 MiB and stored
+  without compression (or only filtered), that cannot be proven up front, a
+  warning says so, and a wrong password is only found when that file ends. They are read with 7-Zip's own code; BZip2, Deflate and
   Zstandard, which 7-Zip's SDK does not include, are decoded with the libraries
   libarchive uses too (bzip2, zlib and Zstandard).
 - **tar**, every variant libarchive reads (POSIX, GNU, pax, old Unix ones),

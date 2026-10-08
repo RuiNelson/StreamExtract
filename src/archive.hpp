@@ -80,6 +80,9 @@ struct ArchiveCallbacks {
   std::function<void(const std::string& volume)> on_missing_volume;
   // RAR: dictionary larger than UnRAR's default limit. Return true to allow it.
   std::function<bool(uint64_t dictionary, uint64_t limit)> on_large_dictionary;
+  // Something worth telling the user that does not stop the operation (7z: the
+  // password could not be verified up front).
+  std::function<void(const std::string& message)> on_warning;
 };
 
 // Sequential reader of an archive, whatever its format.

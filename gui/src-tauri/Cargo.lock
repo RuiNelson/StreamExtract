@@ -17,6 +17,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "uuid",
+ "zbus",
 ]
 
 [[package]]

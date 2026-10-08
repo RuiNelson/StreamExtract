@@ -212,16 +212,20 @@ Handle probe(const std::vector<std::string>& parts, Setup setup) {
 std::optional<ArchiveFormat> libarchive_format(const std::vector<std::string>& parts) {
   const Utf8Locale utf8;
   // One format at a time, so that the open says whether that one recognizes
-  // the data. Both ZIP readers bid: the streaming one also knows a ZIP whose
-  // end (the central directory the reader below needs) is missing.
+  // the data. Tar goes first: it needs a valid header checksum at offset 0,
+  // which no ZIP or 7z has, whereas the seekable ZIP reader accepts any data
+  // with an end-of-central-directory record in its last 16 KiB, such as a tar
+  // whose last member is a ZIP. Both ZIP readers bid: the streaming one also
+  // knows a ZIP whose end (the central directory the reader below needs) is
+  // missing.
+  if (probe(parts, support_tar)) {
+    return ArchiveFormat::Tar;
+  }
   if (probe(parts, archive_read_support_format_zip)) {
     return ArchiveFormat::Zip;
   }
   if (probe(parts, archive_read_support_format_7zip)) {
     return ArchiveFormat::SevenZip;
-  }
-  if (probe(parts, support_tar)) {
-    return ArchiveFormat::Tar;
   }
   return std::nullopt;
 }

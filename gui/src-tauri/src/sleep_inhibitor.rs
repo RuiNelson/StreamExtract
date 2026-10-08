@@ -16,7 +16,8 @@ pub struct SleepInhibitor {
 
 #[cfg(target_os = "linux")]
 pub struct SleepInhibitor {
-    process: Option<std::process::Child>,
+    /// The logind inhibitor fd; closing it (on drop or process exit) releases the lock.
+    _lock: Option<zbus::zvariant::OwnedFd>,
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -76,34 +77,23 @@ impl Drop for SleepInhibitor {
 
 #[cfg(target_os = "linux")]
 impl SleepInhibitor {
-    /// Uses the systemd-logind inhibitor exposed by `systemd-inhibit` when available.
+    /// Takes a `sleep` inhibitor lock from systemd-logind over the system D-Bus.
+    ///
+    /// logind returns a file descriptor; the lock lasts as long as it stays open, so the kernel
+    /// releases it when this process ends for any reason (crash, SIGKILL, forced quit).
     pub fn new(enabled: bool) -> Self {
-        let process = enabled
-            .then(|| {
-                std::process::Command::new("systemd-inhibit")
-                    .args([
-                        "--what=sleep",
-                        "--mode=block",
-                        "--who=StreamExtract",
-                        "--why=Archive transfer in progress",
-                        "sleep",
-                        "2147483647",
-                    ])
-                    .spawn()
-                    .ok()
-            })
-            .flatten();
-        Self { process }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for SleepInhibitor {
-    fn drop(&mut self) {
-        if let Some(mut process) = self.process.take() {
-            let _ = process.kill();
-            let _ = process.wait();
-        }
+        let lock = if enabled {
+            match linux::inhibit_sleep() {
+                Ok(fd) => Some(fd),
+                Err(error) => {
+                    eprintln!("Sleep inhibitor unavailable (systemd-logind): {error}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        Self { _lock: lock }
     }
 }
 
@@ -205,6 +195,31 @@ mod macos {
         unsafe {
             IOPMAssertionRelease(assertion_id);
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use zbus::blocking::Connection;
+    use zbus::zvariant::OwnedFd;
+
+    /// Calls `org.freedesktop.login1.Manager.Inhibit("sleep", ..., "block")` and returns the
+    /// lock file descriptor.
+    pub(super) fn inhibit_sleep() -> zbus::Result<OwnedFd> {
+        let connection = Connection::system()?;
+        let reply = connection.call_method(
+            Some("org.freedesktop.login1"),
+            "/org/freedesktop/login1",
+            Some("org.freedesktop.login1.Manager"),
+            "Inhibit",
+            &(
+                "sleep",
+                "StreamExtract",
+                "Archive transfer in progress",
+                "block",
+            ),
+        )?;
+        reply.body().deserialize::<OwnedFd>()
     }
 }
 

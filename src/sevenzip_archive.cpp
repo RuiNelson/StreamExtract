@@ -46,6 +46,22 @@ constexpr UInt64 kSfxSearchLimit = 1 << 22;
 constexpr uint64_t kPasswordCheckBytes = 4 << 20;
 constexpr uint32_t kNoFolder = NArchive::N7z::kNumNoIndex;
 
+// Whether a decoder of this method fails on the garbage a wrong AES key gives.
+bool rejects_garbage(UInt64 method) {
+  switch (method) {
+    case NArchive::N7z::k_LZMA:
+    case NArchive::N7z::k_LZMA2:
+    case NArchive::N7z::k_PPMD:
+    case NArchive::N7z::k_BZip2:
+    case NArchive::N7z::k_Deflate:
+    case NArchive::N7z::k_Deflate64:
+    case 0x4F71101:  // Zstandard
+      return true;
+    default:
+      return false;
+  }
+}
+
 // FILE_ATTRIBUTE_UNIX_EXTENSION: the high 16 bits hold a Unix st_mode.
 constexpr UInt32 kUnixExtension = 0x8000;
 constexpr UInt32 kUnixTypeMask = 0170000;
@@ -236,6 +252,9 @@ struct SevenZipArchive::Impl {
   // coders are chained (AES and LZMA2, a filter and LZMA2...).
   std::unique_ptr<NArchive::N7z::CDecoder> decoder;
   std::vector<bool> folder_encrypted;
+  // The folder has no coder that rejects garbage (only AES, Copy and filters): a
+  // wrong password is then noticed by the CRC alone.
+  std::vector<bool> folder_unchecked;
 
   bool password_asked = false;
   bool password_declined = false;
@@ -545,6 +564,7 @@ std::unique_ptr<SevenZipArchive> SevenZipArchive::open(const std::vector<std::st
 
   std::optional<UInt64> unsupported;
   m.folder_encrypted.assign(m.db.NumFolders, false);
+  m.folder_unchecked.assign(m.db.NumFolders, true);
   const HRESULT parsed = m.call([&] {
     for (uint32_t i = 0; i < m.db.NumFolders; ++i) {
       NArchive::N7z::CFolder folder;
@@ -553,6 +573,9 @@ std::unique_ptr<SevenZipArchive> SevenZipArchive::open(const std::vector<std::st
         const UInt64 method = folder.Coders[c].MethodID;
         if (method == NArchive::N7z::k_AES) {
           m.folder_encrypted[i] = true;
+        }
+        if (rejects_garbage(method)) {
+          m.folder_unchecked[i] = false;
         }
         AString name;
         if (!FindMethod(method, name)) {
@@ -632,12 +655,22 @@ void SevenZipArchive::skip() {
   m.aborted = false;
   if (m.mode == Mode::List && m.has_current && m.current_folder != kNoFolder &&
       m.folder_encrypted[m.current_folder] && !m.password_checked) {
+    bool whole = false;
     try {
-      m.read_current(kPasswordCheckBytes, false);
+      whole = m.read_current(kPasswordCheckBytes, false);
     } catch (const CorruptData&) {
       throw ArchiveError(ArchiveError::Kind::BadPassword, "wrong password");
     }
     m.password_checked = true;
+    // A file read whole has its CRC checked; a partly read one only passed the
+    // decoders, which AES, Copy and filters do not make reject garbage.
+    const CFileItem& file = m.db.Files[m.current];
+    if (!(whole && file.CrcDefined) && m.folder_unchecked[m.current_folder] && m.callbacks.on_warning) {
+      m.callbacks.on_warning(
+          "the archive password could not be verified up front (the first encrypted file is too large to "
+          "check and its compression cannot detect a wrong password): a wrong password is only found "
+          "after that file is read");
+    }
   }
 }
 

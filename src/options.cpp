@@ -81,7 +81,8 @@ ParsedOptions parse_options(int argc, char** argv) {
                      "Upload and resume in this remote directory, then move files to the destination on success")
           ->type_name("DIR");
   app.add_option("--extraction-root", o.extraction_root,
-                 "Upload only this archive directory's contents, without its path prefix (default: archive root)")
+                 "Upload only this archive directory's contents, without its path prefix. Relative to the archive "
+                 "root, never starting with '/' (e.g. b/c); empty or omitted: the archive root")
       ->type_name("DIR");
   CLI::Option* archive_password_option = app.add_option("--archive-password", archive_password,
                                                         "Password of an encrypted archive; asked for when needed")

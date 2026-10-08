@@ -48,11 +48,22 @@ constexpr unsigned kRedirFileCopy = 5;
 // Wide characters available for a file name (RARHeaderDataEx::FileNameEx).
 constexpr size_t kNameBufferSize = 32768;
 
+// The first encrypted file is tested whole up to this size while listing, so
+// that its checksum also tells a wrong password for RAR 4.x (no check value).
+// A larger one is only started: RAR 5 reports a wrong password before any data.
+constexpr uint64_t kPasswordCheckMaxSize = 4ull << 20;
+
 }  // namespace
 
 struct RarArchive::Impl {
   HANDLE handle = nullptr;
+  std::string path;
+  Mode mode = Mode::Extract;
   ArchiveCallbacks callbacks;
+  size_t entry_index = 0;  // Entries read so far (next()).
+  bool entry_encrypted = false;
+  uint64_t entry_size = 0;
+  bool password_checked = false;
   ArchiveFlags flags;
   RARHeaderDataEx header{};
   std::vector<wchar_t> name_buffer = std::vector<wchar_t>(kNameBufferSize);
@@ -204,6 +215,8 @@ std::string unrar_version() {
 RarArchive::RarArchive(const std::string& path, Mode mode, ArchiveCallbacks callbacks)
     : impl_(std::make_unique<Impl>()) {
   impl_->callbacks = std::move(callbacks);
+  impl_->path = path;
+  impl_->mode = mode;
 
   RAROpenArchiveDataEx data{};
 #ifdef _WIN32
@@ -283,6 +296,9 @@ bool RarArchive::next(ArchiveEntry& entry) {
       entry.kind = (h.Flags & RHDF_DIRECTORY) != 0 ? EntryKind::Directory : EntryKind::File;
       break;
   }
+  impl_->entry_encrypted = entry.encrypted;
+  impl_->entry_size = entry.size;
+  ++impl_->entry_index;
   return true;
 }
 
@@ -295,7 +311,67 @@ void RarArchive::test() {
   }
 }
 
+void RarArchive::check_password() {
+  // Listing never asks UnRAR for the password of file data (only of encrypted
+  // headers), so a wrong one would only be found by the upload. Test the first
+  // encrypted file with a second handle, as the other readers do.
+  Impl& m = *impl_;
+  m.password_checked = true;
+  const size_t target = m.entry_index;
+  const bool whole = m.entry_size <= kPasswordCheckMaxSize;
+
+  bool declined = false;
+  ArchiveCallbacks callbacks;
+  callbacks.on_password = [&]() -> std::optional<std::string> {
+    std::optional<std::string> password;
+    if (m.callbacks.on_password) {
+      password = m.callbacks.on_password();
+    }
+    declined = !password;
+    return password;
+  };
+  callbacks.on_data = [whole](const uint8_t*, size_t) { return whole; };
+  callbacks.on_large_dictionary = [](uint64_t, uint64_t) { return true; };  // Already reported by the listing.
+
+  try {
+    RarArchive check(m.path, Mode::Extract, std::move(callbacks));
+    ArchiveEntry entry;
+    for (size_t index = 1; check.next(entry); ++index) {
+      if (index == target) {
+        try {
+          check.test();
+        } catch (const ArchiveError& error) {
+          if (check.aborted_by_callback() && !declined) {
+            return;  // Enough: the start of the file decrypted.
+          }
+          // RAR 4.x has no password check value: the checksum of a whole file
+          // is what fails.
+          if (whole && error.kind() == ArchiveError::Kind::Other &&
+              error.what() == rar_error_message(ERAR_BAD_DATA)) {
+            throw ArchiveError(ArchiveError::Kind::BadPassword, rar_error_message(ERAR_BAD_PASSWORD));
+          }
+          throw;
+        }
+        return;
+      }
+      check.skip();
+    }
+  } catch (const ArchiveError& error) {
+    if (error.kind() != ArchiveError::Kind::Other) {
+      throw;
+    }
+    if (declined) {  // UnRAR only says that the callback aborted.
+      throw ArchiveError(ArchiveError::Kind::MissingPassword, rar_error_message(ERAR_MISSING_PASSWORD));
+    }
+    // Anything else (missing volume, truncation...) is for the listing to report.
+  }
+}
+
 void RarArchive::skip() {
+  if (impl_->mode == Mode::List && !impl_->password_checked && impl_->entry_encrypted &&
+      !impl_->flags.encrypted_headers) {
+    check_password();
+  }
   impl_->aborted = false;
   const int code = RARProcessFileW(impl_->handle, RAR_SKIP, nullptr, nullptr);
   impl_->rethrow_callback_error();

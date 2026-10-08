@@ -425,6 +425,18 @@ TEST_CASE("a tar archive") {
   CHECK_FALSE(read.flags.stream_only);
 }
 
+TEST_CASE("a tar whose last member is a ZIP is read as tar") {
+  const TempDir dir;
+  const Read read = read_all(dir.write("zip-last.tar", fixtures::kTarEndingWithZip));
+  CHECK(read.format == ArchiveFormat::Tar);
+  REQUIRE(read.entries.size() == 2);
+  CHECK(read.entries[0].name == "dir/a-readme.txt");
+  CHECK(read.entries[1].name == "dir/z-last.zip");
+  CHECK(read.contents[0] == "hello\n");
+  CHECK(read.contents[1].size() == 131);
+  CHECK(read.contents[1].substr(0, 2) == "PK");
+}
+
 TEST_CASE("compressed tar archives") {
   const TempDir dir;
   struct Case {
@@ -585,6 +597,57 @@ TEST_CASE("RAR archives with encrypted headers") {
   CHECK(read.contents == std::vector<std::string>{"hello\n"});
   CHECK(prompts == 2);  // Once per archive object: listing, then extracting.
 
+  CHECK(error_kind(path) == ArchiveError::Kind::MissingPassword);
+  CHECK(error_kind(path, "wrong") == ArchiveError::Kind::BadPassword);
+}
+
+TEST_CASE("RAR archives with encrypted file data and clear headers") {
+  const TempDir dir;
+  const std::string path = dir.write("encrypted-data.rar", fixtures::kEncryptedDataRar);
+  int prompts = 0;
+  const Read read = read_all(path, "secret", &prompts);
+  CHECK_FALSE(read.flags.encrypted_headers);
+  REQUIRE(read.entries.size() == 1);
+  CHECK(read.entries[0].encrypted);
+  CHECK(read.contents == std::vector<std::string>{"hello\n"});
+  CHECK(prompts == 2);  // Once per archive object: listing, then extracting.
+
+  // The listing UnRAR does with clear headers never asks for a password, but
+  // ours decrypts the start of the first encrypted file, as for ZIP and 7z.
+  prompts = 0;
+  ArchiveCallbacks callbacks;
+  callbacks.on_password = [&]() -> std::optional<std::string> {
+    ++prompts;
+    return std::string("wrong");
+  };
+  const std::unique_ptr<Archive> archive = open_archive(path, Archive::Mode::List, callbacks);
+  ArchiveEntry entry;
+  REQUIRE(archive->next(entry));
+  try {
+    archive->skip();
+    FAIL("a wrong password was accepted");
+  } catch (const ArchiveError& error) {
+    CHECK(error.kind() == ArchiveError::Kind::BadPassword);
+  }
+  CHECK(prompts == 1);
+
+  // The right one passes, and the listing goes on.
+  callbacks.on_password = []() -> std::optional<std::string> { return std::string("secret"); };
+  const std::unique_ptr<Archive> good = open_archive(path, Archive::Mode::List, callbacks);
+  REQUIRE(good->next(entry));
+  CHECK_NOTHROW(good->skip());
+  CHECK_FALSE(good->next(entry));
+
+  // No answer at all.
+  callbacks.on_password = []() -> std::optional<std::string> { return std::nullopt; };
+  const std::unique_ptr<Archive> none = open_archive(path, Archive::Mode::List, callbacks);
+  REQUIRE(none->next(entry));
+  try {
+    none->skip();
+    FAIL("a missing password was accepted");
+  } catch (const ArchiveError& error) {
+    CHECK(error.kind() == ArchiveError::Kind::MissingPassword);
+  }
   CHECK(error_kind(path) == ArchiveError::Kind::MissingPassword);
   CHECK(error_kind(path, "wrong") == ArchiveError::Kind::BadPassword);
 }

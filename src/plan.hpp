@@ -88,7 +88,7 @@ struct PlannedEntry {
   uint64_t resume_offset = 0;         // Discard this prefix locally, then append the remaining bytes.
   bool delete_before_upload = false;  // The remote file is larger than the archive entry.
   bool already_published = false;     // Absent from staging, complete in the destination; do not move again.
-  bool excluded = false;              // Outside the extraction root; does not count as an ignored entry.
+  bool excluded = false;              // Outside the extraction root or the root "./" itself; not "ignored".
 };
 
 struct TransferPlan {

@@ -80,6 +80,23 @@ TEST_CASE("exFAT reads a real hdiutil volume, Unicode names and fragmented files
   CHECK(extracted.at("uninitialized.bin") == "written" + std::string(16993, '\0'));
 }
 
+TEST_CASE("exFAT keeps trailing dots and spaces and DEL in names") {
+  // Real hdiutil/newfs_exfat volume: FatFs's path parser would strip them and open another entry (or none).
+  const auto extracted = contents(std::string(STREAMEXTRACT_TEST_FIXTURES) + "/trailing.exfat");
+  CHECK(extracted.at("Acme Inc.").empty());
+  CHECK(extracted.at("Acme Inc./file.txt") == "inside dir\n");
+  CHECK(extracted.at("Acme Inc") == "plain 4\n");
+  CHECK(extracted.at("notes") == "plain 1\n");
+  CHECK(extracted.at("notes.") == "dot one\n");  // Same size as "notes": the wrong entry would go unnoticed.
+  CHECK(extracted.at("report") == "plain 2\n");
+  CHECK(extracted.at("report ") == "space a\n");
+  CHECK(extracted.at("end") == "plain 3\n");
+  CHECK(extracted.at("end..") == "two dots\n");
+  CHECK(extracted.at("trail ").empty());
+  CHECK(extracted.at("trail /x.txt") == "in space dir\n");
+  CHECK(extracted.at(std::string("a\x7f") + "b.txt") == "del\n");
+}
+
 TEST_CASE("exFAT is recognized by content and uses the existing planner") {
   const CopyImage file("misleading.zip");
   Logger log;

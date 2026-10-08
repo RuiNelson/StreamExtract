@@ -25,12 +25,18 @@ class RarArchive final : public Archive {
   // RAR_TEST: decompresses and verifies CRC/BLAKE2 without creating files.
   void test() override;
   // In solid archives this still decompresses the entry, without feeding on_data.
+  // In List mode, the first call on an encrypted file (data only: encrypted
+  // headers are checked when opening) tests it with the password.
   void skip() override;
   bool aborted_by_callback() const override;
 
   struct Impl;
 
  private:
+  // List mode: tests the first encrypted file so that a wrong password is
+  // found while listing. Throws ArchiveError (BadPassword, MissingPassword).
+  void check_password();
+
   std::unique_ptr<Impl> impl_;
 };
 

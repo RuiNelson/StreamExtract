@@ -1,5 +1,28 @@
 # Filesystem fixtures
 
+`trailing.exfat` (in the same zip) covers names that FatFs's FAT-oriented path
+parser would otherwise mangle (`cmake/fatfs/patches.cmake` fixes that). macOS
+cannot create them: its exFAT driver stores a trailing dot or space as a
+private-use character (U+F029 / U+F028). It was therefore made on Linux with
+exfatprogs and the exfat-fuse driver (Debian bookworm container):
+
+```bash
+truncate -s 32M trailing.exfat && mkfs.exfat -L DOTS trailing.exfat
+L=$(losetup -f --show trailing.exfat) && mount.exfat-fuse $L /mnt   # then, in /mnt:
+mkdir "Acme Inc." "trail "
+printf 'inside dir\n' > "Acme Inc./file.txt"
+printf 'dot one\n' > "notes.";    printf 'plain 1\n' > notes
+printf 'space a\n' > "report ";    printf 'plain 2\n' > report
+printf 'del\n' > "$(printf 'a\177b').txt"            # DEL (0x7F)
+printf 'in space dir\n' > "trail /x.txt"
+printf 'two dots\n' > "end..";     printf 'plain 3\n' > end
+printf 'plain 4\n' > "Acme Inc"
+touch -d @1700000000 * */*
+```
+
+Pairs such as `notes.`/`notes` have the same size, so opening the wrong entry
+would go unnoticed without comparing contents.
+
 ## exFAT
 
 `exfat.zip` contains real disk images created by macOS `hdiutil`, compressed

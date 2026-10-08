@@ -219,8 +219,8 @@ int run(const Options& options) {
     UiHeader header;
     header.archive = file_name_of(options.file);
     header.target = ftp.url_for(target);
-    header.mode = options.mode == FtpMode::Active ? "active" : "passive";
-    header.user = options.user ? *options.user : "anonymous";
+    header.mode = is_ssh(options.protocol) ? "SFTP" : options.mode == FtpMode::Active ? "active" : "passive";
+    header.user = options.user.value_or(is_ssh(options.protocol) ? current_username() : "anonymous");
     run_tui(transfer, progress, log, header);
   } else {
     run_plain(transfer, progress);

@@ -262,9 +262,30 @@ TEST_CASE("the planner sanitizes unsafe names and ignores unusable ones") {
   const size_t before = log.problems().size();
   for (const char* root : {"./", "/", ""}) {
     CAPTURE(std::string(root));
-    CHECK(planner.plan(make_entry(root, EntryKind::Directory)).action == PlannedEntry::Action::Ignore);
+    const PlannedEntry planned = planner.plan(make_entry(root, EntryKind::Directory));
+    CHECK(planned.action == PlannedEntry::Action::Ignore);
+    CHECK(planned.excluded);  // Not counted as "not uploaded".
   }
   CHECK(log.problems().size() == before);
+}
+
+TEST_CASE("a root directory entry such as ./ is not counted as ignored") {
+  Logger log;
+  ArchiveListing listing;
+  listing.format = ArchiveFormat::Tar;
+  listing.entries = {make_entry("./", EntryKind::Directory), make_entry("./docs/", EntryKind::Directory),
+                     make_entry("./docs/a.txt", EntryKind::File, 5)};
+  const TransferPlan plan = build_plan("x.tar", listing, "/upload", log);
+  CHECK(plan.upload_files == 1);
+  CHECK(plan.upload_bytes == 5);
+  CHECK(plan.ignored == 0);
+  CHECK(log.problems().empty());
+
+  // An unusable non-directory name is still reported and counted.
+  listing.entries.push_back(make_entry("a/..", EntryKind::File, 1));
+  const TransferPlan other = build_plan("x.tar", listing, "/upload", log);
+  CHECK(other.ignored == 1);
+  CHECK(problems_with(log, "unusable name") == 1);
 }
 
 TEST_CASE("the planner warns about duplicate names and names that differ only in case") {
@@ -384,7 +405,13 @@ TEST_CASE("extraction roots are normalized, and only listed archives are checked
   CHECK(normalize_extraction_root(ArchiveFormat::Zip, "/") == "");
   CHECK(normalize_extraction_root(ArchiveFormat::Zip, "./a//b/") == "a/b");
   CHECK(normalize_extraction_root(ArchiveFormat::Zip, "a\\b") == "a/b");
+  CHECK(normalize_extraction_root(ArchiveFormat::Zip, "") == "");
   CHECK_THROWS_AS(normalize_extraction_root(ArchiveFormat::Zip, "a/../b"), std::runtime_error);
+  // The root is relative to the archive root: a leading '/' is not accepted (only a lone "/" is the root).
+  CHECK_THROWS_AS(normalize_extraction_root(ArchiveFormat::Zip, "/b"), std::runtime_error);
+  CHECK_THROWS_AS(normalize_extraction_root(ArchiveFormat::Zip, "/b/c"), std::runtime_error);
+  CHECK_THROWS_WITH_AS(normalize_extraction_root(ArchiveFormat::Zip, "/b"), doctest::Contains("not starting with '/'"),
+                       std::runtime_error);
 
   ArchiveListing streamed;
   streamed.format = ArchiveFormat::Tar;

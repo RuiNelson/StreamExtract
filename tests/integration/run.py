@@ -152,7 +152,8 @@ def split_file(path, parts):
 def exfat_fixtures(archives):
     """Use volumes produced by hdiutil; never construct filesystem structures in tests."""
     with zipfile.ZipFile(Path(__file__).resolve().parents[1] / "fixtures" / "exfat.zip") as fixture:
-        for source, destination in (("volume.exfat", "basic.exfat"), ("partitioned.exfat", "disk.exfat")):
+        for source, destination in (("volume.exfat", "basic.exfat"), ("partitioned.exfat", "disk.exfat"),
+                                    ("trailing.exfat", "trailing.exfat")):
             with fixture.open(source) as src, (archives / destination).open("wb") as dst:
                 shutil.copyfileobj(src, dst)
 
@@ -337,6 +338,12 @@ def build_fixtures(work, rar, big, sevenzip, infozip, lz4):
         sz_a("encrypted-multivolume.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-mhe=on", "-v2m")
         sz_a("encrypted-bzip2.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-m0=BZip2")
         sz_a("encrypted-deflate.7z", main_parent, f"-p{ARCHIVE_PASSWORD}", "-m0=Deflate", "-mhe=on")
+        # Stored (no compression) and encrypted, with a first file over the 4 MiB the password check reads:
+        # a wrong password cannot be told apart from the right one before the file ends.
+        store_tree = trees / "store"
+        store_tree.mkdir(parents=True, exist_ok=True)
+        (store_tree / "big.bin").write_bytes(os.urandom(5 << 20))
+        sz_a("encrypted-store-big.7z", store_tree, f"-p{ARCHIVE_PASSWORD}", "-mx0", what="big.bin")
         sz_a("aes.zip", main_parent, "-tzip", "-mem=AES256", f"-p{ZIP_AES_PASSWORD}")
         sz_a("split.zip", main_parent, "-tzip", "-v2m")
         sz_a("deflate64.zip", main_parent, "-tzip", "-mm=Deflate64")
@@ -1103,6 +1110,10 @@ def test_rar4_format(env):
 def test_encrypted_files(env):
     out = env.run("encrypted.rar", "--directory", "enc", "--mkdir", expect=1)
     check("--archive-password" in out, "no hint about --archive-password", out)
+    # A wrong password is found while reading the archive, before anything is sent.
+    out = env.run("encrypted.rar", "--directory", "enc-wrong", "--mkdir", "--archive-password", "wrong", expect=1)
+    check("wrong archive password" in out, "wrong password not reported", out)
+    check("Connecting" not in out and not env.remote("enc-wrong").exists(), "went on after a wrong password", out)
     out = env.run("encrypted.rar", "--directory", "enc", "--mkdir", "--archive-password", ARCHIVE_PASSWORD)
     compare_trees(env.fixtures["main"], env.remote("enc", "tree"), out)
 
@@ -1421,6 +1432,14 @@ def test_7z_encrypted(env):
         compare_mtimes(env.fixtures["main"], env.remote(directory, "tree"), out)
 
 
+def test_7z_encrypted_unverifiable_password(env):
+    env.require("encrypted-store-big.7z")
+    out = env.run("encrypted-store-big.7z", "--directory", "enc-store-7z", "--mkdir", "--archive-password",
+                  ARCHIVE_PASSWORD)
+    check("password could not be verified up front" in out, "no warning", out)
+    check(env.remote("enc-store-7z", "big.bin").stat().st_size == 5 << 20, "file not uploaded", out)
+
+
 def test_7z_encrypted_rerun(env):
     env.require("encrypted-nonsolid.7z")
     env.run("encrypted-nonsolid.7z", "--directory", "enc-7z-rerun", "--mkdir", "--archive-password",
@@ -1477,6 +1496,18 @@ def test_exfat_basic(env):
     if env.protocol != "sftp":
         check("DEBUG > APPE fragmented.bin" in out, "exFAT tail was not appended", out)
     check_exfat_tree(env.remote("exfat"), out)
+
+
+def test_exfat_trailing_dots_and_spaces(env):
+    out = env.run("trailing.exfat", "--directory", "exfat-dots", "--mkdir")
+    root = env.remote("exfat-dots")
+    for name, text in (("Acme Inc./file.txt", "inside dir\n"), ("Acme Inc", "plain 4\n"), ("notes", "plain 1\n"),
+                       ("notes.", "dot one\n"), ("report", "plain 2\n"), ("report ", "space a\n"),
+                       ("end", "plain 3\n"), ("end..", "two dots\n"), ("trail /x.txt", "in space dir\n"),
+                       ("a_b.txt", "del\n")):  # the planner replaces control characters such as DEL
+        path = root / name
+        check(path.is_file() and path.read_text() == text, f"wrong or missing exFAT file {name!r}", out)
+    check((root / "Acme Inc.").is_dir() and (root / "trail ").is_dir(), "directories with trailing characters", out)
 
 
 def test_exfat_partitioned_is_rejected(env):
@@ -1706,6 +1737,17 @@ def test_lib_encrypted_files(env):
     check(not job.prompts, "the job asked for a password that was in the config", out)
     check(job.state["archive"]["encrypted"] is True, "archive not reported as encrypted", out)
     compare_trees(env.fixtures["main"], env.remote("lib-enc", "tree"), out)
+
+
+def test_lib_encrypted_files_wrong_password_asks_again(env):
+    require_lib(env)
+    job = env.lib_run("encrypted.rar", directory="lib-enc-wrong", mkdir=1,
+                      on_prompt=answer_with("wrong", ARCHIVE_PASSWORD))
+    out = job.describe()
+    check(job.prompts == [{"kind": "archive_password", "archive": "encrypted.rar", "error": None},
+                          {"kind": "archive_password", "archive": "encrypted.rar", "error": "Wrong password"}],
+          f"wrong prompts {job.prompts}", out)
+    compare_trees(env.fixtures["main"], env.remote("lib-enc-wrong", "tree"), out)
 
 
 def test_lib_encrypted_files_asks_for_the_password(env):
@@ -1957,11 +1999,13 @@ TESTS = [
     test_7z_methods_and_directories,
     test_7z_multivolume,
     test_7z_encrypted,
+    test_7z_encrypted_unverifiable_password,
     test_7z_encrypted_rerun,
     test_7z_encrypted_multivolume,
     test_7z_encrypted_methods,
     test_7z_deflate64_is_reported,
     test_exfat_basic,
+    test_exfat_trailing_dots_and_spaces,
     test_exfat_partitioned_is_rejected,
     test_pfs_upload_resume_and_replace,
     test_tar_basic,
@@ -1977,6 +2021,7 @@ TESTS = [
     test_lib_encrypted_headers,
     test_lib_encrypted_files,
     test_lib_encrypted_files_asks_for_the_password,
+    test_lib_encrypted_files_wrong_password_asks_again,
     test_lib_declined_password_prompt,
     test_lib_missing_directory_is_an_error,
     test_lib_cancel_removes_partial_file,

@@ -61,6 +61,8 @@ ArchiveListing list_archive(const std::string& path, PasswordSource& passwords, 
     return true;
   };
 
+  callbacks.on_warning = [&](const std::string& message) { log.warn("{}", message); };
+
   try {
     const std::unique_ptr<Archive> archive = open_archive(path, Archive::Mode::List, callbacks);
     listing.format = archive->format();
@@ -123,7 +125,8 @@ std::string normalize_extraction_root(ArchiveFormat format, const std::string& r
   const auto safe = sanitize_archive_path(root, kNativeWindowsPaths || format != ArchiveFormat::Rar);
   if (safe.traversal || safe.control_chars) {
     throw std::runtime_error(
-        "the extraction root must be a relative archive directory without '..' or control characters");
+        "the extraction root must be a relative archive directory (not starting with '/') without '..' or "
+        "control characters; the archive root is an empty string or the omitted option");
   }
   return safe.path;
 }
@@ -221,7 +224,9 @@ PlannedEntry Planner::plan(const ArchiveEntry& entry) {
   }
   if (safe.path.empty()) {
     planned.action = PlannedEntry::Action::Ignore;
-    if (entry.kind != EntryKind::Directory) {  // A directory entry for the root itself is harmless.
+    if (entry.kind == EntryKind::Directory) {
+      planned.excluded = true;  // A directory entry for the root itself ("./") is harmless: not "not uploaded".
+    } else {
       log_.warn("skipping entry with an unusable name: \"{}\"", entry.name);
     }
     return planned;
