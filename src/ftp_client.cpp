@@ -212,36 +212,26 @@ struct FtpClient::Impl {
     return size * nitems;
   }
 
-  // ==========================================================================
-  // FTP block mode (MODE B).
-  //
-  // PHASE B: this is the only place that uses the curl fork's
-  // CURLOPT_FTP_TRANSFER_MODE and CURLINFO_FTP_TRANSFER_MODE. curl 8.22.0 does
-  // not have them: it always uses stream mode and never sends MODE, so until
-  // then mode_b has no effect on the wire and no mode is reported.
+  // FTP block mode (MODE B), from our curl fork (CURLOPT_FTP_TRANSFER_MODE and
+  // CURLINFO_FTP_TRANSFER_MODE).
 
   // Called by prepare() for every request. With mode_b, curl negotiates MODE B
   // once per control connection, right after login, and stays in stream mode
   // if the server refuses it. Without it, MODE is never sent.
   void request_transfer_mode() {
     if (is_ssh(config.protocol)) return;
-    // PHASE B:
-    // curl_easy_setopt(curl, CURLOPT_FTP_TRANSFER_MODE,
-    //                  static_cast<long>(config.mode_b ? CURLFTPMODE_BLOCK : CURLFTPMODE_STREAM));
+    curl_easy_setopt(curl, CURLOPT_FTP_TRANSFER_MODE, config.mode_b ? CURLFTPMODE_BLOCK : CURLFTPMODE_STREAM);
   }
 
   // Whether the control connection of the last successful request uses block
-  // mode; std::nullopt when that is unknown (a curl without MODE B).
-  // CURLINFO_FTP_TRANSFER_MODE is 0 both for stream mode and for "unknown":
-  // after a request that logged in, 0 means stream mode.
+  // mode; std::nullopt if curl cannot tell. CURLINFO_FTP_TRANSFER_MODE is 0
+  // both for stream mode and for "unknown": after a request that logged in, 0
+  // means stream mode.
   std::optional<bool> block_mode_in_effect() const {
-    // PHASE B:
-    // long mode = CURLFTPMODE_STREAM;
-    // if (curl_easy_getinfo(curl, CURLINFO_FTP_TRANSFER_MODE, &mode) != CURLE_OK) return std::nullopt;
-    // return mode == CURLFTPMODE_BLOCK;
-    return std::nullopt;
+    long mode = CURLFTPMODE_STREAM;
+    if (curl_easy_getinfo(curl, CURLINFO_FTP_TRANSFER_MODE, &mode) != CURLE_OK) return std::nullopt;
+    return mode == CURLFTPMODE_BLOCK;
   }
-  // ==========================================================================
 
   // With mode_b, logs the transfer mode once per control connection, after its
   // first successful request. A refusal is a warning the first time only.

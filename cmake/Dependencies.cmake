@@ -45,10 +45,14 @@ include(SSH)
 
 # --- libcurl (curl license, MIT-like) ----------------------------------------
 # Always build our own libcurl so protocol support does not depend on the system.
-message(STATUS "streamextract: using bundled libcurl 8.22.0 (FTP, FTPS and SFTP)")
+# Our fork of curl 8.22.0 (branch ftp-mode-b of RuiNelson/curl-streamextract) adds
+# FTP block mode (CURLOPT_FTP_TRANSFER_MODE, CURLINFO_FTP_TRANSFER_MODE) and the
+# SSH passphrase, SFTP rename and SFTP zero-size fixes. To update it, pin the new
+# commit and the SHA-256 of its GitHub archive.
+message(STATUS "streamextract: using bundled libcurl 8.22.0 with FTP block mode (FTP, FTPS and SFTP)")
 FetchContent_Declare(curl
-  URL https://github.com/curl/curl/releases/download/curl-8_22_0/curl-8.22.0.tar.xz
-  URL_HASH SHA256=f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7
+  URL https://github.com/RuiNelson/curl-streamextract/archive/a38c99dca31c94ed2b5d207513e8225c4b83c3f6.tar.gz
+  URL_HASH SHA256=4ff4dc2efffc7cecd6f6e03aa503dda3ffbe0cbfebfcce0b8b2e75de1fd103ba
   EXCLUDE_FROM_ALL)
 
 # Enable FTP/FTPS and SSH; the application exposes SFTP only. No compression.
@@ -86,7 +90,6 @@ set(CURL_CA_NATIVE ${WIN32} CACHE BOOL "" FORCE)
 set(CURL_USE_LIBSSH2 ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(curl)
-include(CurlPatches)
 
 set(BUILD_SHARED_LIBS "${_saved_build_shared}")
 if(NOT TARGET CURL::libcurl_static)

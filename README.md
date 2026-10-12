@@ -505,7 +505,10 @@ run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchange
 
 Requirements: a C++17 compiler, CMake 3.21+, Perl and Make (NMake in a Visual Studio developer environment on Windows). An FTP/FTPS/SFTP libcurl is always
 built from pinned sources and linked statically, so its features are consistent
-across platforms. UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
+across platforms. It is our fork of curl 8.22.0,
+[curl-streamextract](https://github.com/RuiNelson/curl-streamextract), which adds
+FTP block mode and a few SSH fixes.
+UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
 LZ4) are built from source as static libraries during the
@@ -707,7 +710,7 @@ The Rust side has its own unit tests, which link the built library:
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive, PFSC, and BZip2, Deflate and Zstandard in 7z | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
 | [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
-| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client | curl (MIT/X derivative) |
+| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client ([our fork](https://github.com/RuiNelson/curl-streamextract) of 8.22.0 with FTP block mode) | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |
