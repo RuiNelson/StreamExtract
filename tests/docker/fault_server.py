@@ -7,6 +7,10 @@ import socketserver
 import ssl
 import threading
 
+# SELF header magic (PS4, little-endian); see FtpServer's `ftpsrv` option.
+SELF_MAGIC = (0x1D3D154F).to_bytes(4, "little")
+
+
 class FtpHandler(socketserver.StreamRequestHandler):
     def handle(self):
         cwd = "/"
@@ -14,6 +18,7 @@ class FtpHandler(socketserver.StreamRequestHandler):
         active = None
         protected = False
         rename_source = None
+        self_conversion = True  # ftpsrv's per-connection SELF to ELF conversion.
 
         def start_tls():
             self.rfile.close()
@@ -46,7 +51,10 @@ class FtpHandler(socketserver.StreamRequestHandler):
         try:
             if self.server.implicit_tls:
                 start_tls()
-            reply("220 Local test server")
+            if self.server.ftpsrv:
+                reply("220-Welcome to ftpsrv.elf running on pid 1\r\n220-Version: test\r\n220 Service is ready")
+            else:
+                reply("220 Local test server")
             while True:
                 line = self.rfile.readline()
                 if not line:
@@ -61,6 +69,18 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 elif command == "PROT":
                     protected = arg == "P" and not self.server.reject_private_data
                     reply("200 OK" if protected else "534 Private data required")
+                elif self.server.ftpsrv and command in ("EPSV", "NLST"):
+                    if command == "NLST" and passive is not None:
+                        passive.close()  # curl connected before sending NLST.
+                        passive = None
+                    reply("502 Command not recognized")
+                elif self.server.ftpsrv and command == "SELF" and self.server.ftpsrv_self:
+                    self_conversion = not self_conversion
+                    reply(f"226 SELF transfer mode {'enabled' if self_conversion else 'disabled'}")
+                elif self.server.ftpsrv and command == "SELF":
+                    reply("502 Command not recognized")
+                elif self.server.ftpsrv and command == "USER":
+                    reply("230 User logged in")
                 elif command == "USER":
                     if self.server.tls_context and not isinstance(self.connection, ssl.SSLSocket):
                         reply("530 TLS required")
@@ -99,7 +119,14 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         reply("502 Command not implemented")
                         continue
                     contents = self.server.files.get(path(arg))
-                    reply(f"213 {len(contents)}" if contents is not None else "550 File not found")
+                    if contents is None:
+                        reply("550 File not found")
+                    elif (self.server.ftpsrv and self.server.ftpsrv_self and self_conversion
+                          and contents[:4] == SELF_MAGIC and len(contents) >= 12):
+                        # Like ftpsrv, report the ELF size read from the headers, whatever the stored size.
+                        reply(f"213 {int.from_bytes(contents[4:12], 'little')}")
+                    else:
+                        reply(f"213 {len(contents)}")
                 elif command == "MDTM":
                     # "MDTM <time> <path>" sets the time (vsftpd); "MDTM <path>" asks for it.
                     setting = arg[:14].isdigit() and arg[14:15] == " "
@@ -108,6 +135,12 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 elif command == "EPSV":
                     passive = self.server.passive_socket()
                     reply(f"229 Extended Passive Mode (|||{passive.getsockname()[1]}|)")
+                elif command == "PASV":
+                    if passive is not None:
+                        passive.close()
+                    passive = self.server.passive_socket()
+                    port = passive.getsockname()[1]
+                    reply(f"227 Entering Passive Mode (127,0,0,1,{port >> 8},{port & 0xFF}).")
                 elif command == "EPRT":
                     _, _, host, port, _ = arg.split(arg[0])
                     active = (host, int(port))
@@ -273,7 +306,7 @@ class FtpServer(socketserver.ThreadingTCPServer):
                  reject_rename=False, stall_rename=False,
                  fail_rename_after=None, lose_rename_reply_after=None, directories=None,
                  size_unsupported=False, refuse_listing=False, nlst_hides_dotfiles=False, timestamps="mfmt",
-                 control_port=0, passive_ports=range(30000, 30010)):
+                 ftpsrv=False, ftpsrv_self=True, control_port=0, passive_ports=range(30000, 30010)):
         self.passive_ports = passive_ports
         super().__init__(("0.0.0.0", control_port), FtpHandler)
         self.files = dict(files or {})
@@ -301,6 +334,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.refuse_listing = refuse_listing
         self.nlst_hides_dotfiles = nlst_hides_dotfiles
         self.timestamps = timestamps  # "mfmt", "mdtm" (vsftpd's "MDTM <time> <path>" only) or "none".
+        # ps5-payload-dev/ftpsrv: its greeting, USER without PASS, no EPSV or NLST, and, unless
+        # `ftpsrv_self` is false (older versions), SIZE of SELF files converted until SELF toggles it off.
+        self.ftpsrv = ftpsrv
+        self.ftpsrv_self = ftpsrv_self
         self.stall_confirmation = stall_confirmation
         self.fail_uploads = fail_uploads
         self.failed_uploads = 0

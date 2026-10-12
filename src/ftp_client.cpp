@@ -94,6 +94,14 @@ struct FtpClient::Impl {
   enum class Timestamps { Unknown, Mfmt, Mdtm, Unsupported };
   Timestamps timestamps = Timestamps::Unknown;
 
+  // ftpsrv (PS4/PS5) answers SIZE for a SELF file with the size of the ELF
+  // inside it, while APPE appends at the stored size. Its SELF command toggles
+  // that conversion for one control connection; each new connection starts on.
+  enum class Ftpsrv { No, Yes, WithoutSelf };
+  Ftpsrv ftpsrv = Ftpsrv::No;
+  bool self_conversion = false;
+  bool self_conversion_warned = false;
+
   // State of the request in progress, used by the callbacks.
   const ReadFn* read = nullptr;
   const ProgressFn* progress = nullptr;
@@ -118,6 +126,16 @@ struct FtpClient::Impl {
       self->last_reply.assign(line);
       if (self->read != nullptr && (line.substr(0, 3) == "125" || line.substr(0, 3) == "150")) {
         self->upload_started = true;
+      }
+      if (line.substr(0, 3) == "220") {  // Greeting of a new control connection.
+        if (self->ftpsrv == Ftpsrv::No && line.find("ftpsrv") != std::string_view::npos) {
+          self->ftpsrv = Ftpsrv::Yes;
+        }
+        self->self_conversion = self->ftpsrv == Ftpsrv::Yes;
+      } else if (line.find("SELF transfer mode disabled") != std::string_view::npos) {
+        self->self_conversion = false;
+      } else if (line.find("SELF transfer mode enabled") != std::string_view::npos) {
+        self->self_conversion = true;
       }
     }
     return size * nitems;
@@ -316,6 +334,25 @@ struct FtpClient::Impl {
     curl_easy_setopt(curl, CURLOPT_QUOTE, list.get());
     return perform(false);
   }
+
+  // Turns ftpsrv's SELF conversion off on the current control connection. A
+  // connection error is left to the next request; a reconnection during the
+  // command is seen in the greeting and answered by this same command.
+  void disable_self_conversion() {
+    for (int i = 0; i < 2 && self_conversion; ++i) {  // A toggle: check the reply.
+      const CURLcode code = quote({"SELF"});
+      if (code == CURLE_QUOTE_ERROR) {
+        // Versions without the command do not convert either.
+        log.debug(fmt::format("the server rejected SELF ({}); assuming it reports stored sizes", last_reply));
+        ftpsrv = Ftpsrv::WithoutSelf;
+        self_conversion = false;
+      } else if (code != CURLE_OK) {
+        return;
+      } else if (!self_conversion) {
+        log.debug("turned off the server's SELF to ELF conversion for this connection");
+      }
+    }
+  }
 };
 
 namespace {
@@ -473,9 +510,16 @@ std::optional<std::vector<std::string>> FtpClient::list_names(const std::string&
 }
 
 RemoteFile FtpClient::stat_file(const std::string& path) {
-  impl_->prepare(impl_->path_url(path, false));
-  curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
-  const CURLcode code = impl_->perform();
+  CURLcode code = CURLE_OK;
+  // A request that reconnects reaches a new ftpsrv session, where the SELF
+  // conversion is on again: turn it off and ask once more.
+  for (int pass = 0; pass < 2; ++pass) {
+    impl_->disable_self_conversion();
+    impl_->prepare(impl_->path_url(path, false));
+    curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
+    code = impl_->perform();
+    if (!impl_->self_conversion) break;
+  }
   RemoteFile file;
   if (code == CURLE_REMOTE_FILE_NOT_FOUND || code == CURLE_REMOTE_ACCESS_DENIED) {
     return file;
@@ -484,6 +528,16 @@ RemoteFile FtpClient::stat_file(const std::string& path) {
     impl_->fail(fmt::format("cannot query remote file {}", path), code);
   }
   file.exists = true;
+  if (impl_->self_conversion) {
+    // The size may be that of a converted SELF: unknown sizes are uploaded from the beginning.
+    if (!impl_->self_conversion_warned) {
+      impl_->self_conversion_warned = true;
+      impl_->log.warn(
+          "cannot turn off the server's SELF to ELF conversion; existing files will be uploaded again from the "
+          "beginning");
+    }
+    return file;
+  }
   curl_off_t length = -1;
   if (curl_easy_getinfo(impl_->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length) == CURLE_OK && length >= 0) {
     file.size = static_cast<uint64_t>(length);

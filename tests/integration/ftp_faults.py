@@ -20,6 +20,8 @@ from types import SimpleNamespace
 from run import Library, LibJob, lib_log_text
 from docker_server import FtpServer
 
+SELF_MAGIC = (0x1D3D154F).to_bytes(4, "little")  # PS4 SELF header, as in tests/docker/fault_server.py.
+
 
 class FtpFaultTests(unittest.TestCase):
     @classmethod
@@ -668,6 +670,40 @@ class FtpFaultTests(unittest.TestCase):
                         self.assertEqual(server.files["/upload/hello.txt"], source)
                         self.assertEqual(server.uploads, [("STOR", "/upload/hello.txt", source)])
                         self.assertEqual(server.deleted, [])
+
+    def test_ftpsrv_self_conversion_is_turned_off_before_sizes_on_every_connection(self):
+        # A SELF whose headers declare a smaller ELF: ftpsrv's SIZE would report it for any stored length.
+        payload = bytes(range(251)) * 16
+        source = SELF_MAGIC + (len(payload) + 12 - 64).to_bytes(8, "little") + payload
+        cases = {"complete": ({}, source), "partial": ({}, source[:1000]),
+                 "reconnect": ({"fail_uploads": 1, "drop_after": 500}, source[:1000]),
+                 "without SELF": ({"ftpsrv_self": False}, source[:1000])}
+        for streamed in (False, True):
+            for case, (options, remote) in cases.items():
+                with self.subTest(streamed=streamed, case=case):
+                    archive = self.archive([("eboot.bin", source)], streamed=streamed)
+                    with FtpServer(files={"/upload/eboot.bin": remote}, ftpsrv=True, timestamps="none",
+                                   **options) as server, self.job(archive, server) as job:
+                        job.wait(timeout=10)
+                        self.assertEqual(job.result["status"], "success", job.describe())
+                        self.assertEqual(job.result["skipped_files"], 1 if case == "complete" else 0)
+                        self.assertEqual(job.result["bytes_uploaded"], len(source) - len(remote))
+                        self.assertEqual(server.files["/upload/eboot.bin"], source)
+                        commands = [command for command, _ in server.commands]
+                        self.assertLess(commands.index("SELF"), commands.index("SIZE"))
+                        # One per connection; a server without the command is not asked again.
+                        self.assertEqual(commands.count("SELF"), 2 if case == "reconnect" else 1)
+                        expected = [] if case == "complete" else [("APPE", "/upload/eboot.bin", source[1000:])]
+                        if case == "reconnect":
+                            expected = [("APPE", "/upload/eboot.bin", source[1000:1500]),
+                                        ("APPE", "/upload/eboot.bin", source[1500:])]
+                        self.assertEqual(server.uploads, expected)
+        with FtpServer(files={"/upload/eboot.bin": source[:1000]}) as server:
+            with self.job(self.archive([("eboot.bin", source)]), server) as job:
+                job.wait(timeout=5)
+                self.assertEqual(job.result["status"], "success", job.describe())
+            self.assertEqual(server.files["/upload/eboot.bin"], source)
+            self.assertNotIn("SELF", [command for command, _ in server.commands])
 
     def test_refused_listings_fall_back_to_asking_for_each_file(self):
         source = b"hello\n"

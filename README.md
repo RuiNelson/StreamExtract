@@ -376,7 +376,10 @@ Behaviour, in both:
   bytes are appended. Existing contents are trusted without comparison. Missing
   files are uploaded from the beginning; if the server cannot report a file's
   size, it is overwritten from the beginning. Progress and upload totals count
-  only the bytes sent in this run.
+  only the bytes sent in this run. With the PS4/PS5
+  [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv) payload, its SELF to ELF
+  conversion is turned off before sizes are checked, so that SELF files report
+  the size stored on the console.
 - **Directories** of the archive, including empty ones, are created.
 - **Extraction root** selects a directory inside the archive or filesystem image.
   For example, `--extraction-root b --directory /remote/dest` uploads `b/xyz.bin`
