@@ -271,6 +271,19 @@ class FtpServer:
     def tls_data_connections(self):
         return self.get("tls_data_connections")
 
+    @property
+    def data_connections(self):
+        return self.get("data_connections")
+
+    @property
+    def transfer_starts(self):
+        """(command, 150 | 125 | 425) for each data transfer command; see fault_server.py's `mode_b`."""
+        return [tuple(value) for value in self.get("transfer_starts")]
+
+    @property
+    def truncated_uploads(self):
+        return self.get("truncated_uploads")
+
     def __enter__(self):
         return self
 

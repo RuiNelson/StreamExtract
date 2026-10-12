@@ -654,7 +654,9 @@ remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
 implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
 to run the same cases through the core API used by the GUI. `sftp.py` covers
 SFTP authentication, host verification and file transfer behavior. `ftp_faults.py`
-tests resume, retry and cancellation using controlled scenarios in that image:
+tests resume, retry and cancellation using controlled scenarios in that image,
+and block mode (`--mode-b`) against a server that supports or refuses `MODE B`
+(skipped when libcurl has no FTP block mode):
 
 ```bash
 python3 tests/integration/ftps.py --sext build/sext

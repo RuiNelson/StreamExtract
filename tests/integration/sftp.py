@@ -126,6 +126,17 @@ class SftpTests(unittest.TestCase):
                 self.assertIn("0 file(s)", repeated.stdout)
                 self.assertIn("5 file(s)", repeated.stdout)
 
+    def test_block_mode_option_is_ignored(self):
+        # --mode-b / mode_b is an FTP/FTPS setting: SFTP accepts it and transfers as usual.
+        payload = bytes(range(251)) * 400
+        archive = self.archive([("block.txt", b"sftp"), ("nested/data.bin", payload)])
+        result = self.transfer(archive, user=USER, password=PASSWORD, mode_b=True)
+        self.success(result)
+        self.assertNotIn("MODE B", result.stdout + result.stderr)
+        self.assertNotIn("Transfer mode", result.stdout)
+        self.assertEqual((self.remote / "block.txt").read_bytes(), b"sftp")
+        self.assertEqual((self.remote / "nested" / "data.bin").read_bytes(), payload)
+
     def test_password_without_user_defaults_to_current_username(self):
         archive = self.archive([("default-user.txt", b"local username")])
         result = self.transfer(archive, password=PASSWORD)

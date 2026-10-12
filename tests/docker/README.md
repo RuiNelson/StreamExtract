@@ -10,7 +10,10 @@ OpenSSH provides SFTP on port 22. Both use the test-only `tester` / `secret` log
 The fault suites use remotely configured FTP/FTPS sessions in the same image to
 exercise interrupted uploads, refusals, retries, corruption and cancellation.
 They inspect server state through an HTTP control API, rather than running a
-second server on the host.
+second server on the host. A fault session can also speak RFC 959 block mode
+(`mode_b`: accept or refuse `MODE B`, framed transfers, data connections kept
+open with `250` and reused with `125`), and records the commands, data
+connections and transfer replies so tests can count them.
 
 Build manually from the repository root:
 
