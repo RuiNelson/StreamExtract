@@ -125,6 +125,18 @@ STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_staging(
     const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
     const char* staging);
 
+/* Like start_with_staging, with FTP/FTPS block mode (RFC 959 MODE B). `mode_b`:
+ * 0 = off (MODE is never sent, as with the older start functions); nonzero =
+ * ask for block mode once per control connection, so that one data connection
+ * stays open for all files. If the server refuses, a warning is logged and the
+ * job continues in stream mode. With it, the mode in use is logged once per
+ * control connection. Ignored for SFTP. The original config layout and entry
+ * points are unchanged. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_mode_b(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
+    const char* staging, int mode_b);
+
 /* Reads archive directories for a folder picker, including implicit parents
  * and empty directories. No server connection or disk extraction. Compressed
  * tar archives are read through once. Synchronous: call off the UI thread.

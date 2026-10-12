@@ -93,6 +93,15 @@ streamextract_job* streamextract_job_start_with_staging(
     const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
     const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
     const char* staging) {
+  return streamextract_job_start_with_mode_b(config, si_units, retries, protocol, ca_certificate, ssh,
+                                             extraction_root, staging, 0);
+}
+
+streamextract_job* streamextract_job_start_with_mode_b(const streamextract_job_config* config, int si_units,
+                                                       unsigned retries, int protocol, const char* ca_certificate,
+                                                       const streamextract_ssh_options* ssh,
+                                                       const char* extraction_root, const char* staging,
+                                                       int mode_b) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -113,6 +122,7 @@ streamextract_job* streamextract_job_start_with_staging(
       copy.ca_certificate = std::string(ca_certificate);
     }
     copy.active_mode = config->active_mode != 0;
+    copy.mode_b = mode_b != 0;
     copy.user = copy_string(config->user);
     copy.password = copy_string(config->password);
     copy.password_supplied = config->password != nullptr;

@@ -80,6 +80,7 @@ int run(const Options& options) {
   ftp_config.mode = options.mode;
   ftp_config.protocol = options.protocol;
   ftp_config.ftps_mode = options.ftps_mode;
+  ftp_config.mode_b = options.mode_b;
   ftp_config.ca_certificate = options.ca_certificate;
   ftp_config.user = options.user.value_or("");
   ftp_config.password = options.password.value_or("");

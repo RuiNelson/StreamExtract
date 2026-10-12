@@ -25,6 +25,10 @@ struct FtpConfig {
   FtpMode mode = FtpMode::Passive;
   FtpProtocol protocol = FtpProtocol::Ftp;
   FtpsMode ftps_mode = FtpsMode::Explicit;
+  // FTP/FTPS block mode (RFC 959 MODE B): the end of each file is marked in the data stream, so one data
+  // connection carries many files. Off: MODE is never sent. On: stream mode if the server refuses it.
+  // Unused for SFTP.
+  bool mode_b = false;
   std::optional<std::string> ca_certificate;
   std::string user;  // Empty: anonymous login.
   std::string password;
