@@ -126,11 +126,21 @@
               <input type="checkbox" id="mkdir">
               <span>Create directory if missing</span>
             </label>
-            <label id="mode-b-field" class="check"
-                   title="FTP and FTPS: keeps one data connection open for all files instead of opening one per file. If the server refuses it, stream mode is used.">
-              <input type="checkbox" id="mode-b">
-              <span>Use block mode (MODE B)</span>
-            </label>
+            <span id="mode-b-field" class="field-label">
+              <label class="check"
+                     title="FTP and FTPS: keeps one data connection open for all files instead of opening one per file. If the server refuses it, stream mode is used.">
+                <input type="checkbox" id="mode-b">
+                <span>Use block mode (MODE B)</span>
+              </label>
+              <button type="button" id="btn-mode-b-info" class="info-button" title="Block mode help (opens in the browser)"
+                      aria-label="Block mode help (opens in the browser)">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6.5" stroke="currentColor" />
+                  <path d="M8 7v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                  <circle cx="8" cy="4.5" r="0.8" fill="currentColor" />
+                </svg>
+              </button>
+            </span>
             <button type="button" id="btn-ssh" class="btn btn-small" hidden>SSH settings</button>
           </div>
         </section>

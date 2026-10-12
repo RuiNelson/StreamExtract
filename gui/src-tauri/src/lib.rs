@@ -369,6 +369,17 @@ async fn check_for_updates(
     }
 }
 
+/// Opened by the info button beside the block mode checkbox.
+const BLOCK_MODE_HELP_URL: &str =
+    "https://github.com/RuiNelson/StreamExtract/blob/main/docs/block_mode.md";
+
+#[tauri::command]
+async fn open_block_mode_help(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(BLOCK_MODE_HELP_URL, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 async fn open_releases(app: AppHandle) -> Result<(), String> {
     app.opener()
@@ -519,6 +530,7 @@ pub fn run() {
             show_update_available,
             dismiss_update_prompt,
             open_releases,
+            open_block_mode_help,
             archive_directories,
             start_transfer,
             poll_transfer,

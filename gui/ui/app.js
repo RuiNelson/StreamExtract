@@ -91,6 +91,7 @@
     retriesError: $("retries-error"),
     modeB: $("mode-b"),
     modeBField: $("mode-b-field"),
+    modeBInfo: $("btn-mode-b-info"),
     preventSleep: $("prevent-sleep"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
@@ -1802,6 +1803,9 @@
     });
     els.host.addEventListener("input", updateSubmitState);
     els.stagingInfo.addEventListener("click", () => els.stagingHelpDialog.showModal());
+    els.modeBInfo.addEventListener("click", () => {
+      invoke("open_block_mode_help").catch((e) => toastError("Could not open the block mode help", e));
+    });
     els.port.addEventListener("input", validatePort);
     els.protocol.addEventListener("change", changeProtocol);
     els.sshButton.addEventListener("click", () => els.sshDialog.showModal());

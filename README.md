@@ -131,7 +131,8 @@ The app offers:
   if missing** applies to both directories. **Use block mode (MODE B)** (FTP/FTPS
   only, hidden for SFTP, off by default; see
   [Supported file transfer protocols](#supported-file-transfer-protocols)) sits
-  beside it. Memory Save/Recall includes staging and block mode.
+  beside it; its info button opens [docs/block_mode.md](docs/block_mode.md) in the
+  browser. Memory Save/Recall includes staging and block mode.
   The info button beside the staging label opens help about staging and resuming.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
