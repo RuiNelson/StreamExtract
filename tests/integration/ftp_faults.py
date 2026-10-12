@@ -790,25 +790,10 @@ class FtpFaultTests(FtpTestCase):
 
 class FtpModeBTests(FtpTestCase):
     """Block mode (--mode-b, C API mode_b): MODE B once per control connection, then one data connection kept
-    open for every transfer; stream mode with a warning if the server refuses. Needs a libcurl with
-    CURLOPT_FTP_TRANSFER_MODE; skipped with any other (it never sends MODE)."""
+    open for every transfer; stream mode with a warning if the server refuses."""
 
     REFUSED = "the server refused block mode (MODE B); using stream mode (MODE S)"
     IN_USE = "Transfer mode: block (MODE B)"
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        with tempfile.TemporaryDirectory(prefix="streamextract-mode-b-probe-") as temp:
-            archive = Path(temp) / "probe.zip"
-            with zipfile.ZipFile(archive, "w") as zip_archive:
-                zip_archive.writestr("probe.txt", b"probe")
-            with FtpServer(mode_b=True) as server:
-                subprocess.run([ARGS.sext, "--file", str(archive), "--host", server.host, "--port",
-                                str(server.server_address[1]), "--directory", "/upload", "--no-tui", "--mode-b"],
-                               capture_output=True, text=True, timeout=15)
-                if ("MODE", "B") not in server.commands:
-                    raise unittest.SkipTest("this build's libcurl does not support FTP block mode (no MODE B sent)")
 
     def transfer(self, frontend, archive, server, *, mode_b=True, ftps=None, active=False, retries=None):
         """Runs one front-end; returns (succeeded, log text, job or None). `ftps`: "explicit" or "implicit"."""
@@ -1012,6 +997,7 @@ class FtpModeBTests(FtpTestCase):
     def test_ftpsrv_emulation_with_block_mode(self):
         payload = bytes(range(251)) * 16
         source = SELF_MAGIC + (len(payload) + 12 - 64).to_bytes(8, "little") + payload
+        others = [("param.sfo", b"sfo"), ("icon0.png", b"icon"), ("pic1.png", b"picture")]
         cases = {"complete": ({}, source), "partial": ({}, source[:1000]),
                  "reconnect": ({"fail_uploads": 1, "drop_after": 500, "fail_target": "/upload/eboot.bin"},
                                source[:1000]),
@@ -1019,24 +1005,26 @@ class FtpModeBTests(FtpTestCase):
         for streamed in (False, True):
             for case, (options, remote) in cases.items():
                 with self.subTest(streamed=streamed, case=case):
-                    archive = self.archive([("eboot.bin", source), ("param.sfo", b"sfo")], streamed=streamed)
+                    archive = self.archive([("eboot.bin", source)] + others, streamed=streamed)
                     with FtpServer(files={"/upload/eboot.bin": remote}, ftpsrv=True, timestamps="none",
                                    mode_b=True, **options) as server:
                         ok, output, job = self.transfer("library", archive, server)
                         self.assertTrue(ok, output)
                         self.assertEqual(job.result["skipped_files"], 1 if case == "complete" else 0)
                         self.assertEqual(server.files["/upload/eboot.bin"], source)
-                        self.assertEqual(server.files["/upload/param.sfo"], b"sfo")
+                        for name, contents in others:
+                            self.assertEqual(server.files["/upload/" + name], contents)
                         commands = [command for command, _ in server.commands]
                         self.assertLess(commands.index("SELF"), commands.index("SIZE"))
-                        connections = 2 if case == "reconnect" else 1
-                        self.assertEqual(server.commands.count(("MODE", "B")), connections)
-                        # No EPSV on ftpsrv: PASV (also before each refused NLST), one data connection per
-                        # control connection.
-                        self.assertGreaterEqual(commands.count("PASV"), connections)
-                        self.assertEqual(server.data_connections, connections)
-                        expected = [("STOR", 150)] if case == "complete" else [("STOR", 150), ("STOR", 125)]
-                        self.assertEqual(server.transfer_starts[-len(expected):], expected)
+                        # curl closes the control connection after a failed quote command (SELF without
+                        # support, the timestamp commands ftpsrv refuses): each new one negotiates again.
+                        self.assertEqual(server.commands.count(("MODE", "B")), commands.count("USER"))
+                        self.assertEqual(output.count(self.IN_USE), commands.count("USER"), output)
+                        # The files on the last control connection share one data connection, set up with PASV
+                        # (no EPSV); ftpsrv refuses NLST after its PASV.
+                        last = commands[len(commands) - 1 - commands[::-1].index("USER"):]
+                        self.assertEqual(last.count("PASV"), 1 + last.count("NLST"), commands)
+                        self.assertEqual(server.transfer_starts[-1], ("STOR", 125))
 
     def test_ftps_keeps_one_tls_data_connection(self):
         source = bytes(range(251)) * 1200
