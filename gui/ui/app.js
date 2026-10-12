@@ -89,6 +89,7 @@
     bufferError: $("buffer-error"),
     retries: $("retries"),
     retriesError: $("retries-error"),
+    modeB: $("mode-b"),
     preventSleep: $("prevent-sleep"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
@@ -168,6 +169,7 @@
     units: "si",
     bufferMib: 64,
     retries: 3,
+    modeB: false, // FTP/FTPS block mode; off unless the user turns it on
     preventSleep: true,
     completionSound: true,
     showPasswords: false,
@@ -204,6 +206,8 @@
     }
     els.buffer.disabled = state.preferencesBusy;
     els.retries.disabled = state.preferencesBusy;
+    els.modeB.checked = state.modeB;
+    updateModeBField();
     els.preventSleep.disabled = state.preferencesBusy;
     els.preventSleep.checked = state.preventSleep;
     els.completionSound.disabled = state.preferencesBusy;
@@ -223,6 +227,7 @@
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
       state.retries = preferences.retries ?? 3;
+      state.modeB = preferences.mode_b === true;
       state.preventSleep = preferences.prevent_sleep ?? true;
       state.completionSound = preferences.completion_sound ?? true;
       state.showPasswords = preferences.show_passwords ?? false;
@@ -238,13 +243,14 @@
 
   async function savePreferences(units, bufferMib, completionSound = state.completionSound,
     showPasswords = state.showPasswords, retries = state.retries, checkUpdates = state.checkUpdates,
-    preventSleep = state.preventSleep) {
+    preventSleep = state.preventSleep, modeB = state.modeB) {
     if (state.preferencesBusy) return false;
     state.preferencesBusy = true;
     updateSubmitState();
     for (const input of els.unitsGroup) input.disabled = true;
     els.buffer.disabled = true;
     els.retries.disabled = true;
+    els.modeB.disabled = true;
     els.preventSleep.disabled = true;
     els.completionSound.disabled = true;
     els.checkUpdates.disabled = true;
@@ -252,11 +258,12 @@
     try {
       await invoke("preferences_save", { preferences: {
         units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
-        retries, check_updates: checkUpdates, prevent_sleep: preventSleep,
+        retries, check_updates: checkUpdates, prevent_sleep: preventSleep, mode_b: modeB,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
       state.retries = retries;
+      state.modeB = modeB;
       state.preventSleep = preventSleep;
       state.completionSound = completionSound;
       state.showPasswords = showPasswords;
@@ -289,6 +296,11 @@
     const retries = validateRetries();
     if (retries === null) return;
     return savePreferences(state.units, state.bufferMib, state.completionSound, state.showPasswords, retries);
+  }
+
+  function saveModeB(event) {
+    return savePreferences(state.units, state.bufferMib, state.completionSound, state.showPasswords,
+      state.retries, state.checkUpdates, state.preventSleep, event.target.checked);
   }
 
   function savePasswordVisibility(event) {
@@ -514,8 +526,14 @@
     return protocol === "sftp" ? 22 : protocol === "ftps_implicit" ? 990 : 21;
   }
 
+  // Block mode is an FTP/FTPS setting: SFTP keeps the saved choice but cannot change it.
+  function updateModeBField() {
+    els.modeB.disabled = state.preferencesBusy || els.protocol.value === "sftp";
+  }
+
   function updateProtocolFields() {
     const ssh = els.protocol.value === "sftp";
+    updateModeBField();
     els.mode.disabled = ssh;
     setHidden(els.modeField, ssh);
     els.hostRow.classList.toggle("sftp", ssh);
@@ -852,6 +870,7 @@
       verbose: els.verbose.checked,
       buffer_mib: buffer,
       retries,
+      mode_b: state.modeB,
       prevent_sleep: state.preventSleep,
       units: state.units,
     };
@@ -1805,6 +1824,7 @@
     els.buffer.addEventListener("change", saveBuffer);
     els.retries.addEventListener("input", validateRetries);
     els.retries.addEventListener("change", saveRetries);
+    els.modeB.addEventListener("change", saveModeB);
     els.preventSleep.addEventListener("change", savePreventSleep);
     els.btnChoose.addEventListener("click", chooseArchive);
     els.filePasswordCancel.addEventListener("click", () => els.dlgFilePassword.close("cancel"));

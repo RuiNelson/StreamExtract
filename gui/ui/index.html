@@ -159,6 +159,11 @@
             <p id="retries-hint" class="hint muted">Total attempts for connection/login and each file upload, including the first. 1 disables retries.</p>
             <p id="retries-error" class="error-text" role="alert" hidden></p>
             <label class="check">
+              <input type="checkbox" id="mode-b" disabled aria-describedby="mode-b-hint">
+              <span>Use block mode (MODE B)</span>
+            </label>
+            <p id="mode-b-hint" class="hint muted">FTP and FTPS: keeps one data connection open for all files instead of opening one per file. If the server refuses it, stream mode is used.</p>
+            <label class="check">
               <input type="checkbox" id="prevent-sleep" checked disabled>
               <span>Prevent computer sleep during transfers</span>
             </label>

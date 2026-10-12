@@ -75,6 +75,14 @@ FTP and FTPS use passive mode by default; select active mode with `--mode active
 or the app's **Mode** field. Both FTPS modes verify the server certificate and
 hostname. A private CA can be supplied with the CLI's `--cacert` option.
 
+FTP and FTPS normally open a new data connection for every file (stream mode),
+plus a TLS handshake each with FTPS, which slows down archives with many small
+files. Block mode (RFC 959 `MODE B`) marks the end of each file inside the data
+stream, so one data connection stays open for all of them. It is off by default
+and never tried unless you turn it on with `--mode-b` or the app's **Use block
+mode (MODE B)** under *Advanced*. If the server refuses it, a warning is logged
+and the upload continues in stream mode.
+
 SFTP supports RSA, ECDSA and Ed25519 OpenSSH keys, including encrypted private
 keys. Host-key verification is optional: use `--known-hosts` in the CLI or
 **SSH settings** in the app. SSH agents, keyboard-interactive authentication
@@ -122,9 +130,11 @@ The app offers:
   if missing** applies to both directories. Memory Save/Recall includes staging.
   The info button beside the staging label opens help about staging and resuming.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
-  each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
+  each file upload, including the first; default: 3; 1 disables retries), **Use block
+  mode (MODE B)** (FTP/FTPS only, off by default; see
+  [Supported file transfer protocols](#supported-file-transfer-protocols)), the verbose log and **Display units**: SI
   (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
-  to sizes, speeds, log messages and the final summary. The units, buffer size and upload attempts are saved
+  to sizes, speeds, log messages and the final summary. The units, buffer size, upload attempts and block mode are saved
   automatically in `~/.config/streamextract/preferences.yaml`, separately from
   server memory (buffer default: 64 MiB; range: 1–4096 MiB). On startup,
   existing `preferences.ini` settings are migrated to YAML and the old file is
@@ -206,6 +216,7 @@ password-protected archives are supported:
 | `--port PORT` | Default `21`, `990` for implicit FTPS, or `22` for SFTP. |
 | `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
 | `--mode passive\|active` | FTP/FTPS data connection mode. Default `passive`; unused for SFTP. |
+| `--mode-b` | FTP/FTPS block mode (`MODE B`): one data connection stays open for all files instead of a new one per file. Off by default (`MODE` is never sent). If the server refuses it, a warning is logged and the upload continues in stream mode. Unused for SFTP. |
 | `--user NAME` | Without it, FTP/FTPS uses anonymous login; SFTP uses the current local username. |
 | `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
 | `--private-key PATH` | SFTP private key. With neither a password nor a selected key, private keys in `~/.ssh` are tried. |

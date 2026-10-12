@@ -349,6 +349,7 @@ mod tests {
             verbose: false,
             buffer_mib: 1,
             retries: 3,
+            mode_b: false,
             prevent_sleep: true,
             units: Units::Si,
         }

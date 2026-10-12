@@ -84,6 +84,9 @@ pub struct TransferConfig {
     pub buffer_mib: u32,
     #[serde(default = "preferences::default_retries")]
     pub retries: u32,
+    /// FTP/FTPS block mode (MODE B); ignored for SFTP.
+    #[serde(default)]
+    pub mode_b: bool,
     #[serde(default = "preferences::default_prevent_sleep")]
     pub prevent_sleep: bool,
     #[serde(default)]
@@ -563,6 +566,7 @@ mod tests {
             verbose: false,
             buffer_mib: 1,
             retries: 3,
+            mode_b: false,
             prevent_sleep: true,
             units: preferences::Units::Binary,
         }
