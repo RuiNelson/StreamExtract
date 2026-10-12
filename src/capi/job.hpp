@@ -29,7 +29,8 @@ struct JobConfig {
   int protocol = STREAMEXTRACT_PROTOCOL_FTP;  // Validated before the archive is opened.
   std::optional<std::string> ca_certificate;
   bool active_mode = false;
-  std::string user;  // Empty: anonymous for FTP, local username for SFTP.
+  bool mode_b = false;  // FTP/FTPS block mode; ignored for SFTP.
+  std::string user;     // Empty: anonymous for FTP, local username for SFTP.
   std::string password;
   bool password_supplied = false;
   std::optional<std::string> private_key;

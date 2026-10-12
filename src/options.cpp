@@ -55,6 +55,9 @@ ParsedOptions parse_options(int argc, char** argv) {
       ->check(CLI::IsMember({"passive", "active"}, CLI::ignore_case).description(""))
       ->capture_default_str()
       ->type_name("passive|active");
+  app.add_flag("--mode-b", o.mode_b,
+               "FTP/FTPS block mode (MODE B): keep one data connection open for all files; stream mode if the "
+               "server refuses it");
   CLI::Option* user_option =
       app.add_option("--user", user, "User name (FTP: anonymous; SSH: current local user)")->type_name("NAME");
   CLI::Option* password_option =

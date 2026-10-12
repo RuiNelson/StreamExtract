@@ -102,6 +102,11 @@ struct FtpClient::Impl {
   bool self_conversion = false;
   bool self_conversion_warned = false;
 
+  // With mode_b: the transfer mode of the current control connection was
+  // logged. Each new connection (seen by its 220 greeting) logs it again.
+  bool transfer_mode_reported = false;
+  bool mode_b_refusal_warned = false;
+
   // State of the request in progress, used by the callbacks.
   const ReadFn* read = nullptr;
   const ProgressFn* progress = nullptr;
@@ -132,6 +137,7 @@ struct FtpClient::Impl {
           self->ftpsrv = Ftpsrv::Yes;
         }
         self->self_conversion = self->ftpsrv == Ftpsrv::Yes;
+        self->transfer_mode_reported = false;
       } else if (line.find("SELF transfer mode disabled") != std::string_view::npos) {
         self->self_conversion = false;
       } else if (line.find("SELF transfer mode enabled") != std::string_view::npos) {
@@ -206,6 +212,44 @@ struct FtpClient::Impl {
     return size * nitems;
   }
 
+  // FTP block mode (MODE B), from our curl fork (CURLOPT_FTP_TRANSFER_MODE and
+  // CURLINFO_FTP_TRANSFER_MODE).
+
+  // Called by prepare() for every request. With mode_b, curl negotiates MODE B
+  // once per control connection, right after login, and stays in stream mode
+  // if the server refuses it. Without it, MODE is never sent.
+  void request_transfer_mode() {
+    if (is_ssh(config.protocol)) return;
+    curl_easy_setopt(curl, CURLOPT_FTP_TRANSFER_MODE, config.mode_b ? CURLFTPMODE_BLOCK : CURLFTPMODE_STREAM);
+  }
+
+  // Whether the control connection of the last successful request uses block
+  // mode; std::nullopt if curl cannot tell. CURLINFO_FTP_TRANSFER_MODE is 0
+  // both for stream mode and for "unknown": after a request that logged in, 0
+  // means stream mode.
+  std::optional<bool> block_mode_in_effect() const {
+    long mode = CURLFTPMODE_STREAM;
+    if (curl_easy_getinfo(curl, CURLINFO_FTP_TRANSFER_MODE, &mode) != CURLE_OK) return std::nullopt;
+    return mode == CURLFTPMODE_BLOCK;
+  }
+
+  // With mode_b, logs the transfer mode once per control connection, after its
+  // first successful request. A refusal is a warning the first time only.
+  void report_transfer_mode() {
+    if (!config.mode_b || is_ssh(config.protocol) || transfer_mode_reported) return;
+    const std::optional<bool> block = block_mode_in_effect();
+    if (!block) return;
+    transfer_mode_reported = true;
+    if (*block) {
+      log.info("Transfer mode: block (MODE B); the data connection stays open between files");
+    } else if (!mode_b_refusal_warned) {
+      mode_b_refusal_warned = true;
+      log.warn("the server refused block mode (MODE B); using stream mode (MODE S)");
+    } else {
+      log.info("Transfer mode: stream (MODE S); the server refused block mode (MODE B)");
+    }
+  }
+
   // Resets the handle (the connection stays cached) and applies common options.
   void prepare(const std::string& url) {
     curl_easy_reset(curl);
@@ -232,6 +276,7 @@ struct FtpClient::Impl {
         curl_easy_setopt(curl, CURLOPT_CAINFO, config.ca_certificate->c_str());
       }
     }
+    request_transfer_mode();
     if (is_ssh(config.protocol)) {
       curl_easy_setopt(curl, CURLOPT_USERNAME, config.user.c_str());
       curl_easy_setopt(curl, CURLOPT_PASSWORD, config.password.c_str());
@@ -285,7 +330,9 @@ struct FtpClient::Impl {
     }
   }
 
-  CURLcode perform(bool retry_cwd = true) {
+  // `report`: log the transfer mode of a new control connection (connect()
+  // leaves it to the next request, after "Logged in as").
+  CURLcode perform(bool retry_cwd = true, bool report = true) {
     CURLcode code = curl_easy_perform(curl);
     if (!is_ssh(config.protocol) && retry_cwd && code == CURLE_REMOTE_ACCESS_DENIED) {
       // CWD failed before any data was transferred. Walking the components
@@ -296,6 +343,7 @@ struct FtpClient::Impl {
     }
     if (code == CURLE_OK) {
       logged_in = true;
+      if (report) report_transfer_mode();
     }
     return code;
   }
@@ -401,12 +449,12 @@ std::string FtpClient::connect(unsigned attempts) {
     if (!is_ssh(impl_->config.protocol)) quote.append("*OPTS UTF8 ON");
     curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
     curl_easy_setopt(impl_->curl, CURLOPT_QUOTE, quote.get());
-    CURLcode code = impl_->perform();
+    CURLcode code = impl_->perform(true, false);
     while (code == CURLE_LOGIN_DENIED && impl_->private_key_index + 1 < impl_->private_keys.size()) {
       ++impl_->private_key_index;
       impl_->prepare(impl_->base_url + "/");
       curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
-      code = impl_->perform();
+      code = impl_->perform(true, false);
     }
     if (code == CURLE_OK) {
       const char* entry = nullptr;

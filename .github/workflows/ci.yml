@@ -106,7 +106,8 @@ jobs:
             7z x -bso0 -bsp0 -olzmasdk "${archive}"
           fi
 
-      # libcurl is built statically with FTP/FTPS/SFTP and bundled OpenSSL/libssh2.
+      # libcurl (our fork of 8.22.0 with FTP block mode, fetched by CMake) is built statically
+      # with FTP/FTPS/SFTP and bundled OpenSSL/libssh2.
       # FatFs is fetched manually for local builds; CI verifies the same zip.
       # CMake applies the official patches to a private build copy.
       - name: Fetch FatFs

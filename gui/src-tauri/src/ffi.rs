@@ -41,7 +41,7 @@ pub struct StreamExtractSshOptions {
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_staging(
+    pub fn streamextract_job_start_with_mode_b(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
@@ -50,6 +50,7 @@ extern "C" {
         ssh: *const StreamExtractSshOptions,
         extraction_root: *const c_char,
         staging: *const c_char,
+        mode_b: c_int,
     ) -> *mut StreamExtractJob;
     pub fn streamextract_archive_directories(
         archive: *const c_char,
@@ -62,7 +63,7 @@ extern "C" {
     pub fn streamextract_free(string: *mut c_char);
 }
 
-/// `"StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0)"`.
+/// `"StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0-DEV)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
     unsafe { CStr::from_ptr(streamextract_version()) }
@@ -189,7 +190,7 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_staging(
+            streamextract_job_start_with_mode_b(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
@@ -203,6 +204,7 @@ impl Job {
                 &ssh,
                 extraction_root.as_ptr(),
                 staging.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+                c_int::from(config.mode_b), // The library ignores it for SFTP.
             )
         };
         NonNull::new(job)
@@ -269,6 +271,7 @@ mod tests {
             verbose: false,
             buffer_mib: 0,
             retries: 3,
+            mode_b: false,
             prevent_sleep: true,
             units: crate::preferences::Units::Binary,
         }
@@ -309,6 +312,22 @@ mod tests {
         let mut bad = config();
         bad.staging = Some("/stage\0".to_string());
         assert!(Job::start(&bad).is_err());
+    }
+
+    #[test]
+    fn block_mode_starts_for_every_protocol() {
+        for protocol in [
+            crate::Protocol::Ftp,
+            crate::Protocol::FtpsExplicit,
+            crate::Protocol::FtpsImplicit,
+            crate::Protocol::Sftp,
+        ] {
+            let mut block = config();
+            block.protocol = protocol;
+            block.mode_b = true;
+            let job = Job::start(&block).unwrap();
+            assert_eq!(job.poll(0).unwrap()["mode"], "passive");
+        }
     }
 
     #[test]

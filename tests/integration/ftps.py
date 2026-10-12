@@ -378,6 +378,7 @@ class LibraryFtpsTests(FtpsTests):
         parser.add_argument("--protocol", default="ftp")
         parser.add_argument("--ftps-mode", default="explicit")
         parser.add_argument("--mode", default="passive")
+        parser.add_argument("--mode-b", action="store_true")
         parser.add_argument("--cacert")
         parser.add_argument("--buffer", type=int, default=1)
         parser.add_argument("--retries", type=int, default=3)
@@ -392,7 +393,9 @@ class LibraryFtpsTests(FtpsTests):
                 "mkdir": options.mkdir,
                 "active_mode": options.mode == "active", "verbose": options.verbose,
                 "buffer_mib": options.buffer, "protocol": protocol,
-                "ca_certificate": options.cacert}, retries=options.retries) as job:
+                "ca_certificate": options.cacert,
+                # Only with --mode-b, so the other cases keep exercising the older entry points.
+                **({"mode_b": True} if options.mode_b else {})}, retries=options.retries) as job:
             job.wait(timeout=30)
         # Present library logs in the same format so all assertions cover both callers.
         output = "\n".join(f"{line['level'].upper()} {line['text']}" for line in job.log)

@@ -519,6 +519,7 @@ Job::Result Job::pipeline() {
       config_.protocol == STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT ? FtpsMode::Implicit : FtpsMode::Explicit;
   ftp_config.ca_certificate = config_.ca_certificate;
   ftp_config.mode = config_.active_mode ? FtpMode::Active : FtpMode::Passive;
+  ftp_config.mode_b = config_.mode_b;
   ftp_config.user = config_.user;
   if (is_ssh(ftp_config.protocol) && ftp_config.user.empty()) ftp_config.user = current_username();
   {

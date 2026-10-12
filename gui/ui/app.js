@@ -89,6 +89,9 @@
     bufferError: $("buffer-error"),
     retries: $("retries"),
     retriesError: $("retries-error"),
+    modeB: $("mode-b"),
+    modeBField: $("mode-b-field"),
+    modeBInfo: $("btn-mode-b-info"),
     preventSleep: $("prevent-sleep"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
@@ -516,6 +519,8 @@
 
   function updateProtocolFields() {
     const ssh = els.protocol.value === "sftp";
+    // Block mode is FTP/FTPS only: hidden for SFTP, keeping its value for a switch back.
+    setHidden(els.modeBField, ssh);
     els.mode.disabled = ssh;
     setHidden(els.modeField, ssh);
     els.hostRow.classList.toggle("sftp", ssh);
@@ -807,6 +812,7 @@
       directory: els.directory.value.trim(),
       staging: els.staging.value.trim() || null,
       mkdir: els.mkdir.checked,
+      mode_b: els.modeB.checked,
     };
   }
 
@@ -852,6 +858,7 @@
       verbose: els.verbose.checked,
       buffer_mib: buffer,
       retries,
+      mode_b: server.protocol !== "sftp" && server.mode_b,
       prevent_sleep: state.preventSleep,
       units: state.units,
     };
@@ -1017,6 +1024,7 @@
           directory: server.directory,
           staging: server.staging,
           mkdir: server.mkdir,
+          mode_b: server.mode_b,
         },
         store_credentials: storeCredentials,
       });
@@ -1047,6 +1055,7 @@
       els.directory.value = saved.directory || "";
       els.staging.value = saved.staging || "";
       els.mkdir.checked = Boolean(saved.mkdir);
+      els.modeB.checked = saved.mode_b === true;
       els.user.value = saved.user || "";
       els.password.value = saved.password || "";
       validatePort();
@@ -1794,6 +1803,9 @@
     });
     els.host.addEventListener("input", updateSubmitState);
     els.stagingInfo.addEventListener("click", () => els.stagingHelpDialog.showModal());
+    els.modeBInfo.addEventListener("click", () => {
+      invoke("open_block_mode_help").catch((e) => toastError("Could not open the block mode help", e));
+    });
     els.port.addEventListener("input", validatePort);
     els.protocol.addEventListener("change", changeProtocol);
     els.sshButton.addEventListener("click", () => els.sshDialog.showModal());

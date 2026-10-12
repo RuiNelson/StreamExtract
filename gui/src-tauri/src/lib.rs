@@ -84,6 +84,9 @@ pub struct TransferConfig {
     pub buffer_mib: u32,
     #[serde(default = "preferences::default_retries")]
     pub retries: u32,
+    /// FTP/FTPS block mode (MODE B); ignored for SFTP.
+    #[serde(default)]
+    pub mode_b: bool,
     #[serde(default = "preferences::default_prevent_sleep")]
     pub prevent_sleep: bool,
     #[serde(default)]
@@ -111,6 +114,9 @@ pub struct ServerSettings {
     #[serde(default)]
     pub staging: Option<String>,
     pub mkdir: bool,
+    /// FTP/FTPS block mode (MODE B); absent in older memory files (off).
+    #[serde(default)]
+    pub mode_b: bool,
 }
 
 /// The one transfer job of the app (if any). A finished job stays here until it is replaced or closed.
@@ -363,6 +369,17 @@ async fn check_for_updates(
     }
 }
 
+/// Opened by the info button beside the block mode checkbox.
+const BLOCK_MODE_HELP_URL: &str =
+    "https://github.com/RuiNelson/StreamExtract/blob/main/docs/block_mode.md";
+
+#[tauri::command]
+async fn open_block_mode_help(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(BLOCK_MODE_HELP_URL, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 async fn open_releases(app: AppHandle) -> Result<(), String> {
     app.opener()
@@ -513,6 +530,7 @@ pub fn run() {
             show_update_available,
             dismiss_update_prompt,
             open_releases,
+            open_block_mode_help,
             archive_directories,
             start_transfer,
             poll_transfer,
@@ -563,6 +581,7 @@ mod tests {
             verbose: false,
             buffer_mib: 1,
             retries: 3,
+            mode_b: false,
             prevent_sleep: true,
             units: preferences::Units::Binary,
         }

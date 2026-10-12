@@ -476,6 +476,9 @@ mod tests {
         );
         fs::write(fixture.yaml(), "{}\n").unwrap();
         assert_eq!(load(&fixture.yaml()).unwrap(), Preferences::default());
+        // Block mode moved to the server settings (memory.yaml): an old key is ignored.
+        fs::write(fixture.yaml(), "mode_b: true\n").unwrap();
+        assert_eq!(load(&fixture.yaml()).unwrap(), Preferences::default());
         for text in [
             "units: invalid\n",
             "buffer_mib: 0\n",

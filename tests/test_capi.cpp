@@ -185,6 +185,8 @@ TEST_CASE("a missing config is refused and NULL handles are ignored") {
   CHECK(streamextract_job_start_with_options(nullptr, 1, 5) == nullptr);
   CHECK(streamextract_job_start_with_staging(nullptr, 0, 3, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr,
                                           nullptr, "/stage") == nullptr);
+  CHECK(streamextract_job_start_with_mode_b(nullptr, 0, 3, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr, nullptr,
+                                            nullptr, 1) == nullptr);
   CHECK(streamextract_job_poll(nullptr, 0) == nullptr);
   streamextract_job_answer_password(nullptr, "x");
   streamextract_job_cancel(nullptr);
@@ -253,6 +255,28 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
   CHECK(contains(json, "attempt 2/3"));
   CHECK(contains(json, "attempt 3/3"));
   streamextract_job_free(job);
+}
+
+TEST_CASE("block mode is accepted for every protocol without changing the JSON contract") {
+  const TempFile archive("streamextractcore-tiny-mode-b.rar", kTinyRar, sizeof(kTinyRar));
+  const std::string path = archive.path();
+  const streamextract_job_config config = make_config(path, 1);  // Nobody listens on port 1.
+  for (int protocol : {STREAMEXTRACT_PROTOCOL_FTP, STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT,
+                       STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT, STREAMEXTRACT_PROTOCOL_SFTP}) {
+    for (int mode_b : {0, 1, -1}) {  // Any nonzero value turns it on.
+      CAPTURE(protocol);
+      CAPTURE(mode_b);
+      streamextract_job* job =
+          streamextract_job_start_with_mode_b(&config, 0, 1, protocol, nullptr, nullptr, nullptr, nullptr, mode_b);
+      REQUIRE(job != nullptr);
+      const std::string json = wait_for(job, "\"phase\":\"finished\"");
+      streamextract_job_free(job);
+      CHECK(contains(json, "\"status\":\"failed\""));
+      CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the login.
+      CHECK(contains(json, "\"mode\":\"passive\""));
+      CHECK_FALSE(contains(json, "MODE B"));  // Nothing negotiated without a connection.
+    }
+  }
 }
 
 TEST_CASE("ZIP, 7z and tar archives are read too") {

@@ -75,6 +75,15 @@ FTP and FTPS use passive mode by default; select active mode with `--mode active
 or the app's **Mode** field. Both FTPS modes verify the server certificate and
 hostname. A private CA can be supplied with the CLI's `--cacert` option.
 
+FTP and FTPS normally open a new data connection for every file (stream mode),
+plus a TLS handshake each with FTPS, which slows down archives with many small
+files. Block mode (RFC 959 `MODE B`) marks the end of each file inside the data
+stream, so one data connection stays open for all of them. It is off by default
+and never tried unless you turn it on with `--mode-b` or the app's **Use block
+mode (MODE B)** in the *Server* settings (saved with each server by Memory Save).
+If the server refuses it, a warning is logged and the upload continues in stream
+mode.
+
 SFTP supports RSA, ECDSA and Ed25519 OpenSSH keys, including encrypted private
 keys. Host-key verification is optional: use `--known-hosts` in the CLI or
 **SSH settings** in the app. SSH agents, keyboard-interactive authentication
@@ -119,7 +128,11 @@ The app offers:
   Enter a **Staging directory (optional)** to upload and resume there first;
   files move to the **Destination directory** after each archive succeeds.
   Leave staging empty to upload directly to the destination. **Create directory
-  if missing** applies to both directories. Memory Save/Recall includes staging.
+  if missing** applies to both directories. **Use block mode (MODE B)** (FTP/FTPS
+  only, hidden for SFTP, off by default; see
+  [Supported file transfer protocols](#supported-file-transfer-protocols)) sits
+  beside it; its info button opens [docs/block_mode.md](docs/block_mode.md) in the
+  browser. Memory Save/Recall includes staging and block mode.
   The info button beside the staging label opens help about staging and resuming.
   *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
   each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
@@ -206,6 +219,7 @@ password-protected archives are supported:
 | `--port PORT` | Default `21`, `990` for implicit FTPS, or `22` for SFTP. |
 | `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
 | `--mode passive\|active` | FTP/FTPS data connection mode. Default `passive`; unused for SFTP. |
+| `--mode-b` | FTP/FTPS block mode (`MODE B`): one data connection stays open for all files instead of a new one per file. Off by default (`MODE` is never sent). If the server refuses it, a warning is logged and the upload continues in stream mode. Unused for SFTP. |
 | `--user NAME` | Without it, FTP/FTPS uses anonymous login; SFTP uses the current local username. |
 | `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
 | `--private-key PATH` | SFTP private key. With neither a password nor a selected key, private keys in `~/.ssh` are tried. |
@@ -494,7 +508,10 @@ run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchange
 
 Requirements: a C++17 compiler, CMake 3.21+, Perl and Make (NMake in a Visual Studio developer environment on Windows). An FTP/FTPS/SFTP libcurl is always
 built from pinned sources and linked statically, so its features are consistent
-across platforms. UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
+across platforms. It is our fork of curl 8.22.0,
+[curl-streamextract](https://github.com/RuiNelson/curl-streamextract), which adds
+FTP block mode and a few SSH fixes.
+UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
 LZ4) are built from source as static libraries during the
@@ -643,7 +660,8 @@ remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
 implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
 to run the same cases through the core API used by the GUI. `sftp.py` covers
 SFTP authentication, host verification and file transfer behavior. `ftp_faults.py`
-tests resume, retry and cancellation using controlled scenarios in that image:
+tests resume, retry and cancellation using controlled scenarios in that image,
+and block mode (`--mode-b`) against a server that supports or refuses `MODE B`:
 
 ```bash
 python3 tests/integration/ftps.py --sext build/sext
@@ -694,7 +712,7 @@ The Rust side has its own unit tests, which link the built library:
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive, PFSC, and BZip2, Deflate and Zstandard in 7z | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
 | [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
-| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client | curl (MIT/X derivative) |
+| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client ([our fork](https://github.com/RuiNelson/curl-streamextract) of 8.22.0 with FTP block mode) | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |

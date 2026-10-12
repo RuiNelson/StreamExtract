@@ -128,6 +128,27 @@ TEST_CASE("CLI rejects SSH arguments for FTP and FTPS arguments for SFTP") {
   }
 }
 
+TEST_CASE("CLI block mode is off unless --mode-b is given") {
+  CHECK_FALSE(parse({}).options->mode_b);
+  CHECK_FALSE(parse({"--protocol", "ftps"}).options->mode_b);
+  CHECK(parse({"--mode-b"}).options->mode_b);
+  for (const char* ftps_mode : {"explicit", "implicit"}) {
+    const auto tls = parse({"--protocol", "ftps", "--ftps-mode", ftps_mode, "--mode-b", "--mode", "active"});
+    REQUIRE(tls.options);
+    CHECK(tls.options->mode_b);
+    CHECK(tls.options->mode == FtpMode::Active);
+  }
+  // Like --mode, an FTP data connection setting that SFTP ignores rather than rejects.
+  const auto sftp = parse({"--protocol", "sftp", "--mode-b"});
+  REQUIRE(sftp.options);
+  CHECK(sftp.options->protocol == FtpProtocol::Sftp);
+  for (const auto& args : {std::initializer_list<const char*>{"--mode-b", "block"}, {"--mode-B"}}) {
+    const auto result = parse(args);
+    CHECK_FALSE(result.options);
+    CHECK(result.exit_code == 2);
+  }
+}
+
 namespace {
 // Without the default --file/--host of parse().
 ParsedOptions parse_only(std::initializer_list<const char*> args) {
@@ -149,6 +170,7 @@ TEST_CASE("CLI defaults") {
   CHECK(o.file == __FILE__);
   CHECK(o.host == "example.com");
   CHECK(o.mode == FtpMode::Passive);
+  CHECK_FALSE(o.mode_b);
   CHECK(o.retries == 3);
   CHECK(o.buffer_mib == 64);
   CHECK_FALSE(o.user);
