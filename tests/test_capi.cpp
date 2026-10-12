@@ -260,7 +260,10 @@ TEST_CASE("a refused connection ends as failed after reading the archive") {
 TEST_CASE("block mode is accepted for every protocol without changing the JSON contract") {
   const TempFile archive("streamextractcore-tiny-mode-b.rar", kTinyRar, sizeof(kTinyRar));
   const std::string path = archive.path();
-  const streamextract_job_config config = make_config(path, 1);  // Nobody listens on port 1.
+  streamextract_job_config config = make_config(path, 1);  // Nobody listens on port 1.
+  // Reach the connection attempt for SFTP without relying on the local account's SSH keys.
+  config.user = "test";
+  config.password = "test";
   for (int protocol : {STREAMEXTRACT_PROTOCOL_FTP, STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT,
                        STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT, STREAMEXTRACT_PROTOCOL_SFTP}) {
     for (int mode_b : {0, 1, -1}) {  // Any nonzero value turns it on.
@@ -271,6 +274,7 @@ TEST_CASE("block mode is accepted for every protocol without changing the JSON c
       REQUIRE(job != nullptr);
       const std::string json = wait_for(job, "\"phase\":\"finished\"");
       streamextract_job_free(job);
+      CAPTURE(json);
       CHECK(contains(json, "\"status\":\"failed\""));
       CHECK(contains(json, "\"error\":\"cannot log in to 127.0.0.1:1"));  // Past the listing, at the login.
       CHECK(contains(json, "\"mode\":\"passive\""));
