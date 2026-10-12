@@ -300,6 +300,7 @@ fn legacy_server(parsed: Parsed) -> Result<ServerSettings, String> {
             .mkdir
             .and_then(|value| parse_bool(&value))
             .unwrap_or(false),
+        mode_b: false, // Not in legacy files.
     })
 }
 
@@ -353,6 +354,7 @@ mod tests {
             directory: "/up loads/dir;#=x".into(),
             staging: None,
             mkdir: true,
+            mode_b: false,
         }
     }
 
@@ -470,6 +472,29 @@ mod tests {
             save(&path, None, &settings, None).unwrap_err(),
             CONSENT_REQUIRED
         );
+    }
+
+    #[test]
+    fn block_mode_is_kept_per_slot_and_off_in_older_files() {
+        let home = TempHome::new();
+        let path = home.memory();
+        let mut settings = server(None, None);
+        settings.mode_b = true;
+        save(&path, None, &settings, None).unwrap();
+        save(&path, None, &server(None, None), None).unwrap();
+        assert!(recall(&path, slot(&path, 0)).unwrap().mode_b);
+        assert!(!recall(&path, slot(&path, 1)).unwrap().mode_b);
+        assert!(fs::read_to_string(&path).unwrap().contains("mode_b: true"));
+        // A slot written before block mode existed has no mode_b key.
+        let text: String = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("mode_b:"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        fs::write(&path, text).unwrap();
+        assert!(!recall(&path, slot(&path, 0)).unwrap().mode_b);
+        assert!(!recall(&path, slot(&path, 1)).unwrap().mode_b);
     }
 
     #[test]

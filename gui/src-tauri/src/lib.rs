@@ -114,6 +114,9 @@ pub struct ServerSettings {
     #[serde(default)]
     pub staging: Option<String>,
     pub mkdir: bool,
+    /// FTP/FTPS block mode (MODE B); absent in older memory files (off).
+    #[serde(default)]
+    pub mode_b: bool,
 }
 
 /// The one transfer job of the app (if any). A finished job stays here until it is replaced or closed.

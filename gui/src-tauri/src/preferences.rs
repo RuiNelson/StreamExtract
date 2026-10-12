@@ -44,9 +44,6 @@ pub struct Preferences {
     pub buffer_mib: u32,
     #[serde(default = "default_retries")]
     pub retries: u32,
-    /// FTP/FTPS block mode (MODE B); off unless the user turns it on.
-    #[serde(default)]
-    pub mode_b: bool,
     #[serde(default = "default_prevent_sleep")]
     pub prevent_sleep: bool,
     #[serde(default = "default_completion_sound")]
@@ -64,7 +61,6 @@ impl Default for Preferences {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
             retries: default_retries(),
-            mode_b: false,
             prevent_sleep: default_prevent_sleep(),
             completion_sound: true,
             show_passwords: false,
@@ -140,7 +136,6 @@ fn parse_legacy(text: &str) -> Preferences {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|value| *value > 0)
             .unwrap_or_else(default_retries),
-        mode_b: false, // Not in legacy files.
         prevent_sleep: !ini
             .get("transfer", "prevent_sleep")
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("false")),
@@ -204,7 +199,6 @@ mod tests {
                 units: Units::Binary,
                 buffer_mib: 128,
                 retries: 5,
-                mode_b: true,
                 prevent_sleep: false,
                 completion_sound: false,
                 show_passwords: true,
@@ -214,7 +208,6 @@ mod tests {
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
         assert_eq!(load(&path).unwrap().retries, 5);
-        assert!(load(&path).unwrap().mode_b);
         assert!(!load(&path).unwrap().prevent_sleep);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
         assert!(!load(&path).unwrap().completion_sound);
@@ -224,7 +217,6 @@ mod tests {
         fs::write(&memory, "server settings").unwrap();
         save(&path, Preferences::default()).unwrap();
         assert_eq!(load(&path).unwrap().units, Units::Si);
-        assert!(!load(&path).unwrap().mode_b);
         assert!(load(&path).unwrap().completion_sound);
         assert_eq!(fs::read_to_string(&memory).unwrap(), "server settings");
         fs::remove_file(&memory).unwrap();
@@ -242,7 +234,6 @@ mod tests {
             serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
         assert!(legacy.completion_sound);
         assert_eq!(legacy.retries, 3);
-        assert!(!legacy.mode_b);
         assert!(legacy.prevent_sleep);
         assert!(!legacy.show_passwords);
         assert_eq!(legacy.check_updates, None);
@@ -382,7 +373,6 @@ mod tests {
             units: Units::Binary,
             buffer_mib: 128,
             retries: 5,
-            mode_b: false,
             prevent_sleep: false,
             completion_sound: false,
             show_passwords: true,
@@ -486,23 +476,14 @@ mod tests {
         );
         fs::write(fixture.yaml(), "{}\n").unwrap();
         assert_eq!(load(&fixture.yaml()).unwrap(), Preferences::default());
-        // Files written before block mode existed leave it off.
-        fs::write(fixture.yaml(), "units: si\nbuffer_mib: 64\nretries: 3\n").unwrap();
-        assert!(!load(&fixture.yaml()).unwrap().mode_b);
+        // Block mode moved to the server settings (memory.yaml): an old key is ignored.
         fs::write(fixture.yaml(), "mode_b: true\n").unwrap();
-        assert_eq!(
-            load(&fixture.yaml()).unwrap(),
-            Preferences {
-                mode_b: true,
-                ..Preferences::default()
-            }
-        );
+        assert_eq!(load(&fixture.yaml()).unwrap(), Preferences::default());
         for text in [
             "units: invalid\n",
             "buffer_mib: 0\n",
             "buffer_mib: 4097\n",
             "retries: 0\n",
-            "mode_b: maybe\n",
             "check_updates: invalid\n",
         ] {
             fs::write(fixture.yaml(), text).unwrap();
