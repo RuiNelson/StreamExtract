@@ -1,6 +1,6 @@
 # Builds the UnRAR library (DLL API, statically linked) from the sources in
 # ${PROJECT_SOURCE_DIR}/unrarsrc. The sources are NOT part of this repository
-# because of their license; see README.md for how to fetch them.
+# because of their license; see docs/building.md for how to fetch them.
 #
 # UnRAR source code may be used in any software to handle RAR archives without
 # limitations free of charge, but cannot be used to develop RAR (WinRAR)

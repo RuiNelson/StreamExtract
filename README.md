@@ -1,111 +1,40 @@
 # StreamExtract
 
-Stream files from archives and filesystem images straight to your server,
-**without extracting them to disk**.
+Upload files from archives and filesystem images to an FTP, FTPS or SFTP server
+**without extracting them to disk**. Decompression and upload run together,
+using a memory buffer instead of temporary files.
 
-The usual way to publish a huge archive is to extract it (needing as much free
-space as the unpacked data, with the CPU busy and the network idle) and then
-upload it (network busy, CPU idle). `StreamExtract` streams each file from the
-decompressor to the server connection instead:
+Available for Windows, macOS and Linux as a desktop app (**StreamExtract**) and
+a command-line tool (**sext**).
 
-- **No temporary files**: nothing is written to the local disk.
-- **Automatic upload retries**: up to 3 attempts for the initial connection/login
-  and each file upload, resuming the bytes already on the server, with no delay
-  between attempts.
-- **Decompression and upload overlap**: a bounded memory buffer (64 MiB by
-  default) sits between the two, so the CPU and the network work at the same
-  time.
-- **No local name collisions**: since nothing is extracted locally, archives
-  with names that differ only in letter case (`README.txt` / `Readme.txt`)
-  upload correctly from case-insensitive systems (macOS, Windows) to
-  case-sensitive servers.
+## Download and install
 
-It comes in two forms, with the same engine:
+Download the app or command-line tool from the
+[Releases page](https://github.com/RuiNelson/streamextract/releases).
+There is no installer. Windows and Linux downloads are RAR archives and need a
+RAR5-compatible extractor, such as WinRAR, 7-Zip or `unrar`. macOS downloads are ZIP files.
 
-- [**StreamExtract**](#desktop-app-streamextract), a desktop app for Windows, macOS
-  and Linux.
-- [**sext**](#command-line-sext), a command-line tool with a full-screen
-  terminal interface.
-
-Both are published as assets of each release on the repository's
-[**Releases** page](https://github.com/RuiNelson/streamextract/releases), one `.rar`
-per platform. Extracting them needs a program that reads RAR5 (WinRAR, 7-Zip,
-Keka, `unrar`, ...).
-
-## Supported reading formats
-
-The desktop app and command-line tool read the same formats. Inputs are
-recognized by their contents, so the extensions below are examples rather than
-requirements.
-
-| Format | Typical input files | Supported features |
+| Platform | Desktop app | Command line |
 |---|---|---|
-| **RAR** | `.rar`, `.part1.rar` | RAR 5.x and older formats, multi-volume and solid archives, password protection and encrypted file names. |
-| **ZIP** | `.zip`, `.zip.001` | Stored, Deflate, BZip2, LZMA, XZ, Zstandard and PPMd; Zip64; ZipCrypto and AES encryption; numbered split parts. |
-| **7z** | `.7z`, `.7z.001` | LZMA, LZMA2, PPMd, BZip2, Deflate and Zstandard with filters; solid archives; AES-256 encryption, including file names; numbered split parts. |
-| **tar** | `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.zst`, `.tar.001` | POSIX, GNU, pax and older tar variants; gzip, bzip2, xz, lzma, Zstandard and LZ4 compression; numbered split parts. |
-| **exFAT** | `.exfat` | Raw volume images, Unicode names, contiguous and fragmented files, files over 4 GiB and uninitialized data returned as zeroes. |
-| **PlayStation PFS/PFSC** | `.ffpfsc`, `.ffpfs`, `.pfs` | Unsigned PS4/PS5 MkPFS images with 32-bit contiguous inodes; raw and PFSC-compressed files; automatic reading of a single wrapped exFAT, UFS or PFS image. |
-| **UFS1 / UFS2** | `.ffpkg`, `.ufs` | Raw volumes in either byte order, indirect blocks and sparse files; also readable inside PFS/PFSC wrappers. |
+| Windows 10/11 (x64) | `streamextract-gui-windows-x64.rar` | `streamextract-cli-windows-x64.rar` |
+| macOS 12+ (Intel and Apple Silicon) | `streamextract-gui-macos-universal.zip` | `streamextract-cli-macos-universal.zip` |
+| Linux (x64, glibc 2.35+) | `streamextract-gui-linux-x64.rar` | `streamextract-cli-linux-x64.rar` |
+| Linux (arm64, glibc 2.35+) | `streamextract-gui-linux-arm64.rar` | `streamextract-cli-linux-arm64.rar` |
 
-For split archives, select the first volume. Filesystem images must contain a
-single raw volume without a partition table; split images are not supported.
-PFS images with signatures, encryption or 64-bit inodes are rejected.
-Wrapped images are decoded in memory without an OS mount or temporary extraction.
+- **Windows**: extract the app and run `StreamExtract.exe`, keeping
+  `streamextractcore.dll` beside it. The app requires WebView2. The executable is
+  unsigned, so SmartScreen may show a warning on first launch.
+- **macOS**: extract the app and move `StreamExtract.app` to `/Applications`.
+  Release builds are signed and notarized.
+- **Linux**: extract the app, make it executable with
+  `chmod +x StreamExtract.AppImage`, then run `./StreamExtract.AppImage`.
+  It requires FUSE 2 (for example, the `libfuse2` package).
 
-ZIP and 7z Deflate64 entries, old-style spanned ZIP sets (`.z01`, `.z02`, ...)
-and standalone compressed files that are not tar archives (such as a plain
-`.gz`) are not supported. Tar, exFAT, unsigned PFS and UFS have no complete
-file-data checksum, so their uploads include a verification warning.
-See [How it works](#how-it-works) for format details and further limits.
+For the command-line tool, extract `sext` (`sext.exe` on Windows) and run it from
+a terminal. You can place it in a directory in your `PATH` to call it from
+anywhere. Run `sext --help` to see the available options.
 
-## Supported file transfer protocols
-
-All four choices are available in the desktop app's **Protocol** field and in
-the command-line tool. FTP is the default; every protocol accepts a custom port.
-
-| Protocol | CLI selection | Default port | Connection |
-|---|---|---|---|
-| **FTP** | `--protocol ftp` (or omit it) | `21` | Unencrypted control and data connections; passive or active mode. |
-| **FTPS (explicit)** | `--protocol ftps` | `21` | Upgrades FTP to TLS with `AUTH TLS`; encrypts control and data connections; passive or active mode. |
-| **FTPS (implicit)** | `--protocol ftps --ftps-mode implicit` | `990` | Starts TLS immediately; encrypts control and data connections; passive or active mode. |
-| **SFTP** | `--protocol sftp` | `22` | Transfers over SSH with password or private-key authentication. |
-
-FTP and FTPS use passive mode by default; select active mode with `--mode active`
-or the app's **Mode** field. Both FTPS modes verify the server certificate and
-hostname. A private CA can be supplied with the CLI's `--cacert` option.
-
-FTP and FTPS normally open a new data connection for every file (stream mode),
-plus a TLS handshake each with FTPS, which slows down archives with many small
-files. Block mode (RFC 959 `MODE B`) marks the end of each file inside the data
-stream, so one data connection stays open for all of them. It is off by default
-and never tried unless you turn it on with `--mode-b` or the app's **Use block
-mode (MODE B)** in the *Server* settings (saved with each server by Memory Save).
-If the server refuses it, a warning is logged and the upload continues in stream
-mode.
-
-FTPMC distributes **each file** across several parallel TCP data connections in
-passive FTP or FTPS. Enable it with `--ftp-mc 4`, or **Use FTPMC (parallel data
-connections)** under the app's **Advanced** settings. In the app, the connection
-count and stripe size are saved automatically in `preferences.yaml` and apply
-across servers. It is off by default. `--ftp-mc-stripe 65536` requests 64 KiB
-stripes; `0` uses the server's size (normally 4096 bytes). The server may reduce
-the requested connection count or stripe size. A server that does not support or
-refuses FTPMC uses one connection, with a warning. It works in both stream and
-block mode; block mode keeps the whole connection set between files. FTPS
-encrypts every data connection. SFTP and active FTP/FTPS ignore these settings.
-
-SFTP supports RSA, ECDSA and Ed25519 OpenSSH keys, including encrypted private
-keys. Host-key verification is optional: use `--known-hosts` in the CLI or
-**SSH settings** in the app. SSH agents, keyboard-interactive authentication
-and SSH configuration files are not used.
-
-All protocols share the same remote-size policy: skip complete files, resume
-smaller files, and delete oversized files before uploading them again. Upload
-retries, cancellation and incomplete-file cleanup apply to every protocol.
-See [Command line](#command-line-sext) for authentication and trust options.
-
-## Desktop app (StreamExtract)
+## Desktop app
 
 <table>
 <tr>
@@ -114,641 +43,188 @@ See [Command line](#command-line-sext) for authentication and trust options.
 </tr>
 </table>
 
-The app offers:
+1. Drop an archive or image onto the window, or add it with **+**. For split
+   archives, select the first volume.
+2. Choose the **Protocol** and enter the server address, login details and
+   **Destination directory**. Enable **Create directory if missing** if needed.
+3. Click **Upload**. The app shows progress, speeds, estimated time remaining
+   and a log, followed by a summary.
 
-- **Archives**: drop RAR, ZIP, 7z or tar archives (also compressed: `.tar.gz`,
-  `.tgz`, `.tar.xz`...), or an exFAT, PFS (`.ffpfsc`, `.ffpfs`) or UFS (`.ffpkg`)
-  volume image, on the window,
-  or select several with the **+** button. Each queued archive has a **…** menu
-  to set its extraction password, select its extraction root, move it up or down
-  in the queue, or remove it.
-  Passwords and extraction roots are independent for every archive. Archives
-  run in order with the same server and destination; a failed archive does not
-  stop the remaining ones.
-  For multi-volume sets, use the first volume
-  (`.part1.rar`, `.zip.001`, `.7z.001`...).
-  When the archive is encrypted and no password was typed in, the app asks for
-  it, and asks again if it was wrong. **Show passwords** toggles visibility for all
-  password fields, including that prompt, and is saved automatically in
-  `~/.config/streamextract/preferences.yaml` (off by default).
-- **Server**: host, port, passive or active mode, username and password
-  (FTP/FTPS: anonymous; SFTP: local username if omitted), destination directory and *Create directory
-  if missing*. Choose **FTP** (default), **FTPS (explicit)**, **FTPS (implicit)** or **SFTP**
-  in **Protocol** before Host. Both FTPS modes encrypt control and data connections
-  and verify the server certificate using system CA trust.
-  Enter a **Staging directory (optional)** to upload and resume there first;
-  files move to the **Destination directory** after each archive succeeds.
-  Leave staging empty to upload directly to the destination. **Create directory
-  if missing** applies to both directories. **Use block mode (MODE B)** (FTP/FTPS
-  only, hidden for SFTP, off by default; see
-  [Supported file transfer protocols](#supported-file-transfer-protocols)) sits
-  beside it; its info button opens [docs/block_mode.md](docs/block_mode.md) in the
-  browser. Memory Save/Recall includes staging and block mode.
-  The info button beside the staging label opens help about staging and resuming.
-  *Advanced* has the buffer size, **Upload attempts** (total for connection/login and
-  each file upload, including the first; default: 3; 1 disables retries), the verbose log and **Display units**: SI
-  (1000 MB = 1 GB, the default) or binary (1024 MiB = 1 GiB). The choice applies
-  to sizes, speeds, log messages and the final summary. The units, buffer size and upload attempts are saved
-  automatically in `~/.config/streamextract/preferences.yaml`, separately from
-  server memory (buffer default: 64 MiB; range: 1–4096 MiB). On startup,
-  existing `preferences.ini` settings are migrated to YAML and the old file is
-  deleted after a successful save.
-  The buffer setting is always entered in MiB. Sizes and speeds are formatted
-  by the engine from the original byte counts using the selected units.
-- **Memory Save**, **Memory Recall** and **Memory Clear**: keep multiple server
-  configurations between runs in `~/.config/streamextract/memory.yaml` (under
-  the home directory on every OS), a **plain text** YAML array. Save lets you
-  choose a new slot or overwrite an existing configuration; Recall loads the
-  selected configuration, and Clear deletes only the selected one. Configurations
-  are identified in the picker by their connection settings and stored with stable
-  UUIDs. The first time a login is saved
-  in each slot, the app asks whether the username, password and private key
-  passphrase may be stored unencrypted; if not, they are left out. Deleting a
-  slot also forgets its answer. The archive password is never stored. On startup,
-  an existing `memory.ini` is migrated to YAML and deleted after a successful save.
-- **Progress**: a compact batch progress row with expandable archive statuses,
-  the current step, the current file and the whole archive with
-  their ETAs (for a compressed tar, by how much of the archive has been read),
-  the upload and decompression speeds, the buffer fill, a live log, and a final
-  summary with any warnings and results for every archive. **Cancel batch** stops
-  the active transfer, prevents remaining archives from starting, and
-  removes the incomplete remote file; closing the window during a transfer asks
-  for confirmation first.
+You can queue several archives. They upload in order to the same destination;
+if one fails, the others still run. Each archive's **…** menu lets you set its
+password, select an **Extraction Root**, reorder it or remove it. If an encrypted
+archive needs a password, the app asks for one.
 
-### Install the app
+**Memory Save**, **Memory Recall** and **Memory Clear** manage saved server
+configurations. Credentials are saved in plain text only with your consent;
+archive passwords are never saved. **Advanced** contains the memory buffer,
+upload attempts, display units, verbose logging and FTPMC settings. These
+preferences are remembered automatically.
 
-| Platform | Asset | Contents |
-|---|---|---|
-| Windows 10/11 (x64) | `streamextract-gui-windows-x64.rar` | `StreamExtract.exe` and `streamextractcore.dll` |
-| macOS 12+ (Intel and Apple Silicon) | `streamextract-gui-macos-universal.zip` | `StreamExtract.app` |
-| Linux (x64, glibc 2.35+) | `streamextract-gui-linux-x64.rar` | `StreamExtract.AppImage` |
-| Linux (arm64, glibc 2.35+) | `streamextract-gui-linux-arm64.rar` | `StreamExtract.AppImage` |
+For SFTP key authentication and host verification, open **SSH settings**.
+An optional **Staging directory** lets you upload files before moving them to
+the destination; see [Transfer behaviour](#transfer-behaviour).
 
-Each archive also holds `LICENSE`, `README.md` and `THIRD_PARTY_NOTICES.md`.
-The builds are portable: there is no installer.
+**Cancel batch** stops the current transfer and prevents the remaining archives
+from starting. The incomplete remote file is removed; completed files remain.
 
-- **Windows**: extract the archive into a folder of its own and run
-  `StreamExtract.exe`; keep `streamextractcore.dll` next to it. It uses the WebView2
-  runtime that Windows 10 and 11 ship. The executable is not code-signed, so
-  SmartScreen may warn the first time (*More info* → *Run anyway*).
-- **macOS**: extract the archive and move `StreamExtract.app` to `/Applications`.
-  Release builds are signed with a Developer ID and notarized by Apple, so they
-  open normally.
-- **Linux**: extract the archive and run the AppImage (it needs FUSE 2, e.g.
-  the `libfuse2` package):
+## Supported inputs
 
-  ```bash
-  chmod +x StreamExtract.AppImage
-  ./StreamExtract.AppImage
-  ```
+Formats are detected from the file contents, regardless of the extension.
 
-## Command line (sext)
-
-```bash
-sext --file archive.rar \
-     --host ftp.example.com --port 21 --mode passive \
-     --user username --password "password" \
-     --directory "/destination/dir" --mkdir
-```
-
-The input can be a RAR, ZIP, 7z or tar archive (also compressed, such as
-`backup.tar.zst`), or a single exFAT, unsigned PFS (`.ffpfsc`, `.ffpfs`) or UFS
-volume image; it is recognized
-by its content. Multi-volume and
-password-protected archives are supported:
-
-```bash
---archive-password "*[open sesame]*"
-```
-
-| Option | Description |
+| Format | Support |
 |---|---|
-| `--file PATH` | RAR, ZIP, 7z or tar archive (plain or compressed), or a single exFAT, unsigned PFS (`.ffpfsc`, `.ffpfs`) or UFS (`.ufs`, `.ffpkg`) image, recognized by its content. For multi-volume sets, the first volume (`.part1.rar`, `.rar`, `.zip.001`, `.7z.001`, `.tar.001`). |
-| `--host HOST` | Server name or address (IPv4 or IPv6). |
-| `--protocol ftp\|ftps\|sftp` | Default `ftp`. `ftps` uses TLS; `sftp` transfers over SSH. Available in the CLI and GUI. |
-| `--ftps-mode explicit\|implicit` | Default `explicit` (AUTH TLS). `implicit` starts TLS immediately. Requires `--protocol ftps`. |
-| `--port PORT` | Default `21`, `990` for implicit FTPS, or `22` for SFTP. |
-| `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
-| `--mode passive\|active` | FTP/FTPS data connection mode. Default `passive`; unused for SFTP. |
-| `--ftp-mc N` | FTPMC: distribute each file across N parallel passive FTP/FTPS data connections (1–64; 0 disables). Off by default. The server may lower N; unsupported or refused FTPMC falls back to one connection. Ignored for SFTP and active mode. |
-| `--ftp-mc-stripe BYTES` | FTPMC stripe size in bytes (0: server default; maximum 4294967295, or 2147483647 on Windows). The server may lower it. Ignored without `--ftp-mc`. |
-| `--mode-b` | FTP/FTPS block mode (`MODE B`): data connections stay open between files instead of opening new ones per file. Off by default (`MODE` is never sent). If the server refuses it, a warning is logged and the upload continues in stream mode. Unused for SFTP. |
-| `--user NAME` | Without it, FTP/FTPS uses anonymous login; SFTP uses the current local username. |
-| `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
-| `--private-key PATH` | SFTP private key. With neither a password nor a selected key, private keys in `~/.ssh` are tried. |
-| `--private-key-passphrase PASSPHRASE` | Passphrase for an encrypted SFTP private key; never prompted. The spelling `--private-key-passphare` is also accepted. |
-| `--known-hosts PATH` | Verify SFTP host keys against this file. An empty string uses `~/.ssh/known_hosts`; omitting the option accepts any host key. |
-| `--directory DIR` | Destination, absolute or relative to the login directory. Without it the login directory is used and a warning says which one. |
-| `--staging DIR` | Upload and resume in this remote directory, then move the archive's files to the destination after the entire archive succeeds. Omit it to upload directly to the destination. |
-| `--mkdir` | Create destination and staging directories if missing, with one `MKD` each (not recursive). Without it, either missing directory is an error. |
-| `--archive-password PASSWORD` | For encrypted archives; asked for on the terminal when needed. `--rar-password`, its former name, still works. |
-| `--extraction-root DIR` | Upload only this directory's contents from inside the archive, removing its path prefix. The path is relative to the archive root and must not start with `/` (`b/c`, not `/b/c`). Omitted or empty (the archive root): upload all contents; a lone `/` is also accepted as the archive root. |
-| `--no-tui` | Plain log output instead of the full-screen interface (automatic when not on a terminal). |
-| `--verbose` | Log connection and protocol details (credentials are masked). |
-| `--buffer MIB` | Memory buffer between decompression and upload. Default `64`. |
-| `--retries N` | Total attempts for connection/login and each file upload, including the first. Default `3`; `1` disables retries. |
+| **RAR** | RAR 5.x and older, multi-volume and solid archives, password protection and encrypted file names. |
+| **ZIP** | Stored, Deflate, BZip2, LZMA, XZ, Zstandard and PPMd; Zip64; ZipCrypto and AES encryption; numbered split parts (`.zip.001`). |
+| **7z** | LZMA, LZMA2, PPMd, BZip2, Deflate and Zstandard with filters; solid archives; AES-256 encryption, including file names; numbered split parts (`.7z.001`). |
+| **tar** | Plain or compressed with gzip, bzip2, xz, lzma, Zstandard or LZ4; numbered split parts. |
+| **exFAT** | Raw volume images (`.exfat`), including fragmented files and files over 4 GiB. |
+| **PlayStation PFS/PFSC** | Unsigned PS4/PS5 MkPFS images (`.ffpfsc`, `.ffpfs`, `.pfs`) with 32-bit contiguous inodes, raw or PFSC-compressed. A single wrapped exFAT, UFS or PFS image is opened automatically. |
+| **UFS1 / UFS2** | Raw volumes (`.ufs`, `.ffpkg`), including sparse files and images wrapped in PFS/PFSC. |
 
-For example, `--directory /uploads --staging /incoming` uploads into `/incoming`
-and then moves the completed files into `/uploads`, preserving their folders and
-empty directories. Both paths may be absolute or relative to the login directory.
-When staging is enabled, skips and resumes check staging first. If a file is
-absent there but has the expected size in the destination, it is considered
-complete and skipped. Existing staging copies take priority, including partial
-ones; their final rename replaces matching files in the destination. Destination
-files with a different or unknown size are uploaded into staging from the beginning.
-Only entries from the archive are moved; unrelated files in either directory are
-kept. The staging root is retained for reuse, and its empty archive subdirectories
-are removed.
+Keep all split archive parts together and select the first one, such as
+`.part1.rar`, `.zip.001` or `.7z.001`. Filesystem images must contain a single raw
+volume without a partition table; split images and signed or encrypted PFS
+images are unsupported.
 
-Staging must differ from the destination and cannot contain it. It may be inside
-the destination (for example `/uploads/.staging`), provided no archive entry would
-move into that staging directory. The server must support renaming between the
-two locations, normally on the same filesystem. Moves begin only after all
-uploads succeed. Whole archive directories move with their contents in one
-server-side rename when the destination folder is missing and the staging
-folder contains no unrelated entries. Existing destination folders are merged;
-unrelated staging entries are kept in place. Newly created destination folders
-allow child moves without repeating existence checks for each child. If a move fails or is
-cancelled, files already moved stay in the destination and the rest stay in
-staging. A subsequent run skips complete destination files whose staging copies
-are absent, resumes incomplete staged uploads, and moves the remaining contents.
+Other limits:
 
-For explicit FTPS, add `--protocol ftps` to the command. For implicit FTPS,
-add `--protocol ftps --ftps-mode implicit`. Either accepts a custom `--port`.
-FTPS requires encryption for both connections and verifies the server's
-certificate and hostname; it fails if TLS is unavailable or verification fails.
-On macOS and Windows, verification uses native certificate trust; Linux uses
-the CA bundle detected when building libcurl.
-Use `--cacert /path/to/ca.pem` to trust a private CA for this transfer.
-In the GUI, choose **FTP**, **FTPS (explicit)**, or **FTPS (implicit)**, or **SFTP** from
-**Protocol** before Host. FTP remains the default. Changing protocol updates
-port 21/990/22 when it is still the previous default; custom ports are preserved.
-Memory Save/Recall includes the protocol. The GUI uses the system CA trust
-above; private CA files can be supplied through the CLI's `--cacert` option.
+- ZIP and 7z entries using Deflate64 are unsupported.
+- Old-style spanned ZIP sets (`.z01`, `.z02`, …) are unsupported.
+- Standalone compressed files such as `file.gz` are unsupported; compressed tar
+  archives such as `files.tar.gz` are supported.
+- Symbolic links, hard links and file references are skipped with a warning.
+- Tar, exFAT, unsigned PFS and UFS have no complete file-data checksum. Uploads
+  from these formats include a verification warning.
 
-For SFTP, use `--protocol sftp`. Authentication is limited to passwords and
-private keys; SSH agents, keyboard-interactive login and SSH configuration files
-are not used. `--password` is the account password and
-`--private-key-passphrase` is a separate key passphrase. RSA, ECDSA and Ed25519
-OpenSSH keys are supported, including encrypted keys and keys without a `.pub`
-file. FTP's existing skip, resume, replacement and partial-file cleanup behavior
-also applies to SFTP.
+## Connections
+
+| Protocol | Default port | CLI selection |
+|---|---|---|
+| **FTP** | 21 | `--protocol ftp` (default) |
+| **FTPS (explicit)** | 21 | `--protocol ftps` |
+| **FTPS (implicit)** | 990 | `--protocol ftps --ftps-mode implicit` |
+| **SFTP** | 22 | `--protocol sftp` |
+
+FTP is unencrypted. Both FTPS modes encrypt the connection and verify the
+server certificate and hostname. Use `--cacert` in the CLI for a private CA.
+FTP and FTPS use passive mode by default; active mode is also available.
+
+SFTP supports password authentication and RSA, ECDSA or Ed25519 OpenSSH private
+keys, including encrypted keys. Host-key verification is optional: configure
+**SSH settings** in the app or `--known-hosts` in the CLI. Without that setting,
+any host key is accepted. SSH agents, keyboard-interactive authentication and
+SSH configuration files are not used.
+
+Two optional FTP/FTPS settings can improve transfer speed on compatible servers:
+
+- **Block mode (MODE B)** keeps data connections open between files, reducing
+  overhead for archives with many small files. Enable it in the app's **Server**
+  settings or with `--mode-b`.
+- **FTPMC** sends each file over several parallel data connections. Enable it
+  under **Advanced** or with `--ftp-mc N`. It requires passive mode.
+
+Both are off by default and fall back to a normal connection with a warning if
+the server refuses them. Neither applies to SFTP.
+
+## Transfer behaviour
+
+Files already on the server are handled by **name and size**:
+
+| Remote file | Action |
+|---|---|
+| Same size | Skip it as complete. |
+| Smaller | Keep its existing bytes and append the remaining data. |
+| Larger | Delete it and upload from the beginning. |
+| Missing or size unavailable | Upload from the beginning, replacing any existing file. |
+
+**Existing contents are trusted without comparison.** A file with the right
+size is skipped even if its contents differ. Re-running a transfer uses the same
+rules to skip completed files and resume partial ones.
+
+Folders, including empty ones, are preserved. An **Extraction Root** uploads
+only a selected folder's contents, without that folder's path prefix. For
+example, choosing `b` uploads `b/xyz.bin` as `xyz.bin` in the destination.
+
+Connection and upload failures get up to **3 attempts** by default. Change
+**Upload attempts** in the app or use `--retries N`; `1` disables retries.
+A source error, cancellation or exhausted attempts stops that archive and
+removes the incomplete remote file.
+
+### Staging
+
+Set a **Staging directory** (`--staging DIR`) to upload and resume there first.
+After the entire archive succeeds, its files move to the destination, replacing
+matching destination files. Unrelated files are kept. Leave staging empty to
+upload directly to the destination.
+
+An existing staging copy takes priority for skip and resume checks. If there
+is no staging copy, a destination file of the expected size is skipped.
+The staging directory must differ from the destination and cannot contain it.
+The server must support renaming between the two locations, normally on the
+same filesystem.
+
+If moving files fails or is cancelled, files already moved stay in the
+destination and the rest stay in staging. Re-run the transfer to continue.
+
+## Command line
+
+Upload an archive over FTP:
+
+```bash
+sext --file archive.rar --host ftp.example.com \
+     --user username --directory /uploads --mkdir
+```
+
+The command prompts for the FTP login password. Add `--protocol ftps` for
+explicit FTPS, or use SFTP with a private key:
 
 ```bash
 sext --file backup.zip --host example.com --protocol sftp \
-     --private-key ~/.ssh/id_ed25519 --known-hosts ""
+     --private-key ~/.ssh/id_ed25519 --known-hosts "" --directory /uploads
 ```
 
-In the GUI, select **SFTP** and open **SSH settings** for the private key,
-passphrase and optional known-hosts verification. An empty username uses the
-current local username. Memory stores the key and known-hosts paths; passwords
-and key passphrases are saved only with the existing consent to store credentials.
+The full-screen interface shows progress, speeds and estimated time remaining.
+Use `--no-tui` for plain log output; this is automatic outside a terminal.
+Cancel with `q`, `Esc` or `Ctrl-C`.
 
-The interface shows a fixed log panel, the progress of the current file and of
-the whole archive with their ETAs (for a compressed tar, by how much of the
-archive has been read), the upload and decompression speeds, and how full the
-buffer is (a full buffer usually means the network is the bottleneck; an empty
-one can mean slower decompression or the per-file overhead of many small files).
-**Cancel** with `q`, `Esc` or `Ctrl-C` (or `SIGINT`/`SIGTERM` in plain
-mode).
+| Option | Description |
+|---|---|
+| `--file PATH` | Archive or filesystem image; first volume for a split archive. Required. |
+| `--host HOST` | Server name or IP address, without a URL scheme or path. Required. |
+| `--protocol ftp\|ftps\|sftp` | Transfer protocol. Default: `ftp`. |
+| `--ftps-mode explicit\|implicit` | FTPS mode. Default: `explicit`. Requires `--protocol ftps`. |
+| `--port PORT` | Override the protocol's default port. |
+| `--user NAME` | Login name. Default: anonymous for FTP/FTPS, local username for SFTP. |
+| `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
+| `--directory DIR` | Destination, absolute or relative to the login directory. Default: login directory. |
+| `--mkdir` | Create missing destination and staging directories; their parents must exist. |
+| `--staging DIR` | Upload here, then move files to the destination after the archive succeeds. |
+| `--archive-password PASSWORD` | Archive password; prompted for when needed. |
+| `--extraction-root DIR` | Upload only this archive folder's contents. Use a relative path such as `b/c`, without a leading `/`; omit for the whole archive. |
+| `--private-key PATH` | SFTP private key. Without a password or selected key, keys in `~/.ssh` are tried. |
+| `--private-key-passphrase PASSPHRASE` | Encrypted SFTP key passphrase, separate from the login password; never prompted. |
+| `--known-hosts PATH` | SFTP host-key verification file. `""` uses `~/.ssh/known_hosts`; omitted accepts any host key. |
+| `--cacert PATH` | PEM CA certificate file for FTPS. |
+| `--mode passive\|active` | FTP/FTPS connection mode. Default: `passive`. |
+| `--mode-b` | Enable FTP/FTPS block mode. |
+| `--ftp-mc N` | Parallel passive FTP/FTPS data connections per file: 1–64; `0` disables (default). |
+| `--ftp-mc-stripe BYTES` | FTPMC stripe size; `0` uses the server default. Maximum: 4294967295, or 2147483647 on Windows. |
+| `--buffer MIB` | Memory buffer in MiB: 1–4096. Default: `64`. |
+| `--retries N` | Total connection/login and per-file upload attempts. Default: `3`. |
+| `--no-tui` | Plain log output. |
+| `--verbose` | Detailed connection and protocol logging; credentials are masked. |
+| `--help` / `--version` | Show options or version. |
 
 Exit codes: `0` success, `1` error, `2` invalid command line, `130` cancelled.
 
-### Install the command line
+## Building from source
 
-| Platform | Asset |
-|---|---|
-| Windows (x64) | `streamextract-cli-windows-x64.rar` |
-| macOS (Intel and Apple Silicon) | `streamextract-cli-macos-universal.rar` |
-| Linux (x64, glibc 2.35+) | `streamextract-cli-linux-x64.rar` |
-| Linux (arm64, glibc 2.35+) | `streamextract-cli-linux-arm64.rar` |
-
-Each archive holds the `sext` executable, `LICENSE`, `README.md` and
-`THIRD_PARTY_NOTICES.md`. The executables are statically linked and need no
-other installation.
-
-#### Windows
-
-1. Extract `streamextract-cli-windows-x64.rar` into `C:\StreamExtract`, so that the
-   result is `C:\StreamExtract\sext.exe`.
-
-2. Run it from a terminal:
-
-   ```powershell
-   C:\StreamExtract\sext.exe --version
-   ```
-
-The binary is not code-signed, so if it does not start at all, check whether
-your antivirus quarantined it.
-
-#### macOS
-
-Release builds are signed with a Developer ID and notarized by Apple. Extract
-the archive into a directory of its own and install it:
-
-```bash
-sudo install -d /usr/local/bin
-sudo install -m 755 sext /usr/local/bin/sext
-sext --version
-```
-
-#### Linux
-
-```bash
-unrar x streamextract-cli-linux-x64.rar sext/        # or: 7z x -osext streamextract-cli-linux-x64.rar
-sudo install -m 755 sext/sext /usr/local/bin/sext
-sext --version
-```
-
-Without root, install it into a directory in your `PATH` instead, for example
-`install -D -m 755 sext/sext ~/.local/bin/sext`. The binary is built on
-Ubuntu 22.04, so it runs on distributions with glibc 2.35 or newer; libstdc++
-is linked statically.
-
-## How it works
-
-```mermaid
-flowchart LR
-    subgraph extractor["extractor thread"]
-        dec["UnRAR RAR_TEST / 7-Zip / libarchive<br/>(checks CRC/BLAKE2, CRC-32)"]
-    end
-    buf[("bounded buffer<br/>(64 MiB by default)")]
-    subgraph uploader["uploader thread"]
-        stor["libcurl STOR / APPE<br/>(one control connection)"]
-    end
-    dec -->|"1 MiB blocks"| buf --> stor
-```
-
-RAR archives are read with UnRAR's test mode, 7z archives with 7-Zip's own
-code (its LZMA SDK), ZIP and tar archives with libarchive, and exFAT volume
-images with [FatFs](https://elm-chan.org/fsw/ff/). Contents are read in memory,
-without creating local files, and go into the buffer, which the FTP upload drains.
-Unsigned PlayStation PFS images use a built-in reader and zlib for PFSC blocks;
-UFS uses a built-in reader based on FreeBSD's on-disk layouts.
-A file only counts as uploaded after its checksum was confirmed (tar, exFAT,
-unsigned PFS and UFS have no complete checksum of each file,
-see below). On an upload failure, the engine verifies the remaining source data,
-checks the remote size, and rereads the entry to resume from that offset. Retries
-use a separate bounded queue of at most 1 MiB so that they can proceed even when
-the normal buffer is full of subsequent files. Solid archives and compressed tar
-may need to decompress earlier entries again. Extraction reads ahead across file
-boundaries; the queue also limits pending messages to bound memory for tiny and
-empty files. A source error, cancellation, or exhausted
-upload attempts removes the incomplete remote file.
-
-The command line links this engine statically. The app uses it through a
-shared library (`libstreamextractcore`, C API in `src/capi/streamextract.h`).
-
-Behaviour, in both:
-
-- **Files already on the server** are checked by name and size. A larger
-  remote file is deleted before uploading the archive member from the beginning.
-  An equal-size file is considered uploaded and skipped. A smaller remote file
-  is considered incomplete: its existing bytes are kept and only the remaining
-  bytes are appended. Existing contents are trusted without comparison. Missing
-  files are uploaded from the beginning; if the server cannot report a file's
-  size, it is overwritten from the beginning. Progress and upload totals count
-  only the bytes sent in this run. With the PS4/PS5
-  [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv) payload, its SELF to ELF
-  conversion is turned off before sizes are checked, so that SELF files report
-  the size stored on the console.
-- **Directories** of the archive, including empty ones, are created.
-- **Extraction root** selects a directory inside the archive or filesystem image.
-  For example, `--extraction-root b --directory /remote/dest` uploads `b/xyz.bin`
-  as `/remote/dest/xyz.bin`, excluding entries outside `b`. Nested directories
-  and empty folders inside the selection are preserved. Names are case-sensitive;
-  a missing directory is an error. The root is written relative to the archive
-  root: `b` and `b/c` are valid, while `/b` and `/b/c` are rejected; the archive
-  root itself is an empty value (or omitting the option). In the GUI, use a file's **… → Select Extraction
-  Root** menu to browse its folders independently. Its selected root appears on
-  the file's row; choose the archive root (`/`) to
-  upload all contents. Browsing a compressed tar reads through it once;
-  specifying the root directly in the CLI keeps the normal single-pass transfer.
-- **Modification times** are preserved with `MFMT` (or vsftpd's `MDTM` form)
-  when the server allows it.
-- **RAR**: multi-volume, solid and encrypted (`-p`, `-hp`) archives, in every
-  format UnRAR reads (RAR 5.x and older).
-- **ZIP**: Stored, Deflate, BZip2, LZMA, XZ, Zstandard and PPMd entries, Zip64
-  (files and archives over 4 GiB), traditional (ZipCrypto) and AES encryption, and
-  archives split into numbered parts (`.zip.001`, `.zip.002`, ...). A wrong
-  password is detected while reading the archive, before anything is sent. Names
-  without the UTF-8 flag are read as UTF-8 when they are valid UTF-8 (macOS
-  writes them like that), otherwise as code page 437, the format's default.
-- **7z**: LZMA, LZMA2, PPMd, BZip2, Deflate and Zstandard with their filters
-  (BCJ, BCJ2, ARM64, Delta, ...), solid archives, archives split into numbered
-  parts (`.7z.001`, ...) and archives with a password (AES-256), also with
-  encrypted file names (`-mhe`). A wrong password is detected while reading the
-  archive (by decrypting the names, or the start of the first file), before
-  anything is sent; if the first encrypted file is larger than 4 MiB and stored
-  without compression (or only filtered), that cannot be proven up front, a
-  warning says so, and a wrong password is only found when that file ends. They are read with 7-Zip's own code; BZip2, Deflate and
-  Zstandard, which 7-Zip's SDK does not include, are decoded with the libraries
-  libarchive uses too (bzip2, zlib and Zstandard).
-- **tar**, every variant libarchive reads (POSIX, GNU, pax, old Unix ones),
-  plain or compressed with gzip (`.tar.gz`, `.tgz`), bzip2 (`.tar.bz2`), xz
-  (`.tar.xz`), lzma (`.tar.lzma`), Zstandard (`.tar.zst`) or LZ4 (`.tar.lz4`),
-  also split into numbered parts (`.tar.001`, `.tar.gz.001`, ...). The format
-  has **no checksum of the file contents**, only of its headers, so these files
-  are uploaded without verification; a warning says so (gzip, xz, Zstandard and
-  LZ4 check their own data, but over the whole stream or large blocks, not per
-  file). Names without a pax header are read as UTF-8 when valid, otherwise as
-  Latin-1.
-- **Compressed tar is read once, as it is uploaded.** Its files can only be
-  reached by decompressing everything before them, so instead of listing the
-  archive first, StreamExtract plans each file when it reaches it and checks the
-  server just before sending it, using the same size rules. Complete files and
-  existing prefixes of incomplete files are decompressed and dropped; only the
-  remaining bytes are sent. There are no totals until the end: the progress
-  and the ETA of the whole archive come from how much of the archive file has
-  been read.
-- **exFAT**: a single raw volume image (`.exfat`), such as one formatted with
-  `mkfs.exfat`, or created with `hdiutil` using `-layout NONE -format UDRW`.
-  The volume starts at byte zero; disk images with a partition table (even a
-  single partition), split images, compressed and encrypted containers are
-  rejected. No OS mount or administrator permissions are needed to read it.
-  FatFs reads contiguous and fragmented files, Unicode names and file sizes
-  over 4 GiB. Directory structure, empty directories and re-run behaviour are
-  the same as for archives: contents go directly into the chosen FTP directory.
-  Boot and directory metadata checksums are checked, but exFAT has **no checksum
-  of the file contents**, so uploads carry the same warning as tar. Uninitialized
-  file data is returned as zeroes. FatFs supports one FAT, a contiguous allocation
-  bitmap in the first root-directory cluster, at least 256 data clusters, and at
-  most 32768 sectors per cluster; volumes outside these limits are rejected.
-- **PlayStation PFS**: unsigned PS4/PS5 images produced by
-  [MkPFS](https://github.com/PSBrew/MkPFS), including `.ffpfsc` and `.ffpfs`,
-  with 32-bit contiguous inodes and 4–64 KiB filesystem blocks. Both raw files
-  and PFSC files containing a mix of zlib-compressed and raw 64 KiB blocks are
-  supported. A PFS containing a single exFAT, UFS or PFS image is automatically
-  opened to upload the files inside it, directly into the chosen directory.
-  Nested wrappers are decoded on demand with bounded caches; decoded blocks are
-  allocated only as needed, while the block-offset page and zlib decoder are reused.
-  No temporary image
-  or OS mount is needed. Other single-file payloads are uploaded as ordinary files.
-  Signed, encrypted and 64-bit-inode PFS images, and split images, are rejected.
-  Compressed blocks are checked by zlib, but unsigned PFS and raw PFSC blocks
-  have no complete file checksum, so uploads include the same warning as tar.
-- **UFS**: raw UFS1/UFS2 volumes (`.ufs`, `.ffpkg`) in either byte order,
-  including those wrapped in PFS/PFSC. Direct, single-, double- and triple-indirect
-  blocks and sparse holes are supported. Superblock and inode checksums are verified when
-  present; UFS has no file-data checksum. Links and special files are skipped
-  by the existing planner. Partition tables and split images are not supported.
-- The **format** is recognized by the content of the file, not by its extension.
-- **Names** of ZIP and tar archives are uploaded as Unicode NFC, the same
-  whatever system runs StreamExtract; RAR, 7z, exFAT, PFS and UFS names are uploaded as the archive
-  stores them.
-- **Paths are sanitized** like UnRAR does: `..` components, absolute paths and
-  control characters never escape the destination directory.
-- **Connection and upload failures**: the initial connection/login and each file
-  upload get up to 3 attempts (including the first), immediately reconnecting
-  or resuming from the size stored on the server. Change this with `--retries N`
-  in the CLI or **Upload attempts** under *Advanced* in the GUI. Same-size files
-  are considered complete, larger files
-  are deleted first, and missing files or files with unknown sizes are uploaded
-  from the beginning, following the usual remote-size policy.
-- **Fail-fast**: a checksum error, a missing volume, cancellation, or exhausting
-  the upload attempts stops the transfer and removes the incomplete remote file.
-
-Existing FTP/FTPS files are checked with exact binary `SIZE` queries. After the
-first query establishes binary mode, later checks omit the redundant `REST 0`
-range-support query. Directory listings and reconnections reestablish that mode;
-servers with non-standard size replies retain the native query behavior.
-
-### Not supported yet
-
-Symbolic links, hard links and file references (`rar -oi`) are skipped with a
-warning, since FTP cannot create links.
-
-Also not supported, with an explicit error: 7z archives compressed with
-Deflate64 (reported while reading the archive, before anything is sent), ZIP
-entries compressed with Deflate64 (which
-Windows Explorer uses for large files), old-style spanned ZIP archives (`.z01`,
-`.z02`, ..., `.zip`) and single compressed files that are not tar archives
-(a plain `.gz`).
-
-## Building
-
-To update the project version everywhere (including the GUI and API examples),
-run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchanged.
-
-Requirements: a C++17 compiler, CMake 3.21+, Perl and Make (NMake in a Visual Studio developer environment on Windows). An FTP/FTPS/SFTP libcurl is always
-built from pinned sources and linked statically, so its features are consistent
-across platforms. It is our fork of curl 8.23.0,
-[curl-streamextract](https://github.com/RuiNelson/curl-streamextract), which adds
-FTPMC parallel data connections, FTP block mode and a few SSH fixes.
-UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
-the other libraries are fetched by CMake.
-libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
-LZ4) are built from source as static libraries during the
-first build (`cmake/LibArchive.cmake`), which therefore takes a few minutes
-longer.
-OpenSSL 3.5.9 and libssh2 1.11.1 are fetched from pinned sources and linked
-statically on every platform. OpenSSL supplies FTPS and SSH cryptography, and
-also supports encrypted ZIP files on Linux. The GUI core embeds these same
-static libraries; no system libcurl or OpenSSL is needed for transfers.
-
-The UnRAR sources are not part of this repository (they have their own
-license) and must be extracted into `unrarsrc/`:
-
-```bash
-curl -LO https://www.rarlab.com/rar/unrarsrc-7.3.1.tar.gz
-mkdir unrarsrc && tar -xzf unrarsrc-7.3.1.tar.gz -C unrarsrc --strip-components=1
-```
-
-CMake builds a private copy with a small patch (`cmake/UnRARPatches.cmake`) so
-that an archive cut short inside a header is reported as truncated instead of
-ending early. The downloaded sources are unchanged.
-
-7-Zip's [LZMA SDK](https://www.7-zip.org/sdk.html), which reads the 7z
-archives, is not part of the repository either; extract it into `lzmasdk/`, with
-bsdtar (the `tar` of macOS) or 7-Zip:
-
-```bash
-curl -LO https://github.com/ip7z/7zip/releases/download/26.03/lzma2603.7z
-mkdir lzmasdk && tar -xf lzma2603.7z -C lzmasdk    # or: 7z x -olzmasdk lzma2603.7z
-```
-
-[FatFs R0.16](https://elm-chan.org/fsw/ff/), the exFAT reader, is also supplied
-manually, from its author's website (there is no official GitHub repository):
-
-```bash
-curl -LO https://elm-chan.org/fsw/ff/arc/ff16.zip
-mkdir fatfs && unzip ff16.zip -d fatfs    # or: 7z x -ofatfs ff16.zip
-```
-
-The zip's SHA-256 is
-`99f7dc1f7e095356e4a9e3dbe29959090d8b948afe2bbc5441e52fdf4b85449e`.
-CMake builds a private copy with a read-only exFAT configuration, UTF-8 names
-and the official R0.16 patches 1 and 2. The downloaded sources are unchanged,
-and CMake does not download FatFs.
-
-### Command line
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-The binary is `build/sext`. UnRAR, the LZMA SDK, FatFs, libarchive and libcurl are always
-linked statically into it.
-
-### Desktop app
-
-Besides the above, install Rust ([rustup](https://rustup.rs)) and the Tauri
-CLI:
-
-```bash
-cargo install tauri-cli --version "^2" --locked
-```
-
-To build manually, run these commands from the repository root:
-
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTREAMEXTRACT_BUILD_LIBRARY=ON
-cmake --build build
-
-cd gui
-cargo tauri build     # macOS: src-tauri/target/release/bundle/macos/StreamExtract.app
-cargo tauri dev       # or: run the app without bundling it
-```
-
-The library is `build/libstreamextractcore.dylib` (`.so` on Linux, `streamextractcore.dll` on
-Windows). UnRAR, the LZMA SDK, FatFs, libarchive, libcurl and {fmt} are linked
-statically into it, and it exports only the `streamextract_*` functions of
-`src/capi/streamextract.h`; the `sext` executable does not use it. The GUI's core
-library includes libcurl and does not depend on a system libcurl.
-
-On Linux `cargo tauri build` makes an AppImage; on Windows use
-`cargo tauri build --no-bundle` and keep `streamextractcore.dll` next to
-`src-tauri/target/release/StreamExtract.exe` (the build copies it there). Linux
-needs the WebKitGTK development packages that Tauri documents in its
-[prerequisites](https://v2.tauri.app/start/prerequisites/#linux); on
-Debian/Ubuntu, for example:
-
-```bash
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev \
-                 libayatana-appindicator3-dev librsvg2-dev
-```
-
-The Rust build looks for the library in `build/` (and `build/Release`); set
-`STREAMEXTRACT_LIB_DIR` to the directory that holds it to use another build directory.
-The bundling settings (`gui/src-tauri/tauri.<os>.conf.json`) also name the
-library under `../../build/`, so with another directory override that path too,
-with the Tauri CLI's `--config` (a JSON merge into its configuration, handed to
-the build script as well). On macOS:
-
-```bash
-STREAMEXTRACT_LIB_DIR=/path/to/dir cargo tauri build \
-    --config '{"bundle":{"macOS":{"frameworks":["/path/to/dir/libstreamextractcore.dylib"]}}}'
-```
-
-A macOS app built from source is signed ad hoc, not notarized, so Gatekeeper
-blocks it once it has been copied to another Mac. Remove the quarantine
-attribute there to open it:
-
-```bash
-xattr -dr com.apple.quarantine StreamExtract.app
-```
-
-### Continuous integration
-
-Developed and tested on macOS. The GitHub Actions workflow
-(`.github/workflows/ci.yml`) builds and runs the unit tests on Linux (x64 and
-arm64), macOS (universal) and Windows (x64); integration tests run only
-locally. libcurl is always built from source and linked statically (Windows
-does not ship it), and the workflow produces one `.rar` per platform, for the
-command line and for the app. The macOS release assets are then signed
-and notarized before they are published.
-
-## Testing
-
-Unit tests:
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-End-to-end tests upload archives created with RARLAB's `rar`, Python's
-`zipfile` and `tarfile`, 7-Zip and Info-ZIP's `zip` to the shared Docker server
-in [`tests/docker`](tests/docker/README.md)
-and compare what arrives, byte by byte. They need Docker, `rar` and Python 3.9+
-(standard library only). Archives that cannot be made are skipped: those that
-need 7-Zip (`7zz`, found in `PATH` or given with `--7z`), Info-ZIP's `zip`, the
-`lz4` command (for `.tar.lz4`) or Python 3.14+ (for Zstandard):
-
-```bash
-python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --7z /path/to/7zz
-```
-
-All integration runners automatically build the same pinned Docker image and
-remove their containers on exit. `ftps.py` tests real FTP, explicit FTPS and
-implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
-to run the same cases through the core API used by the GUI. `sftp.py` covers
-SFTP authentication, host verification and file transfer behavior. `ftp_faults.py`
-tests resume, retry and cancellation using controlled scenarios in that image,
-block mode (`--mode-b`), and FTPMC (`--ftp-mc`, including FTPS) against servers that support or refuse them:
-
-```bash
-python3 tests/integration/ftps.py --sext build/sext
-python3 tests/integration/sftp.py --sext build/sext --lib build/libstreamextractcore.dylib
-python3 tests/integration/ftp_faults.py --sext build/sext --lib build/libstreamextractcore.dylib
-python3 tests/integration/run.py --sext build/sext --lib build/libstreamextractcore.dylib -k pfs
-python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol sftp
-python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps
-python3 tests/integration/run.py --sext build/sext --rar /path/to/rar --protocol ftps --ftps-mode implicit
-```
-
-The PFS-only run (`-k pfs`) uses checked-in MkPFS and makefs fixtures and needs
-no external archiver. It checks PFS, PFSC, wrapped exFAT/UFS images and nested
-wrappers through both the CLI and C API, including re-runs, resume and replacement.
-
-To register the Docker suites with CTest, configure with
-`-DSTREAMEXTRACT_BUILD_INTEGRATION_TESTS=ON` (and
-`-DSTREAMEXTRACT_BUILD_LIBRARY=ON` for the fault suite). The normal unit and
-C API smoke tests do not require Docker; CI runs only those unit-level tests.
-
-`--big` adds a 4.5 GiB file. Active mode is only tested on Linux, where the
-container address is reachable directly; Docker Desktop only publishes ports.
-
-With the library built (`-DSTREAMEXTRACT_BUILD_LIBRARY=ON`), `ctest` also runs a
-smoke test of its C API, and `--lib` adds tests that drive the library the way
-the app does (through its C API, with `ctypes`): uploads, re-runs, multi-volume
-and encrypted archives, ZIP, 7z and compressed tar, the password prompt, errors
-and cancelling, checking the JSON state at every poll. They are
-named `lib_*`:
-
-```bash
-python3 tests/integration/run.py --sext build/sext --rar /path/to/rar \
-        --lib build/libstreamextractcore.dylib -k lib_
-```
-
-The Rust side has its own unit tests, which link the built library:
-`cargo test --manifest-path gui/src-tauri/Cargo.toml`.
-
-## Libraries
-
-| Library | Use | License |
-|---|---|---|
-| [UnRAR](https://www.rarlab.com/rar_add.htm) | RAR decompression | UnRAR license (freeware) |
-| [LZMA SDK](https://www.7-zip.org/sdk.html) | 7z reading (7-Zip's own code) | Public domain |
-| [FatFs](https://elm-chan.org/fsw/ff/) | exFAT volume image reading | FatFs license (BSD-style) |
-| [FreeBSD UFS layouts](https://cgit.freebsd.org/src/tree/sys/ufs) | UFS volume image reading | BSD-2-Clause and BSD-3-Clause |
-| [libarchive](https://www.libarchive.org) | ZIP and tar reading, recognizing 7z | BSD-2-Clause |
-| [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive, PFSC, and BZip2, Deflate and Zstandard in 7z | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
-| [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
-| [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
-| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client ([our fork](https://github.com/RuiNelson/curl-streamextract) of 8.23.0 with FTPMC and FTP block mode) | curl (MIT/X derivative) |
-| [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
-| [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
-| [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |
-| [doctest](https://github.com/doctest/doctest) | Unit tests | MIT |
-| [Tauri](https://tauri.app) | Desktop app (app only), with its Rust dependencies | MIT or Apache-2.0 |
+See the [build and test guide](https://github.com/RuiNelson/streamextract/blob/main/docs/building.md)
+for dependencies, compilation and tests.
 
 ## License
 
-This project is licensed under the MIT license (see `LICENSE`). Binaries also
-contain UnRAR, whose license allows free use in any software handling RAR
-archives but forbids using its code to re-create the RAR compression
-algorithm, 7-Zip's LZMA SDK (public domain), and libarchive with the libraries
-above; see
-`THIRD_PARTY_NOTICES.md`, which also covers what only the app contains (Tauri
-and its Rust dependencies).
+StreamExtract is licensed under [MIT](LICENSE). Bundled libraries have their
+own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including the
+UnRAR restriction against recreating the RAR compression algorithm.

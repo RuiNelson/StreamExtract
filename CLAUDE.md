@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build and test
 
-UnRAR sources are **not in the repo** (license) and must exist in `unrarsrc/` (gitignored) or CMake fails at configure time; the same for 7-Zip's LZMA SDK in `lzmasdk/` (a `.7z`, extracted with bsdtar or 7-Zip; the user wants it fetched by hand like UnRAR, not by CMake). FatFs R0.16 must likewise be downloaded manually from elm-chan.org into `fatfs/` (gitignored); CMake builds a read-only copy with the official patches in the build directory. The exact commands are in `README.md`.
+UnRAR sources are **not in the repo** (license) and must exist in `unrarsrc/` (gitignored) or CMake fails at configure time; the same for 7-Zip's LZMA SDK in `lzmasdk/` (a `.7z`, extracted with bsdtar or 7-Zip; the user wants it fetched by hand like UnRAR, not by CMake). FatFs R0.16 must likewise be downloaded manually from elm-chan.org into `fatfs/` (gitignored); CMake builds a read-only copy with the official patches in the build directory. The exact commands are in `docs/building.md`.
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # always builds and statically links FTP/FTPS libcurl from pinned sources

@@ -1,6 +1,6 @@
 # Builds 7-Zip's 7z decoder (static library) from the LZMA SDK in
 # ${PROJECT_SOURCE_DIR}/lzmasdk. The sources are NOT part of this repository;
-# see README.md for how to fetch them. LZMA SDK is placed in the public domain
+# see docs/building.md for how to fetch them. LZMA SDK is placed in the public domain
 # by Igor Pavlov.
 #
 # Only what reading 7z needs: the C++ archive code (headers and folder
