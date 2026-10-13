@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -19,6 +20,13 @@ enum class FtpsMode { Explicit, Implicit };
 
 inline bool is_ssh(FtpProtocol protocol) { return protocol == FtpProtocol::Sftp; }
 
+constexpr unsigned kMaxFtpMcConnections = 64;
+// The curl option takes a long, which is 32 bits on Windows.
+constexpr uint32_t kMaxFtpMcStripe = static_cast<uint32_t>(
+    static_cast<uint64_t>(std::numeric_limits<long>::max()) < UINT32_MAX
+        ? static_cast<uint64_t>(std::numeric_limits<long>::max())
+        : UINT32_MAX);
+
 struct FtpConfig {
   std::string host;
   int port = 21;
@@ -29,6 +37,8 @@ struct FtpConfig {
   // connection carries many files. Off: MODE is never sent. On: stream mode if the server refuses it.
   // Unused for SFTP.
   bool mode_b = false;
+  unsigned ftp_mc_connections = 0;  // 0: off; 1-64: parallel passive FTP/FTPS data connections.
+  uint32_t ftp_mc_stripe = 0;       // Bytes per stripe; 0: use the server's size. Ignored for SFTP/active mode.
   std::optional<std::string> ca_certificate;
   std::string user;  // Empty: anonymous login.
   std::string password;

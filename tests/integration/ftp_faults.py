@@ -788,6 +788,149 @@ class FtpFaultTests(FtpTestCase):
                         self.assertEqual(server.files["/upload/" + name], contents)
 
 
+class FtpMcTests(FtpTestCase):
+    """The same bounded archive stream over FTPMC, through the CLI and the GUI's C API."""
+
+    def transfer(self, frontend, archive, server, *, mode_b=False, stripe=4096, ftps=None):
+        if frontend == "library":
+            options = {"ftp_mc_connections": 4, "ftp_mc_stripe": stripe, "mode_b": mode_b}
+            if ftps:
+                options.update(protocol="ftps_" + ftps, ca_certificate=str(CA_CERTIFICATE))
+            with self.job(archive, server, **options) as job:
+                job.wait(timeout=30)
+            self.assertEqual(job.result["status"], "success", job.describe())
+            return lib_log_text(job)
+        arguments = ["--ftp-mc", "4", "--ftp-mc-stripe", str(stripe)]
+        if mode_b:
+            arguments += ["--mode-b"]
+        if ftps:
+            arguments += ["--protocol", "ftps", "--ftps-mode", ftps, "--cacert", str(CA_CERTIFICATE)]
+        result = self.cli(archive, server, *arguments)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result.stdout + result.stderr
+
+    def test_disabled_by_default(self):
+        archive = self.archive([("hello.txt", b"hello")])
+        for frontend in ("library", "cli"):
+            with self.subTest(frontend=frontend), FtpServer(mc_max=3) as server:
+                if frontend == "library":
+                    with self.job(archive, server) as job:
+                        job.wait(timeout=30)
+                    self.assertEqual(job.result["status"], "success", job.describe())
+                else:
+                    result = self.cli(archive, server)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(any(cmd in ("FEAT", "MPSV") or arg.startswith("MC ")
+                                     for cmd, arg in server.commands), server.commands)
+
+    def test_stream_and_block_uploads_with_server_limits(self):
+        entries = [(f"file-{size}.bin", (bytes(range(251)) * ((size + 250) // 251))[:size])
+                   for size in (0, 1, 999, 1000, 1001, 3000, 3001, 65536, 301201)]
+        for streamed in (False, True):
+            archive = self.archive(entries, streamed=streamed)
+            for mode_b in (False, True):
+                for frontend in ("library", "cli"):
+                    with self.subTest(streamed=streamed, mode_b=mode_b, frontend=frontend), FtpServer(
+                            mc_max=3, mc_max_stripe=1000, mode_b=True) as server:
+                        log = self.transfer(frontend, archive, server, mode_b=mode_b, stripe=65536)
+                        self.assertEqual(server.files, {"/upload/" + name: data for name, data in entries})
+                        self.assertIn("FTPMC: 3 parallel data connection(s) per file", log)
+                        self.assertEqual([arg for cmd, arg in server.commands if cmd == "OPTS" and arg.startswith("MC")],
+                                         ["MC 3 65536"])
+                        commands = [cmd for cmd, _ in server.commands]
+                        self.assertEqual(commands.count("FEAT"), 1)
+                        self.assertEqual(server.data_connections, commands.count("MPSV") * 3)
+                        if mode_b:
+                            self.assertEqual(server.data_connections, 3)
+                        else:
+                            self.assertGreater(commands.count("MPSV"), 1)
+
+    def test_remote_size_policy_and_rerun(self):
+        source = bytes(range(251)) * 1201
+        entries = [("resume.bin", source), ("larger.bin", b"new"), ("same.bin", b"same"), ("empty.bin", b"")]
+        initial = {"/upload/resume.bin": source[:19], "/upload/larger.bin": b"oversized",
+                   "/upload/same.bin": b"same", "/upload/empty.bin": b""}
+        for streamed in (False, True):
+            archive = self.archive(entries, streamed=streamed)
+            for mode_b in (False, True):
+                for frontend in ("library", "cli"):
+                    with self.subTest(streamed=streamed, mode_b=mode_b, frontend=frontend), FtpServer(
+                            mc_max=3, mode_b=True, files=initial) as server:
+                        self.transfer(frontend, archive, server, mode_b=mode_b)
+                        self.assertEqual(server.files, {"/upload/" + name: data for name, data in entries})
+                        self.assertIn(("APPE", "/upload/resume.bin", source[19:]), server.uploads)
+                        self.assertIn("/upload/larger.bin", server.deleted)
+                        self.assertEqual(len(server.uploads), 2)
+                        self.transfer(frontend, archive, server, mode_b=mode_b)
+                        self.assertEqual(len(server.uploads), 2)
+
+    def test_refusal_falls_back_to_one_connection(self):
+        archive = self.archive([("a.txt", b"a"), ("b.bin", bytes(range(251)) * 800)])
+        for options in ({"mc_max": 0}, {"mc_max": 3, "mc_opts_refusal": "502 No MC"},
+                        {"mc_max": 3, "mc_mpsv_refusal": "502 No MPSV"}):
+            for mode_b in (False, True):
+                for frontend in ("library", "cli"):
+                    with self.subTest(options=options, mode_b=mode_b, frontend=frontend), FtpServer(
+                            mode_b=True, **options) as server:
+                        log = self.transfer(frontend, archive, server, mode_b=mode_b)
+                        self.assertEqual(server.files["/upload/b.bin"], bytes(range(251)) * 800)
+                        self.assertEqual(log.count("the server did not accept FTPMC; using one data connection"), 1)
+                        self.assertEqual([cmd for cmd, _ in server.commands].count("FEAT"), 1)
+                        if mode_b and not options.get("mc_mpsv_refusal"):
+                            self.assertEqual(server.data_connections, 1)
+
+    def test_retry_reconnects_and_resumes(self):
+        source = bytes(range(251)) * 1500
+        archive = self.archive([("retry.bin", source)])
+        for mode_b in (False, True):
+            for frontend in ("library", "cli"):
+                with self.subTest(mode_b=mode_b, frontend=frontend), FtpServer(
+                        mc_max=3, mode_b=True, fail_uploads=1, drop_after=19) as server:
+                    self.transfer(frontend, archive, server, mode_b=mode_b)
+                    self.assertEqual(server.files["/upload/retry.bin"], source)
+                    self.assertIn(("APPE", "/upload/retry.bin", source[19:]), server.uploads)
+                    self.assertEqual([cmd for cmd, _ in server.commands].count("FEAT"), 2)
+
+    def test_exhausted_attempts_delete_the_partial_file(self):
+        archive = self.archive([("failed.bin", bytes(range(251)) * 1200)])
+        for mode_b in (False, True):
+            for frontend in ("library", "cli"):
+                with self.subTest(mode_b=mode_b, frontend=frontend), FtpServer(
+                        mc_max=3, mode_b=True, fail_uploads=1, drop_after=19) as server:
+                    if frontend == "library":
+                        with self.job(archive, server, retries=1, ftp_mc_connections=4, mode_b=mode_b) as job:
+                            job.wait(timeout=30)
+                        self.assertEqual(job.result["status"], "failed", job.describe())
+                    else:
+                        arguments = ["--ftp-mc", "4", "--retries", "1"] + (["--mode-b"] if mode_b else [])
+                        result = self.cli(archive, server, *arguments)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("/upload/failed.bin", server.deleted)
+                    self.assertNotIn("/upload/failed.bin", server.files)
+
+    def test_cancellation_deletes_the_partial_file(self):
+        archive = self.archive([("cancel.bin", bytes(range(251)) * 20000)])
+        for mode_b in (False, True):
+            with self.subTest(mode_b=mode_b), FtpServer(
+                    mc_max=3, mode_b=True, stall_upload_after=200000) as server:
+                with self.job(archive, server, ftp_mc_connections=4, mode_b=mode_b) as job:
+                    self.assert_cancelled(job, server)
+                self.assertIn("/upload/cancel.bin", server.deleted)
+                self.assertNotIn("/upload/cancel.bin", server.files)
+
+    def test_ftps_encrypts_every_data_connection(self):
+        archive = self.archive([("tls.bin", bytes(range(251)) * 1000), ("small.bin", b"small")])
+        for ftps in ("explicit", "implicit"):
+            for mode_b in (False, True):
+                for frontend in ("library", "cli"):
+                    with self.subTest(ftps=ftps, mode_b=mode_b, frontend=frontend), FtpServer(
+                            mc_max=3, mode_b=True, tls=True, implicit_tls=ftps == "implicit") as server:
+                        self.transfer(frontend, archive, server, mode_b=mode_b, ftps=ftps)
+                        self.assertEqual(server.files["/upload/tls.bin"], bytes(range(251)) * 1000)
+                        self.assertGreaterEqual(server.data_connections, 3)
+                        self.assertEqual(server.tls_data_connections, server.data_connections)
+
+
 class FtpModeBTests(FtpTestCase):
     """Block mode (--mode-b, C API mode_b): MODE B once per control connection, then one data connection kept
     open for every transfer; stream mode with a warning if the server refuses."""

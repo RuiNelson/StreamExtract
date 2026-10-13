@@ -84,6 +84,17 @@ mode (MODE B)** in the *Server* settings (saved with each server by Memory Save)
 If the server refuses it, a warning is logged and the upload continues in stream
 mode.
 
+FTPMC distributes **each file** across several parallel TCP data connections in
+passive FTP or FTPS. Enable it with `--ftp-mc 4`, or **Use FTPMC (parallel data
+connections)** under the app's **Advanced** settings. In the app, the connection
+count and stripe size are saved automatically in `preferences.yaml` and apply
+across servers. It is off by default. `--ftp-mc-stripe 65536` requests 64 KiB
+stripes; `0` uses the server's size (normally 4096 bytes). The server may reduce
+the requested connection count or stripe size. A server that does not support or
+refuses FTPMC uses one connection, with a warning. It works in both stream and
+block mode; block mode keeps the whole connection set between files. FTPS
+encrypts every data connection. SFTP and active FTP/FTPS ignore these settings.
+
 SFTP supports RSA, ECDSA and Ed25519 OpenSSH keys, including encrypted private
 keys. Host-key verification is optional: use `--known-hosts` in the CLI or
 **SSH settings** in the app. SSH agents, keyboard-interactive authentication
@@ -219,7 +230,9 @@ password-protected archives are supported:
 | `--port PORT` | Default `21`, `990` for implicit FTPS, or `22` for SFTP. |
 | `--cacert PATH` | PEM CA certificate file for FTPS servers using a private CA or self-signed certificate. Requires `--protocol ftps`. |
 | `--mode passive\|active` | FTP/FTPS data connection mode. Default `passive`; unused for SFTP. |
-| `--mode-b` | FTP/FTPS block mode (`MODE B`): one data connection stays open for all files instead of a new one per file. Off by default (`MODE` is never sent). If the server refuses it, a warning is logged and the upload continues in stream mode. Unused for SFTP. |
+| `--ftp-mc N` | FTPMC: distribute each file across N parallel passive FTP/FTPS data connections (1–64; 0 disables). Off by default. The server may lower N; unsupported or refused FTPMC falls back to one connection. Ignored for SFTP and active mode. |
+| `--ftp-mc-stripe BYTES` | FTPMC stripe size in bytes (0: server default; maximum 4294967295, or 2147483647 on Windows). The server may lower it. Ignored without `--ftp-mc`. |
+| `--mode-b` | FTP/FTPS block mode (`MODE B`): data connections stay open between files instead of opening new ones per file. Off by default (`MODE` is never sent). If the server refuses it, a warning is logged and the upload continues in stream mode. Unused for SFTP. |
 | `--user NAME` | Without it, FTP/FTPS uses anonymous login; SFTP uses the current local username. |
 | `--password PASSWORD` | Login password. FTP/FTPS requires `--user` and prompts if omitted; SFTP never prompts. |
 | `--private-key PATH` | SFTP private key. With neither a password nor a selected key, private keys in `~/.ssh` are tried. |
@@ -490,9 +503,8 @@ Behaviour, in both:
 
 ### Not supported yet
 
-Extracting only some files and several parallel connections. Symbolic links, hard links and
-file references (`rar -oi`) are skipped with a warning, since FTP cannot
-create links.
+Symbolic links, hard links and file references (`rar -oi`) are skipped with a
+warning, since FTP cannot create links.
 
 Also not supported, with an explicit error: 7z archives compressed with
 Deflate64 (reported while reading the archive, before anything is sent), ZIP
@@ -508,9 +520,9 @@ run `scripts/bump_version X.Y.Z` with Python 3. Dependency versions are unchange
 
 Requirements: a C++17 compiler, CMake 3.21+, Perl and Make (NMake in a Visual Studio developer environment on Windows). An FTP/FTPS/SFTP libcurl is always
 built from pinned sources and linked statically, so its features are consistent
-across platforms. It is our fork of curl 8.22.0,
+across platforms. It is our fork of curl 8.23.0,
 [curl-streamextract](https://github.com/RuiNelson/curl-streamextract), which adds
-FTP block mode and a few SSH fixes.
+FTPMC parallel data connections, FTP block mode and a few SSH fixes.
 UnRAR, the LZMA SDK and FatFs must be downloaded as described below;
 the other libraries are fetched by CMake.
 libarchive and the compression libraries it uses (zlib, bzip2, liblzma, Zstandard,
@@ -661,7 +673,7 @@ implicit FTPS uploads, plus certificate checks and TLS failures. Add `--lib`
 to run the same cases through the core API used by the GUI. `sftp.py` covers
 SFTP authentication, host verification and file transfer behavior. `ftp_faults.py`
 tests resume, retry and cancellation using controlled scenarios in that image,
-and block mode (`--mode-b`) against a server that supports or refuses `MODE B`:
+block mode (`--mode-b`), and FTPMC (`--ftp-mc`, including FTPS) against servers that support or refuse them:
 
 ```bash
 python3 tests/integration/ftps.py --sext build/sext
@@ -712,7 +724,7 @@ The Rust side has its own unit tests, which link the built library:
 | [zlib](https://zlib.net), [bzip2](https://sourceware.org/bzip2/), [liblzma](https://tukaani.org/xz/), [Zstandard](https://facebook.github.io/zstd/), [LZ4](https://lz4.org) | Decompression for libarchive, PFSC, and BZip2, Deflate and Zstandard in 7z | zlib, bzip2 (BSD-like), 0BSD, BSD-3-Clause, BSD-2-Clause |
 | [OpenSSL](https://openssl.org/) | FTPS and SSH cryptography; encrypted ZIP files on Linux | Apache-2.0 |
 | [libssh2](https://libssh2.org/) | SSH backend for libcurl SFTP | BSD-3-Clause |
-| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client ([our fork](https://github.com/RuiNelson/curl-streamextract) of 8.22.0 with FTP block mode) | curl (MIT/X derivative) |
+| [libcurl](https://curl.se/libcurl/) | FTP/FTPS/SFTP client ([our fork](https://github.com/RuiNelson/curl-streamextract) of 8.23.0 with FTPMC and FTP block mode) | curl (MIT/X derivative) |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Terminal interface (command line only) | MIT |
 | [CLI11](https://github.com/CLIUtils/CLI11) | Command line parsing (command line only) | BSD-3-Clause |
 | [{fmt}](https://github.com/fmtlib/fmt) | Formatting | MIT |

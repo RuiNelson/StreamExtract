@@ -106,6 +106,8 @@ struct FtpClient::Impl {
   // logged. Each new connection (seen by its 220 greeting) logs it again.
   bool transfer_mode_reported = false;
   bool mode_b_refusal_warned = false;
+  std::optional<long> mc_connections_reported;
+  bool mc_refusal_warned = false;
 
   // State of the request in progress, used by the callbacks.
   const ReadFn* read = nullptr;
@@ -138,6 +140,7 @@ struct FtpClient::Impl {
         }
         self->self_conversion = self->ftpsrv == Ftpsrv::Yes;
         self->transfer_mode_reported = false;
+        self->mc_connections_reported.reset();
       } else if (line.find("SELF transfer mode disabled") != std::string_view::npos) {
         self->self_conversion = false;
       } else if (line.find("SELF transfer mode enabled") != std::string_view::npos) {
@@ -250,6 +253,25 @@ struct FtpClient::Impl {
     }
   }
 
+  // Data requests alone report FTPMC: NOBODY requests return 0 without negotiating it.
+  // Report again after a reconnect or when a server changes the connection count.
+  void report_ftp_mc() {
+    if (!config.ftp_mc_connections || is_ssh(config.protocol) || config.mode == FtpMode::Active ||
+        (read == nullptr && listing == nullptr)) return;
+    long count = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_FTP_MC_CONNECTIONS, &count) != CURLE_OK ||
+        mc_connections_reported == count) return;
+    mc_connections_reported = count;
+    if (count > 0) {
+      log.info("FTPMC: {} parallel data connection(s) per file", count);
+    } else if (!mc_refusal_warned) {
+      mc_refusal_warned = true;
+      log.warn("the server did not accept FTPMC; using one data connection");
+    } else {
+      log.info("FTPMC: using one data connection; the server did not accept FTPMC");
+    }
+  }
+
   // Resets the handle (the connection stays cached) and applies common options.
   void prepare(const std::string& url) {
     curl_easy_reset(curl);
@@ -277,6 +299,10 @@ struct FtpClient::Impl {
       }
     }
     request_transfer_mode();
+    if (!is_ssh(config.protocol) && config.mode == FtpMode::Passive) {
+      curl_easy_setopt(curl, CURLOPT_FTP_MC_CONNECTIONS, static_cast<long>(config.ftp_mc_connections));
+      curl_easy_setopt(curl, CURLOPT_FTP_MC_STRIPE, static_cast<long>(config.ftp_mc_stripe));
+    }
     if (is_ssh(config.protocol)) {
       curl_easy_setopt(curl, CURLOPT_USERNAME, config.user.c_str());
       curl_easy_setopt(curl, CURLOPT_PASSWORD, config.password.c_str());
@@ -344,6 +370,7 @@ struct FtpClient::Impl {
     if (code == CURLE_OK) {
       logged_in = true;
       if (report) report_transfer_mode();
+      report_ftp_mc();
     }
     return code;
   }
@@ -410,6 +437,9 @@ std::once_flag g_curl_init;
 FtpClient::FtpClient(FtpConfig config, Logger& log, bool verbose)
     : impl_(std::make_unique<Impl>(std::move(config), log, verbose)) {
   std::call_once(g_curl_init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  if (impl_->config.ftp_mc_connections > kMaxFtpMcConnections || impl_->config.ftp_mc_stripe > kMaxFtpMcStripe) {
+    throw FtpError("invalid FTPMC connection count or stripe size", CURLE_BAD_FUNCTION_ARGUMENT);
+  }
   if (is_ssh(impl_->config.protocol)) impl_->private_keys = prepare_ssh_settings(impl_->config);
   impl_->curl = curl_easy_init();
   if (impl_->curl == nullptr) {

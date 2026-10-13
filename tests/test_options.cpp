@@ -149,6 +149,37 @@ TEST_CASE("CLI block mode is off unless --mode-b is given") {
   }
 }
 
+TEST_CASE("CLI FTPMC defaults, boundaries and protocol combinations") {
+  const auto defaults = parse({});
+  REQUIRE(defaults.options);
+  CHECK(defaults.options->ftp_mc_connections == 0);
+  CHECK(defaults.options->ftp_mc_stripe == 0);
+  for (const char* protocol : {"ftp", "ftps", "sftp"}) {
+    const auto mc = parse({"--protocol", protocol, "--ftp-mc", "4", "--ftp-mc-stripe", "65536", "--mode-b"});
+    REQUIRE(mc.options);
+    CHECK(mc.options->ftp_mc_connections == 4);
+    CHECK(mc.options->ftp_mc_stripe == 65536);
+    CHECK(mc.options->mode_b);
+  }
+  for (const char* count : {"0", "1", "64"}) CHECK(parse({"--ftp-mc", count}).options);
+  CHECK(parse({"--ftp-mc", "4", "--mode", "active"}).options);  // Ignored in active mode, like SFTP.
+  CHECK(parse({"--ftp-mc-stripe", "0"}).options);
+  for (const auto& args : {std::initializer_list<const char*>{"--ftp-mc", "-1"},
+                           {"--ftp-mc", "65"}, {"--ftp-mc", "1.5"}, {"--ftp-mc", "four"},
+                           {"--ftp-mc-stripe", "-1"}, {"--ftp-mc-stripe", "4294967296"},
+                           {"--ftp-mc-stripe", "1.5"}}) {
+    const auto result = parse(args);
+    CHECK_FALSE(result.options);
+    CHECK(result.exit_code == 2);
+  }
+  const std::string largest = std::to_string(kMaxFtpMcStripe);
+  const auto boundary = parse({"--ftp-mc-stripe", largest.c_str()});
+  REQUIRE(boundary.options);
+  CHECK(boundary.options->ftp_mc_stripe == kMaxFtpMcStripe);
+  const std::string too_large = std::to_string(static_cast<uint64_t>(kMaxFtpMcStripe) + 1);
+  CHECK(parse({"--ftp-mc-stripe", too_large.c_str()}).exit_code == 2);
+}
+
 namespace {
 // Without the default --file/--host of parse().
 ParsedOptions parse_only(std::initializer_list<const char*> args) {

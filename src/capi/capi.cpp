@@ -102,6 +102,14 @@ streamextract_job* streamextract_job_start_with_mode_b(const streamextract_job_c
                                                        const streamextract_ssh_options* ssh,
                                                        const char* extraction_root, const char* staging,
                                                        int mode_b) {
+  return streamextract_job_start_with_ftp_mc(config, si_units, retries, protocol, ca_certificate, ssh,
+                                          extraction_root, staging, mode_b, 0, 0);
+}
+
+streamextract_job* streamextract_job_start_with_ftp_mc(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
+    const char* staging, int mode_b, unsigned connections, uint32_t stripe) {
   if (config == nullptr) {
     return nullptr;
   }
@@ -123,6 +131,8 @@ streamextract_job* streamextract_job_start_with_mode_b(const streamextract_job_c
     }
     copy.active_mode = config->active_mode != 0;
     copy.mode_b = mode_b != 0;
+    copy.ftp_mc_connections = connections;
+    copy.ftp_mc_stripe = stripe;
     copy.user = copy_string(config->user);
     copy.password = copy_string(config->password);
     copy.password_supplied = config->password != nullptr;

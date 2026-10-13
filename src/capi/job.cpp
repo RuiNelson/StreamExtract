@@ -497,6 +497,12 @@ Job::Result Job::pipeline() {
   if (config_.port < 1 || config_.port > 65535) {
     throw std::runtime_error(fmt::format("invalid port {}", config_.port));
   }
+  if (config_.ftp_mc_connections > kMaxFtpMcConnections) {
+    throw std::runtime_error("FTPMC connections must be between 0 and 64");
+  }
+  if (config_.ftp_mc_stripe > kMaxFtpMcStripe) {
+    throw std::runtime_error(fmt::format("FTPMC stripe size must be between 0 and {} bytes", kMaxFtpMcStripe));
+  }
 
   // 1. Archive: list every volume first, so a missing volume or a wrong
   //    password fails before anything is sent.
@@ -520,6 +526,8 @@ Job::Result Job::pipeline() {
   ftp_config.ca_certificate = config_.ca_certificate;
   ftp_config.mode = config_.active_mode ? FtpMode::Active : FtpMode::Passive;
   ftp_config.mode_b = config_.mode_b;
+  ftp_config.ftp_mc_connections = config_.ftp_mc_connections;
+  ftp_config.ftp_mc_stripe = config_.ftp_mc_stripe;
   ftp_config.user = config_.user;
   if (is_ssh(ftp_config.protocol) && ftp_config.user.empty()) ftp_config.user = current_username();
   {

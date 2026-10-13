@@ -41,7 +41,7 @@ pub struct StreamExtractSshOptions {
 // The library is linked by build.rs.
 extern "C" {
     pub fn streamextract_version() -> *const c_char;
-    pub fn streamextract_job_start_with_mode_b(
+    pub fn streamextract_job_start_with_ftp_mc(
         config: *const StreamExtractJobConfig,
         si_units: c_int,
         retries: c_uint,
@@ -51,6 +51,8 @@ extern "C" {
         extraction_root: *const c_char,
         staging: *const c_char,
         mode_b: c_int,
+        connections: c_uint,
+        stripe: u32,
     ) -> *mut StreamExtractJob;
     pub fn streamextract_archive_directories(
         archive: *const c_char,
@@ -63,12 +65,25 @@ extern "C" {
     pub fn streamextract_free(string: *mut c_char);
 }
 
-/// `"StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0-DEV)"`.
+/// `"StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.23.0-DEV)"`.
 pub fn version() -> String {
     // SAFETY: returns a NUL-terminated string in static storage that is never freed.
     unsafe { CStr::from_ptr(streamextract_version()) }
         .to_string_lossy()
         .into_owned()
+}
+
+pub(crate) fn validate_ftp_mc(connections: u32, stripe: u32) -> Result<(), String> {
+    if connections > 64 {
+        return Err("FTPMC connections must be between 0 and 64.".to_string());
+    }
+    let max_stripe = u32::try_from(std::ffi::c_long::MAX).unwrap_or(u32::MAX);
+    if stripe > max_stripe {
+        return Err(format!(
+            "FTPMC stripe size must be between 0 and {max_stripe} bytes."
+        ));
+    }
+    Ok(())
 }
 
 fn c_string(what: &str, value: &str) -> Result<CString, String> {
@@ -169,6 +184,8 @@ impl Job {
         let retries = c_uint::try_from(config.retries)
             .map_err(|_| "The upload attempt count is out of range".to_string())?;
 
+        validate_ftp_mc(config.ftp_mc_connections, config.ftp_mc_stripe)?;
+
         let raw_config = StreamExtractJobConfig {
             archive: archive.as_ptr(),
             archive_password: archive_password
@@ -190,7 +207,7 @@ impl Job {
         };
         // SAFETY: `raw_config` and the strings it points to outlive the call; the library copies them.
         let job = unsafe {
-            streamextract_job_start_with_mode_b(
+            streamextract_job_start_with_ftp_mc(
                 &raw_config,
                 c_int::from(config.units == crate::preferences::Units::Si),
                 retries,
@@ -205,6 +222,8 @@ impl Job {
                 extraction_root.as_ptr(),
                 staging.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
                 c_int::from(config.mode_b), // The library ignores it for SFTP.
+                config.ftp_mc_connections,
+                config.ftp_mc_stripe,
             )
         };
         NonNull::new(job)
@@ -272,6 +291,8 @@ mod tests {
             buffer_mib: 0,
             retries: 3,
             mode_b: false,
+            ftp_mc_connections: 0,
+            ftp_mc_stripe: 0,
             prevent_sleep: true,
             units: crate::preferences::Units::Binary,
         }
@@ -300,6 +321,17 @@ mod tests {
         let mut bad = config();
         bad.retries = 0;
         assert!(Job::start(&bad).is_err());
+        let mut bad = config();
+        bad.ftp_mc_connections = 65;
+        assert!(Job::start(&bad).is_err());
+        for count in [0, 1, 64] {
+            assert!(validate_ftp_mc(count, 65536).is_ok());
+        }
+        let max_stripe = u32::try_from(std::ffi::c_long::MAX).unwrap_or(u32::MAX);
+        assert!(validate_ftp_mc(4, max_stripe).is_ok());
+        if let Some(over) = max_stripe.checked_add(1) {
+            assert!(validate_ftp_mc(4, over).is_err());
+        }
     }
 
     #[test]
@@ -325,6 +357,8 @@ mod tests {
             let mut block = config();
             block.protocol = protocol;
             block.mode_b = true;
+            block.ftp_mc_connections = 4;
+            block.ftp_mc_stripe = 65536;
             let job = Job::start(&block).unwrap();
             assert_eq!(job.poll(0).unwrap()["mode"], "passive");
         }

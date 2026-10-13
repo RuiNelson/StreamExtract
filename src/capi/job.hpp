@@ -30,6 +30,8 @@ struct JobConfig {
   std::optional<std::string> ca_certificate;
   bool active_mode = false;
   bool mode_b = false;  // FTP/FTPS block mode; ignored for SFTP.
+  unsigned ftp_mc_connections = 0;
+  uint32_t ftp_mc_stripe = 0;
   std::string user;     // Empty: anonymous for FTP, local username for SFTP.
   std::string password;
   bool password_supplied = false;

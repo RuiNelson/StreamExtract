@@ -87,6 +87,12 @@ pub struct TransferConfig {
     /// FTP/FTPS block mode (MODE B); ignored for SFTP.
     #[serde(default)]
     pub mode_b: bool,
+    /// FTPMC data connections: 0 disables, 1-64 requests parallel passive connections.
+    #[serde(default)]
+    pub ftp_mc_connections: u32,
+    /// Bytes per FTPMC stripe; 0 uses the server default.
+    #[serde(default)]
+    pub ftp_mc_stripe: u32,
     #[serde(default = "preferences::default_prevent_sleep")]
     pub prevent_sleep: bool,
     #[serde(default)]
@@ -582,6 +588,8 @@ mod tests {
             buffer_mib: 1,
             retries: 3,
             mode_b: false,
+            ftp_mc_connections: 0,
+            ftp_mc_stripe: 0,
             prevent_sleep: true,
             units: preferences::Units::Binary,
         }

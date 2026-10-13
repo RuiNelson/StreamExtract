@@ -45,14 +45,14 @@ include(SSH)
 
 # --- libcurl (curl license, MIT-like) ----------------------------------------
 # Always build our own libcurl so protocol support does not depend on the system.
-# Our fork of curl 8.22.0 (branch ftp-mode-b of RuiNelson/curl-streamextract) adds
-# FTP block mode (CURLOPT_FTP_TRANSFER_MODE, CURLINFO_FTP_TRANSFER_MODE) and the
+# Our fork of curl 8.23.0 (RuiNelson/curl-streamextract) adds
+# FTPMC, FTP block mode (CURLOPT_FTP_TRANSFER_MODE, CURLINFO_FTP_TRANSFER_MODE) and the
 # SSH passphrase, SFTP rename and SFTP zero-size fixes. To update it, pin the new
 # commit and the SHA-256 of its GitHub archive.
-message(STATUS "streamextract: using bundled libcurl 8.22.0 with FTP block mode (FTP, FTPS and SFTP)")
+message(STATUS "streamextract: using bundled libcurl 8.23.0 with FTPMC and FTP block mode (FTP, FTPS and SFTP)")
 FetchContent_Declare(curl
-  URL https://github.com/RuiNelson/curl-streamextract/archive/a38c99dca31c94ed2b5d207513e8225c4b83c3f6.tar.gz
-  URL_HASH SHA256=4ff4dc2efffc7cecd6f6e03aa503dda3ffbe0cbfebfcce0b8b2e75de1fd103ba
+  URL https://github.com/RuiNelson/curl-streamextract/archive/e2d2644fabe318d9284e3c51769d65fa8e4bdba8.tar.gz
+  URL_HASH SHA256=7ad0cd550f68df6a3027627302097b83941d4e4d10b5dcd919db762e542b6bbf
   EXCLUDE_FROM_ALL)
 
 # Enable FTP/FTPS and SSH; the application exposes SFTP only. No compression.

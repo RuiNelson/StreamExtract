@@ -41,7 +41,7 @@ typedef struct streamextract_job_config {
   unsigned buffer_mib;          /* Buffer between decompression and upload; 0: 64. */
 } streamextract_job_config;
 
-/* "StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.22.0-DEV)". Static
+/* "StreamExtract 2.7.0 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.23.0-DEV)". Static
  * storage, never freed. */
 STREAMEXTRACT_API const char* streamextract_version(void);
 
@@ -136,6 +136,19 @@ STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_mode_b(
     const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
     const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
     const char* staging, int mode_b);
+
+/* Like start_with_mode_b, with FTPMC parallel data connections for each file.
+ * `connections`: 0 = off (the older entry points); 1-64 = requested count.
+ * `stripe`: bytes per stripe, 0 = server default; maximum UINT32_MAX (LONG_MAX
+ * on Windows, since libcurl takes a long). The server may lower either value.
+ * Unsupported/refused FTPMC falls back to one data connection with a warning.
+ * Works with FTP/FTPS in MODE S and MODE B; ignored for SFTP and active mode.
+ * Invalid values fail the job before reading the archive. The original config
+ * layout, entry points and poll JSON are unchanged. */
+STREAMEXTRACT_API streamextract_job* streamextract_job_start_with_ftp_mc(
+    const streamextract_job_config* config, int si_units, unsigned retries, int protocol,
+    const char* ca_certificate, const streamextract_ssh_options* ssh, const char* extraction_root,
+    const char* staging, int mode_b, unsigned connections, uint32_t stripe);
 
 /* Reads archive directories for a folder picker, including implicit parents
  * and empty directories. No server connection or disk extraction. Compressed
