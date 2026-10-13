@@ -22,10 +22,10 @@ inline bool is_ssh(FtpProtocol protocol) { return protocol == FtpProtocol::Sftp;
 
 constexpr unsigned kMaxFtpMcConnections = 64;
 // The curl option takes a long, which is 32 bits on Windows.
-constexpr uint32_t kMaxFtpMcStripe = static_cast<uint32_t>(
-    static_cast<uint64_t>(std::numeric_limits<long>::max()) < UINT32_MAX
-        ? static_cast<uint64_t>(std::numeric_limits<long>::max())
-        : UINT32_MAX);
+constexpr uint32_t kMaxFtpMcStripe =
+    static_cast<uint32_t>(static_cast<uint64_t>(std::numeric_limits<long>::max()) < UINT32_MAX
+                              ? static_cast<uint64_t>(std::numeric_limits<long>::max())
+                              : UINT32_MAX);
 
 struct FtpConfig {
   std::string host;
@@ -106,6 +106,8 @@ class FtpClient {
   // File names in `dir` (NLST); std::nullopt if the listing failed.
   // `include_hidden` requests NLST -a for FTP/FTPS; failure disables directory moves.
   std::optional<std::vector<std::string>> list_names(const std::string& dir, bool include_hidden = false);
+  // Exact binary SIZE for FTP/FTPS. Reuses the established TYPE and omits
+  // redundant range-support queries until a listing or reconnect changes it.
   RemoteFile stat_file(const std::string& path);
   bool delete_file(const std::string& path);
   // Server-side rename of a file or a directory with all its contents; throws on failure.

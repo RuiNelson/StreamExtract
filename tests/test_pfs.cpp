@@ -2,6 +2,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <string>
 #include <thread>
@@ -74,6 +75,7 @@ struct CompressedFile {
   uint64_t table = 0;
   uint64_t data = 0;
   uint64_t stored_size = 0;
+  uint64_t logical_size = 0;
 };
 CompressedFile first_compressed(const std::string& path) {
   const auto image = open_image(path);
@@ -87,14 +89,30 @@ CompressedFile first_compressed(const std::string& path) {
     if ((image_le32(header.data() + 4) & 1) == 0) continue;
     const uint64_t start = static_cast<uint64_t>(image_le32(header.data() + 100)) * block;
     const uint64_t stored_size = image_le64(header.data() + 8);
+    const uint64_t logical_size = image_le64(header.data() + 16);
     image->read(start, header.data(), 48);
     const uint64_t table = start + image_le64(header.data() + 24);
     const uint64_t data = start + image_le64(header.data() + 32);
-    return {offset, start, table, data, stored_size};
+    return {offset, start, table, data, stored_size, logical_size};
   }
   FAIL("fixture must contain a PFSC file");
   return {};
 }
+
+class CountingImage final : public ImageReader {
+ public:
+  explicit CountingImage(std::shared_ptr<ImageReader> image) : source(std::move(image)) {}
+  uint64_t size() const override { return source->size(); }
+  void read(uint64_t offset, uint8_t* data, size_t count) override {
+    reads.emplace_back(offset, count);
+    source->read(offset, data, count);
+    if (corrupt_offset >= offset && corrupt_offset - offset < count)
+      data[static_cast<size_t>(corrupt_offset - offset)] ^= 1;
+  }
+  std::shared_ptr<ImageReader> source;
+  std::vector<std::pair<uint64_t, size_t>> reads;
+  uint64_t corrupt_offset = std::numeric_limits<uint64_t>::max();
+};
 
 uint64_t ufs1_inode_offset(const std::string& path, const std::string& name) {
   const auto source = open_image(path);
@@ -250,9 +268,77 @@ TEST_CASE("PFSC rejects bad offsets, bad logical lengths and corrupt zlib data")
   SUBCASE("logical length disagrees with inode") { file.write(compressed.inode + 16, 1, 8); }
   SUBCASE("wrong block size") { file.write(compressed.payload + 12, 4096, 4); }
   SUBCASE("non-monotonic offset") { file.write(compressed.table + 8, 0, 8); }
+  SUBCASE("invalid final offset") {
+    const uint64_t blocks = (compressed.logical_size + 65535) / 65536;
+    file.write(compressed.table + blocks * 8, 0, 8);
+  }
   SUBCASE("offset outside payload") { file.write(compressed.table + 8, compressed.stored_size + 1, 8); }
   SUBCASE("corrupt compressed data") { file.write(compressed.data, 0, 2); }
   CHECK_THROWS_AS(contents(file.path), ArchiveError);
+}
+
+TEST_CASE("PFSC batches offset reads and keeps only 16 recently decoded blocks") {
+  const auto compressed = first_compressed(fixture("raw.ffpfsc"));
+  auto source = std::make_shared<CountingImage>(
+      image_slice(open_image(fixture("raw.ffpfsc")), compressed.payload, compressed.stored_size));
+  const auto image = pfsc_image(source, compressed.logical_size);
+  const auto initial_reads = source->reads.size();
+  std::array<uint8_t, 256> data{};
+  for (uint64_t block = 0; block < 16; ++block) {
+    image->read(block * 65536, data.data(), data.size());
+    for (size_t i = 0; i < data.size(); ++i) CHECK(data[i] == i);
+  }
+  // All offsets fit in the validated table page: each miss reads only its
+  // compressed payload, without another tiny seek to the offset table.
+  CHECK(source->reads.size() == initial_reads + 16);
+  image->read(0, data.data(), data.size());
+  CHECK(source->reads.size() == initial_reads + 16);
+  image->read(16 * 65536, data.data(), data.size());
+  CHECK(source->reads.size() == initial_reads + 17);
+  // Reading block zero made it recent; block one is the entry evicted by 16.
+  image->read(65536, data.data(), data.size());
+  CHECK(source->reads.size() == initial_reads + 18);
+  image->read(0, data.data(), data.size());
+  CHECK(source->reads.size() == initial_reads + 18);
+}
+
+TEST_CASE("PFSC recovers its decoder and invalidates evicted cache entries after a checksum error") {
+  const auto compressed = first_compressed(fixture("raw.ffpfsc"));
+  auto source = std::make_shared<CountingImage>(
+      image_slice(open_image(fixture("raw.ffpfsc")), compressed.payload, compressed.stored_size));
+  const auto image = pfsc_image(source, compressed.logical_size);
+  std::array<uint8_t, 256> data{};
+  for (uint64_t block = 0; block < 16; ++block) image->read(block * 65536, data.data(), data.size());
+  std::array<uint8_t, 16> pair{};
+  source->source->read(compressed.table - compressed.payload + 16 * 8, pair.data(), pair.size());
+  REQUIRE(image_le64(pair.data() + 8) - image_le64(pair.data()) < 65536);
+  source->corrupt_offset = image_le64(pair.data() + 8) - 1;  // Corrupt the real zlib stream's checksum.
+  CHECK_THROWS_WITH_AS(image->read(16 * 65536, data.data(), data.size()),
+                       "PFSC: corrupt compressed block or checksum mismatch", ArchiveError);
+  const auto failed_reads = source->reads.size();
+  image->read(0, data.data(), data.size());
+  CHECK(source->reads.size() == failed_reads + 1);  // The overwritten slot cannot masquerade as block zero.
+  source->corrupt_offset = std::numeric_limits<uint64_t>::max();
+  image->read(16 * 65536, data.data(), data.size());
+  CHECK(source->reads.size() == failed_reads + 2);
+  for (size_t i = 0; i < data.size(); ++i) CHECK(data[i] == i);
+}
+
+TEST_CASE("image files support sequential and random reads and recover after a failed read") {
+  const CopyImage file;
+  const auto source = open_image(file.path);
+  std::array<uint8_t, 1024> header{};
+  source->read(0, header.data(), header.size());
+  std::array<uint8_t, 1024> split{};
+  source->read(0, split.data(), 513);
+  source->read(513, split.data() + 513, split.size() - 513);
+  CHECK(split == header);
+  source->read(source->size(), nullptr, 0);
+  CHECK_THROWS_AS(source->read(source->size(), split.data(), 1), ArchiveError);
+  std::filesystem::resize_file(file.path, 65536);
+  CHECK_THROWS_AS(source->read(source->size() - 1024, split.data(), split.size()), ArchiveError);
+  CHECK_NOTHROW(source->read(0, split.data(), split.size()));
+  CHECK(split == header);
 }
 
 TEST_CASE("PFS refuses cyclic directories") {

@@ -6,6 +6,7 @@ import socket
 import socketserver
 import ssl
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 # SELF header magic (PS4, little-endian); see FtpServer's `ftpsrv` option.
@@ -80,6 +81,7 @@ class FtpHandler(socketserver.StreamRequestHandler):
         active_pending = False  # EPRT/PORT since the last transfer (block mode bookkeeping).
         mc_count, mc_stripe = 0, 4096
         mc_pending, mc_kept = [], []
+        transfer_type = "A"  # New FTP sessions default to ASCII.
 
         def start_tls():
             self.rfile.close()
@@ -384,7 +386,17 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         mc_pending = [self.server.passive_socket() for _ in range(mc_count)]
                         ports = ",".join(str(listener.getsockname()[1]) for listener in mc_pending)
                         reply(f"224 Entering Multi Passive Mode (|||{ports}|)")
-                elif command in ("OPTS", "TYPE", "REST"):
+                elif command == "TYPE":
+                    transfer_type = arg.upper()
+                    reply("200 OK")
+                elif command == "REST":
+                    if self.server.metadata_delay:
+                        time.sleep(self.server.metadata_delay)
+                    reply("200 OK")
+                    if self.server.close_after_rest:
+                        self.server.close_after_rest = False
+                        return
+                elif command == "OPTS":
                     reply("200 OK")
                 elif command == "MFMT":
                     reply("200 OK" if self.server.timestamps == "mfmt" else "500 Unsupported command")
@@ -398,6 +410,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         cwd = directory
                         reply("250 Directory changed")
                 elif command == "SIZE":
+                    if self.server.metadata_delay:
+                        time.sleep(self.server.metadata_delay)
                     if self.server.stall_retry_size and self.server.failed_uploads:
                         self.server.pause()
                     if self.server.size_unsupported:
@@ -411,7 +425,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         # Like ftpsrv, report the ELF size read from the headers, whatever the stored size.
                         reply(f"213 {int.from_bytes(contents[4:12], 'little')}")
                     else:
-                        reply(f"213 {len(contents)}")
+                        size = len(contents) + (self.server.ascii_size_bias if transfer_type != "I" else 0)
+                        reply(f"213 {self.server.size_reply_prefix}{size}")
                 elif command == "MDTM":
                     # "MDTM <time> <path>" sets the time (vsftpd); "MDTM <path>" asks for it.
                     setting = arg[:14].isdigit() and arg[14:15] == " "
@@ -697,7 +712,8 @@ class FtpServer(socketserver.ThreadingTCPServer):
                  mode_b_refuse_reuse=0, mode_b_eof_on_data=False, mode_b_extra_blocks=False,
                  mode_b_bad_descriptor=False, stall_upload_after=None, control_port=0,
                  passive_ports=range(30000, 30010), mc_max=0, mc_max_stripe=1048576,
-                 mc_opts_refusal=None, mc_mpsv_refusal=None):
+                 mc_opts_refusal=None, mc_mpsv_refusal=None, metadata_delay=0,
+                 ascii_size_bias=0, close_after_rest=False, size_reply_prefix=""):
         self.passive_ports = passive_ports
         super().__init__(("0.0.0.0", control_port), FtpHandler)
         self.files = dict(files or {})
@@ -722,6 +738,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.stall_directory = stall_directory
         self.stall_listing = stall_listing
         self.size_unsupported = size_unsupported
+        self.metadata_delay = metadata_delay  # Benchmark latency on SIZE/REST, without timing assertions.
+        self.ascii_size_bias = ascii_size_bias  # SIZE must be asked in binary mode for exact stored bytes.
+        self.close_after_rest = close_after_rest  # Once: reconnect before the next SIZE, with TYPE reset.
+        self.size_reply_prefix = size_reply_prefix  # Older servers put text before the size in a 213 reply.
         self.refuse_listing = refuse_listing
         self.nlst_hides_dotfiles = nlst_hides_dotfiles
         self.timestamps = timestamps  # "mfmt", "mdtm" (vsftpd's "MDTM <time> <path>" only) or "none".

@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -35,13 +34,14 @@ struct TransferResult {
   uint64_t ignored = 0;  // Links, special files, unusable names.
 };
 
-// Runs the pipeline: an extractor thread decompresses and verifies entries in
-// memory (nothing touches the disk) into a bounded Pipe, and an uploader thread
-// streams them to the FTP server. Upload failures are retried by rereading the
-// entry and resuming the remote file. Source errors and exhausted attempts stop
-// both threads and delete the incomplete remote file. With a streamed plan (compressed tar) the
-// extractor plans each entry as it reads it, and the uploader checks the
-// server before each file, discarding the data of those already there.
+// Runs the pipeline: an extractor thread reads ahead, decompressing and verifying
+// entries in memory (nothing touches the disk) into a bounded Pipe, and an uploader
+// thread streams them to the FTP server. A temporary reader retries failed uploads
+// through a separate bounded Pipe, rereading the entry and resuming the remote file.
+// Source errors and exhausted attempts stop the workers and delete the incomplete
+// remote file. With a streamed plan (compressed tar) the extractor plans each entry
+// as it reads it, and the uploader checks the server before each file, discarding
+// the data of those already there.
 class Transfer {
  public:
   Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& passwords, Logger& log, Progress& progress,
@@ -62,19 +62,18 @@ class Transfer {
   void run_extractor();
   void extract();
   void extract_streamed(ArchiveCallbacks& callbacks, const std::function<bool()>& flush);
-  bool finish_extraction(size_t index, ArchiveCallbacks& callbacks, const std::function<bool()>& flush);
-  bool reread_file(size_t index, ArchiveCallbacks callbacks);
-  void acknowledge_file(bool retry);
+  void reread_file(size_t index);
   const PlannedEntry& entry(size_t index);
   void run_uploader();
   void upload_loop();
   void publish_staging();
-  bool upload_file(const PlannedEntry& planned, uint64_t number);
-  bool await_file_end(const PlannedEntry& planned);
-  bool discard_file();
+  bool upload_file(size_t index, const PlannedEntry& planned, uint64_t number);
+  bool await_file_end(Pipe& input, const PlannedEntry& planned);
+  bool discard_file(Pipe& input);
   void remove_partial(const PlannedEntry& planned, uint64_t bytes_sent);
   void fail(const std::string& message);
-  std::string describe_archive_error(const ArchiveError& error, const std::string& what) const;
+  std::string describe_archive_error(const ArchiveError& error, const std::string& what,
+                                     const std::string& missing_volume) const;
 
   const TransferPlan& plan_;
   FtpClient& ftp_;
@@ -82,15 +81,11 @@ class Transfer {
   Logger& log_;
   Progress& progress_;
   Pipe pipe_;
+  // A retry must make progress even when read-ahead has filled the normal pipe.
+  // Only one block is queued here; a temporary reader runs only during retries.
+  Pipe retry_pipe_;
   const unsigned attempts_;
   const std::string destination_root_;  // Empty: upload directly; otherwise plan_.remote_root is staging.
-
-  // Keep the original reader at the file boundary so retries can use the same
-  // bounded pipe and extractor thread, without buffering a whole file.
-  enum class FileReply { Waiting, Continue, Retry };
-  std::mutex reply_mutex_;
-  std::condition_variable reply_ready_;
-  FileReply file_reply_ = FileReply::Waiting;
 
   std::thread extractor_;
   std::thread uploader_;
@@ -109,8 +104,8 @@ class Transfer {
   std::deque<PlannedEntry> streamed_;
   std::unique_ptr<RemoteProbe> probe_;
   std::set<std::string> published_directories_;  // Uploader only: directories already in the destination.
-  const Archive* reading_ = nullptr;  // Extractor only: for the position in the archive.
-  uint64_t unpacking_size_ = 0;       // Extractor only: sizes buffers for the current file.
+  const Archive* reading_ = nullptr;             // Extractor only: for the position in the archive.
+  uint64_t unpacking_size_ = 0;                  // Extractor only: sizes buffers for the current file.
   uint64_t files_uploaded_ = 0;
   uint64_t bytes_uploaded_ = 0;
   uint64_t skipped_files_ = 0;  // Streamed plans; otherwise the plan's counts.

@@ -267,7 +267,8 @@ two locations, normally on the same filesystem. Moves begin only after all
 uploads succeed. Whole archive directories move with their contents in one
 server-side rename when the destination folder is missing and the staging
 folder contains no unrelated entries. Existing destination folders are merged;
-unrelated staging entries are kept in place. If a move fails or is
+unrelated staging entries are kept in place. Newly created destination folders
+allow child moves without repeating existence checks for each child. If a move fails or is
 cancelled, files already moved stay in the destination and the rest stay in
 staging. A subsequent run skips complete destination files whose staging copies
 are absent, resumes incomplete staged uploads, and moves the remaining contents.
@@ -306,8 +307,9 @@ and key passphrases are saved only with the existing consent to store credential
 The interface shows a fixed log panel, the progress of the current file and of
 the whole archive with their ETAs (for a compressed tar, by how much of the
 archive has been read), the upload and decompression speeds, and how full the
-buffer is (full: the network is the bottleneck; empty: the CPU
-is). **Cancel** with `q`, `Esc` or `Ctrl-C` (or `SIGINT`/`SIGTERM` in plain
+buffer is (a full buffer usually means the network is the bottleneck; an empty
+one can mean slower decompression or the per-file overhead of many small files).
+**Cancel** with `q`, `Esc` or `Ctrl-C` (or `SIGINT`/`SIGTERM` in plain
 mode).
 
 Exit codes: `0` success, `1` error, `2` invalid command line, `130` cancelled.
@@ -387,8 +389,11 @@ A file only counts as uploaded after its checksum was confirmed (tar, exFAT,
 unsigned PFS and UFS have no complete checksum of each file,
 see below). On an upload failure, the engine verifies the remaining source data,
 checks the remote size, and rereads the entry to resume from that offset. Retries
-use the same bounded memory buffer; solid archives and compressed tar may need
-to decompress earlier entries again. A source error, cancellation, or exhausted
+use a separate bounded queue of at most 1 MiB so that they can proceed even when
+the normal buffer is full of subsequent files. Solid archives and compressed tar
+may need to decompress earlier entries again. Extraction reads ahead across file
+boundaries; the queue also limits pending messages to bound memory for tiny and
+empty files. A source error, cancellation, or exhausted
 upload attempts removes the incomplete remote file.
 
 The command line links this engine statically. The app uses it through a
@@ -475,7 +480,9 @@ Behaviour, in both:
   and PFSC files containing a mix of zlib-compressed and raw 64 KiB blocks are
   supported. A PFS containing a single exFAT, UFS or PFS image is automatically
   opened to upload the files inside it, directly into the chosen directory.
-  Nested wrappers are decoded on demand with bounded caches; no temporary image
+  Nested wrappers are decoded on demand with bounded caches; decoded blocks are
+  allocated only as needed, while the block-offset page and zlib decoder are reused.
+  No temporary image
   or OS mount is needed. Other single-file payloads are uploaded as ordinary files.
   Signed, encrypted and 64-bit-inode PFS images, and split images, are rejected.
   Compressed blocks are checked by zlib, but unsigned PFS and raw PFSC blocks
@@ -500,6 +507,11 @@ Behaviour, in both:
   from the beginning, following the usual remote-size policy.
 - **Fail-fast**: a checksum error, a missing volume, cancellation, or exhausting
   the upload attempts stops the transfer and removes the incomplete remote file.
+
+Existing FTP/FTPS files are checked with exact binary `SIZE` queries. After the
+first query establishes binary mode, later checks omit the redundant `REST 0`
+range-support query. Directory listings and reconnections reestablish that mode;
+servers with non-standard size replies retain the native query behavior.
 
 ### Not supported yet
 

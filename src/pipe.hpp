@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -44,7 +45,10 @@ class Pipe {
   bool push(PipeMessage message) {
     std::unique_lock lock(mutex_);
     const size_t size = message.data.size();
-    can_push_.wait(lock, [&] { return aborted_ || buffered_ == 0 || buffered_ + size <= capacity_; });
+    can_push_.wait(lock, [&] {
+      return aborted_ || (queue_.size() < kMaxQueuedMessages &&
+                          (buffered_ == 0 || size <= capacity_ - std::min(buffered_, capacity_)));
+    });
     if (aborted_) {
       return false;
     }
@@ -125,6 +129,8 @@ class Pipe {
   }
 
  private:
+  // Payload bytes alone cannot bound a queue of tiny/empty files or directories.
+  static constexpr size_t kMaxQueuedMessages = 1024;
   static constexpr size_t kMaxFreeBuffers = 16;
 
   const size_t capacity_;

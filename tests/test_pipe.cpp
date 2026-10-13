@@ -84,6 +84,53 @@ TEST_CASE("abort wakes a blocked consumer") {
   CHECK_FALSE(got);
 }
 
+TEST_CASE("pipe bounds pending empty files as well as data bytes") {
+  Pipe pipe(4096);
+  constexpr size_t kMessages = 4000;
+  std::atomic<size_t> pushed{0};
+  std::thread producer([&] {
+    for (size_t i = 0; i < kMessages; ++i) {
+      PipeMessage message;
+      message.kind = i % 2 == 0 ? PipeMessage::Kind::FileBegin : PipeMessage::Kind::FileEnd;
+      message.entry = i / 2;
+      if (!pipe.push(std::move(message))) return;
+      ++pushed;
+    }
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK(pushed.load() < kMessages);
+  CHECK(pipe.buffered() == 0);
+  for (size_t i = 0; i < kMessages; ++i) {
+    const auto message = pipe.pop();
+    CHECK(message.has_value());
+    if (message) {
+      CHECK(message->kind == (i % 2 == 0 ? PipeMessage::Kind::FileBegin : PipeMessage::Kind::FileEnd));
+      CHECK(message->entry == i / 2);
+    }
+  }
+  producer.join();
+  CHECK(pushed.load() == kMessages);
+}
+
+TEST_CASE("abort wakes a producer blocked by pending empty files") {
+  Pipe pipe(4096);
+  std::atomic<bool> completed{false};
+  std::thread producer([&] {
+    for (size_t i = 0; i < 4000; ++i) {
+      PipeMessage message;
+      message.kind = PipeMessage::Kind::EnsureDir;
+      if (!pipe.push(std::move(message))) return;
+    }
+    completed = true;
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK_FALSE(completed.load());
+  pipe.abort();
+  producer.join();
+  CHECK_FALSE(completed.load());
+  CHECK_FALSE(pipe.pop().has_value());
+}
+
 TEST_CASE("buffers are recycled") {
   Pipe pipe(10);
   std::vector<uint8_t> buffer = pipe.acquire_buffer(1024);
