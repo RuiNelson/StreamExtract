@@ -44,6 +44,10 @@ pub struct Preferences {
     pub buffer_mib: u32,
     #[serde(default = "default_retries")]
     pub retries: u32,
+    /// FTPMC: 0 disables, 1-64 parallel passive FTP/FTPS data connections per file.
+    pub ftp_mc_connections: u32,
+    /// Bytes per stripe; 0 uses the server's size.
+    pub ftp_mc_stripe: u32,
     #[serde(default = "default_prevent_sleep")]
     pub prevent_sleep: bool,
     #[serde(default = "default_completion_sound")]
@@ -61,6 +65,8 @@ impl Default for Preferences {
             units: Units::Si,
             buffer_mib: DEFAULT_BUFFER_MIB,
             retries: default_retries(),
+            ftp_mc_connections: 0,
+            ftp_mc_stripe: 0,
             prevent_sleep: default_prevent_sleep(),
             completion_sound: true,
             show_passwords: false,
@@ -122,6 +128,8 @@ fn migrate_locked(path: &Path) -> Result<(), String> {
 fn parse_legacy(text: &str) -> Preferences {
     let ini = crate::ini::Ini::parse(text);
     Preferences {
+        ftp_mc_connections: 0,
+        ftp_mc_stripe: 0,
         units: match ini.get("display", "units").map(str::trim) {
             Some(value) if value.eq_ignore_ascii_case("binary") => Units::Binary,
             _ => Units::Si,
@@ -162,6 +170,7 @@ fn validate(preferences: Preferences) -> Result<(), String> {
     if preferences.retries == 0 {
         return Err("Upload attempts must be at least 1.".to_string());
     }
+    crate::ffi::validate_ftp_mc(preferences.ftp_mc_connections, preferences.ftp_mc_stripe)?;
     Ok(())
 }
 
@@ -199,6 +208,8 @@ mod tests {
                 units: Units::Binary,
                 buffer_mib: 128,
                 retries: 5,
+                ftp_mc_connections: 4,
+                ftp_mc_stripe: 65536,
                 prevent_sleep: false,
                 completion_sound: false,
                 show_passwords: true,
@@ -208,6 +219,8 @@ mod tests {
         .unwrap();
         assert_eq!(load(&path).unwrap().buffer_mib, 128);
         assert_eq!(load(&path).unwrap().retries, 5);
+        assert_eq!(load(&path).unwrap().ftp_mc_connections, 4);
+        assert_eq!(load(&path).unwrap().ftp_mc_stripe, 65536);
         assert!(!load(&path).unwrap().prevent_sleep);
         assert_eq!(load(&path).unwrap().units, Units::Binary);
         assert!(!load(&path).unwrap().completion_sound);
@@ -234,6 +247,8 @@ mod tests {
             serde_json::from_str(r#"{"units":"si","buffer_mib":64}"#).unwrap();
         assert!(legacy.completion_sound);
         assert_eq!(legacy.retries, 3);
+        assert_eq!(legacy.ftp_mc_connections, 0);
+        assert_eq!(legacy.ftp_mc_stripe, 0);
         assert!(legacy.prevent_sleep);
         assert!(!legacy.show_passwords);
         assert_eq!(legacy.check_updates, None);
@@ -373,6 +388,8 @@ mod tests {
             units: Units::Binary,
             buffer_mib: 128,
             retries: 5,
+            ftp_mc_connections: 0,
+            ftp_mc_stripe: 0,
             prevent_sleep: false,
             completion_sound: false,
             show_passwords: true,
@@ -484,6 +501,9 @@ mod tests {
             "buffer_mib: 0\n",
             "buffer_mib: 4097\n",
             "retries: 0\n",
+            "ftp_mc_connections: 65\n",
+            "ftp_mc_connections: -1\n",
+            "ftp_mc_stripe: 4294967296\n",
             "check_updates: invalid\n",
         ] {
             fs::write(fixture.yaml(), text).unwrap();

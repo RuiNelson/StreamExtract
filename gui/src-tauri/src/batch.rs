@@ -350,6 +350,8 @@ mod tests {
             buffer_mib: 1,
             retries: 3,
             mode_b: false,
+            ftp_mc_connections: 0,
+            ftp_mc_stripe: 0,
             prevent_sleep: true,
             units: Units::Si,
         }

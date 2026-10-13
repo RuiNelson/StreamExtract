@@ -52,6 +52,7 @@ struct PfsArchive::Impl {
   uint32_t root = 0;
   uint64_t cached_inode_block = std::numeric_limits<uint64_t>::max();
   std::vector<uint8_t> inode_data;
+  std::vector<uint8_t> file_data;
   uint32_t current_number = 0;
   Inode current;
   ArchiveEntry current_entry;
@@ -250,11 +251,12 @@ void PfsArchive::test() {
   if (m.inner) return m.inner->test();
   if (!m.has_current || m.current_entry.kind != EntryKind::File) return;
   const auto view = m.payload(m.current);
-  std::vector<uint8_t> buffer(1 << 20);
+  const size_t capacity = static_cast<size_t>(std::min<uint64_t>(1 << 20, view->size()));
+  if (m.file_data.size() < capacity) m.file_data.resize(capacity);
   for (uint64_t offset = 0; offset < view->size();) {
-    const size_t count = static_cast<size_t>(std::min<uint64_t>(buffer.size(), view->size() - offset));
-    view->read(offset, buffer.data(), count);
-    if (m.callbacks.on_data && !m.callbacks.on_data(buffer.data(), count)) {
+    const size_t count = static_cast<size_t>(std::min<uint64_t>(m.file_data.size(), view->size() - offset));
+    view->read(offset, m.file_data.data(), count);
+    if (m.callbacks.on_data && !m.callbacks.on_data(m.file_data.data(), count)) {
       m.aborted = true;
       pfs_error("aborted by callback");
     }

@@ -6,6 +6,8 @@ import socket
 import socketserver
 import ssl
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 # SELF header magic (PS4, little-endian); see FtpServer's `ftpsrv` option.
 SELF_MAGIC = (0x1D3D154F).to_bytes(4, "little")
@@ -46,6 +48,26 @@ def block_frames(payload, *, eof_on_data=False, extra_blocks=False, bad_descript
     return b"".join(frames)
 
 
+def parallel_data(function, items):
+    with ThreadPoolExecutor(max_workers=len(items)) as pool:
+        return list(pool.map(function, items))
+
+
+def join_stripes(parts, stripe):
+    """Reconstruct FTPMC's round-robin stream, rejecting bytes after the first short stripe."""
+    result, positions, index = bytearray(), [0] * len(parts), 0
+    while True:
+        channel = index % len(parts)
+        chunk = parts[channel][positions[channel]:positions[channel] + stripe]
+        positions[channel] += len(chunk)
+        result.extend(chunk)
+        if len(chunk) < stripe:
+            if any(position != len(part) for position, part in zip(positions, parts)):
+                raise ValueError("inconsistent FTPMC stripes")
+            return bytes(result)
+        index += 1
+
+
 class FtpHandler(socketserver.StreamRequestHandler):
     def handle(self):
         cwd = "/"
@@ -57,6 +79,9 @@ class FtpHandler(socketserver.StreamRequestHandler):
         block_mode = False  # MODE B accepted on this control connection.
         kept = None  # Block mode: the data connection kept open after a successful transfer.
         active_pending = False  # EPRT/PORT since the last transfer (block mode bookkeeping).
+        mc_count, mc_stripe = 0, 4096
+        mc_pending, mc_kept = [], []
+        transfer_type = "A"  # New FTP sessions default to ASCII.
 
         def start_tls():
             self.rfile.close()
@@ -91,19 +116,115 @@ class FtpHandler(socketserver.StreamRequestHandler):
                 self.server.pause()
 
         def close_kept():
-            nonlocal kept
+            nonlocal kept, mc_kept
             if kept is not None:
                 with contextlib.suppress(OSError):
                     kept.close()
                 kept = None
+            for data in mc_kept:
+                with contextlib.suppress(OSError):
+                    data.close()
+            mc_kept = []
 
         def close_pending():
             """Drops a data connection set up for a transfer that will not happen."""
-            nonlocal passive, active_pending
+            nonlocal passive, active_pending, mc_pending
             if passive is not None:
                 passive.close()
             passive = None
             active_pending = False
+            for listener in mc_pending:
+                listener.close()
+            mc_pending = []
+
+        def open_mc_data(command):
+            nonlocal mc_pending, mc_kept
+            if mc_pending:
+                reply("150 Opening FTPMC data connections.")
+                self.server.transfer_starts.append((command, 150))
+                sockets = [listener.accept()[0] for listener in mc_pending]
+                close_pending()
+                self.server.data_connections += len(sockets)
+                if protected:
+                    sockets = parallel_data(lambda data: self.server.tls_context.wrap_socket(data, server_side=True),
+                                            sockets)
+                    self.server.tls_data_connections += len(sockets)
+                for data in sockets:
+                    data.settimeout(10)
+                return sockets
+            sockets, mc_kept = mc_kept, []
+            reply("125 FTPMC data connections already open.")
+            self.server.transfer_starts.append((command, 125))
+            return sockets
+
+        def finish_mc_data(sockets):
+            nonlocal mc_kept
+            if block_mode and self.server.mode_b_keep:
+                mc_kept = sockets
+                reply("250 Transfer complete.")
+            else:
+                def close(data):
+                    try:
+                        if protected:
+                            data = data.unwrap()
+                    finally:
+                        data.close()
+                parallel_data(close, sockets)
+                reply("226 Transfer complete.")
+
+        def receive_mc_data(data):
+            payload = bytearray()
+            while True:
+                if block_mode:
+                    header = recv_exact(data, 3)
+                    if len(header) != 3 or header[0] & 0x0F:
+                        raise ValueError("truncated FTPMC block")
+                    length = int.from_bytes(header[1:], "big")
+                    chunk = recv_exact(data, length)
+                    if len(chunk) != length:
+                        raise ValueError("truncated FTPMC payload")
+                    if not header[0] & BLOCK_RESTART:
+                        payload.extend(chunk)
+                    if header[0] & BLOCK_EOF:
+                        break
+                else:
+                    chunk = data.recv(65536)
+                    if not chunk:
+                        break
+                    payload.extend(chunk)
+                stall_upload(len(payload))
+            return bytes(payload)
+
+        def upload_mc(command, target):
+            sockets = open_mc_data(command)
+            with self.server.files_lock:
+                if command == "STOR":
+                    self.server.files[target] = b""
+                else:
+                    self.server.files.setdefault(target, b"")
+            try:
+                payload = join_stripes(parallel_data(receive_mc_data, sockets), mc_stripe)
+            except (OSError, ValueError):
+                for data in sockets:
+                    data.close()
+                reply("426 Incomplete FTPMC upload.")
+                return False
+            fail = self.server.fail_uploads > 0
+            if fail:
+                self.server.fail_uploads -= 1
+                payload = payload[:self.server.drop_after]
+            with self.server.files_lock:
+                if target in self.server.files:
+                    self.server.files[target] += payload
+            self.server.uploads.append((command, target, payload))
+            if fail:
+                self.server.failed_uploads += 1
+                for data in sockets:
+                    data.close()
+                reply("426 FTPMC upload interrupted.")
+                return True  # Drop the control connection; retry must negotiate FTPMC again.
+            finish_mc_data(sockets)
+            return False
 
         def open_block_data(command):
             """Block mode: a new data connection after PASV/EPSV/EPRT/PORT (150), the kept one (125), or None
@@ -148,6 +269,15 @@ class FtpHandler(socketserver.StreamRequestHandler):
         def send_data(command, payload, start, done):
             """Sends a listing or a file in the mode of the control connection."""
             nonlocal passive
+            if mc_pending or mc_kept:
+                sockets = open_mc_data(command)
+                parts = [bytearray() for _ in sockets]
+                for offset in range(0, len(payload), mc_stripe):
+                    parts[(offset // mc_stripe) % len(sockets)].extend(payload[offset:offset + mc_stripe])
+                parallel_data(lambda pair: pair[0].sendall(block_frames(pair[1]) if block_mode else pair[1]),
+                              list(zip(sockets, parts)))
+                finish_mc_data(sockets)
+                return
             if block_mode:
                 data = open_block_data(command)
                 if data is None:
@@ -236,7 +366,37 @@ class FtpHandler(socketserver.StreamRequestHandler):
                     reply('257 "/"')
                 elif command == "SYST":
                     reply("215 UNIX Type: L8")
-                elif command in ("OPTS", "TYPE", "REST"):
+                elif command == "FEAT":
+                    reply(f"211-Features\r\n MC {self.server.mc_max}\r\n211 End" if self.server.mc_max
+                          else "211 No extensions")
+                elif command == "OPTS" and arg.startswith("MC "):
+                    if self.server.mc_opts_refusal:
+                        reply(self.server.mc_opts_refusal)
+                    else:
+                        values = arg.split()
+                        mc_count = min(int(values[1]), self.server.mc_max)
+                        mc_stripe = min(int(values[2]) if len(values) > 2 else 4096, self.server.mc_max_stripe)
+                        reply(f"200 MC {mc_count} {mc_stripe}")
+                elif command == "MPSV":
+                    if self.server.mc_mpsv_refusal:
+                        reply(self.server.mc_mpsv_refusal)
+                    else:
+                        close_pending()
+                        close_kept()
+                        mc_pending = [self.server.passive_socket() for _ in range(mc_count)]
+                        ports = ",".join(str(listener.getsockname()[1]) for listener in mc_pending)
+                        reply(f"224 Entering Multi Passive Mode (|||{ports}|)")
+                elif command == "TYPE":
+                    transfer_type = arg.upper()
+                    reply("200 OK")
+                elif command == "REST":
+                    if self.server.metadata_delay:
+                        time.sleep(self.server.metadata_delay)
+                    reply("200 OK")
+                    if self.server.close_after_rest:
+                        self.server.close_after_rest = False
+                        return
+                elif command == "OPTS":
                     reply("200 OK")
                 elif command == "MFMT":
                     reply("200 OK" if self.server.timestamps == "mfmt" else "500 Unsupported command")
@@ -250,6 +410,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         cwd = directory
                         reply("250 Directory changed")
                 elif command == "SIZE":
+                    if self.server.metadata_delay:
+                        time.sleep(self.server.metadata_delay)
                     if self.server.stall_retry_size and self.server.failed_uploads:
                         self.server.pause()
                     if self.server.size_unsupported:
@@ -263,7 +425,8 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         # Like ftpsrv, report the ELF size read from the headers, whatever the stored size.
                         reply(f"213 {int.from_bytes(contents[4:12], 'little')}")
                     else:
-                        reply(f"213 {len(contents)}")
+                        size = len(contents) + (self.server.ascii_size_bias if transfer_type != "I" else 0)
+                        reply(f"213 {self.server.size_reply_prefix}{size}")
                 elif command == "MDTM":
                     # "MDTM <time> <path>" sets the time (vsftpd); "MDTM <path>" asks for it.
                     setting = arg[:14].isdigit() and arg[14:15] == " "
@@ -331,6 +494,9 @@ class FtpHandler(socketserver.StreamRequestHandler):
                         reply("550 File not found")
                         continue
                     send_data(command, contents, "150 Sending file", "226 Transfer complete")
+                elif command in ("STOR", "APPE") and (mc_pending or mc_kept):
+                    if upload_mc(command, path(arg)):
+                        return
                 elif command in ("STOR", "APPE") and block_mode:
                     target = path(arg)
                     fail_upload = (self.server.fail_uploads > 0 and
@@ -545,7 +711,9 @@ class FtpServer(socketserver.ThreadingTCPServer):
                  ftpsrv=False, ftpsrv_self=True, mode_b=None, mode_b_keep=True, mode_b_close_idle=False,
                  mode_b_refuse_reuse=0, mode_b_eof_on_data=False, mode_b_extra_blocks=False,
                  mode_b_bad_descriptor=False, stall_upload_after=None, control_port=0,
-                 passive_ports=range(30000, 30010)):
+                 passive_ports=range(30000, 30010), mc_max=0, mc_max_stripe=1048576,
+                 mc_opts_refusal=None, mc_mpsv_refusal=None, metadata_delay=0,
+                 ascii_size_bias=0, close_after_rest=False, size_reply_prefix=""):
         self.passive_ports = passive_ports
         super().__init__(("0.0.0.0", control_port), FtpHandler)
         self.files = dict(files or {})
@@ -570,6 +738,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         self.stall_directory = stall_directory
         self.stall_listing = stall_listing
         self.size_unsupported = size_unsupported
+        self.metadata_delay = metadata_delay  # Benchmark latency on SIZE/REST, without timing assertions.
+        self.ascii_size_bias = ascii_size_bias  # SIZE must be asked in binary mode for exact stored bytes.
+        self.close_after_rest = close_after_rest  # Once: reconnect before the next SIZE, with TYPE reset.
+        self.size_reply_prefix = size_reply_prefix  # Older servers put text before the size in a 213 reply.
         self.refuse_listing = refuse_listing
         self.nlst_hides_dotfiles = nlst_hides_dotfiles
         self.timestamps = timestamps  # "mfmt", "mdtm" (vsftpd's "MDTM <time> <path>" only) or "none".
@@ -582,6 +754,10 @@ class FtpServer(socketserver.ThreadingTCPServer):
         # the data connection stays open after each success (250, reused with 125). A string: MODE S is
         # accepted and MODE B gets that reply, e.g. "504 Unsupported transfer mode.".
         self.mode_b = mode_b
+        self.mc_max = mc_max
+        self.mc_max_stripe = mc_max_stripe
+        self.mc_opts_refusal = mc_opts_refusal
+        self.mc_mpsv_refusal = mc_mpsv_refusal
         self.mode_b_keep = mode_b_keep  # False: close the data connection after each transfer (226).
         self.mode_b_close_idle = mode_b_close_idle  # Close a kept connection right after its 250.
         self.mode_b_refuse_reuse = mode_b_refuse_reuse  # Answer 425 to this many reuses of a kept connection.

@@ -173,6 +173,28 @@
             </div>
             <p id="retries-hint" class="hint muted">Total attempts for connection/login and each file upload, including the first. 1 disables retries.</p>
             <p id="retries-error" class="error-text" role="alert" hidden></p>
+            <div id="ftp-mc-fields" class="ftp-mc-fields">
+              <label class="check">
+                <input type="checkbox" id="ftp-mc" disabled aria-describedby="ftp-mc-hint">
+                <span>Use FTPMC (parallel data connections)</span>
+              </label>
+              <p id="ftp-mc-hint" class="hint muted">Passive FTP/FTPS: split each file across several connections, in stream or block mode. If the server refuses FTPMC, use one connection. Saved automatically in preferences.</p>
+              <div class="grid two">
+                <div class="field">
+                  <label for="ftp-mc-connections">Data connections (1–64)</label>
+                  <input id="ftp-mc-connections" type="text" inputmode="numeric" autocomplete="off" value="4" disabled
+                         aria-describedby="ftp-mc-connections-error">
+                  <p id="ftp-mc-connections-error" class="error-text" role="alert" hidden></p>
+                </div>
+                <div class="field">
+                  <label for="ftp-mc-stripe">Stripe size (bytes)</label>
+                  <input id="ftp-mc-stripe" type="text" inputmode="numeric" autocomplete="off" value="0" disabled
+                         aria-describedby="ftp-mc-stripe-hint ftp-mc-stripe-error">
+                  <p id="ftp-mc-stripe-hint" class="hint muted">0 uses the server's size.</p>
+                  <p id="ftp-mc-stripe-error" class="error-text" role="alert" hidden></p>
+                </div>
+              </div>
+            </div>
             <label class="check">
               <input type="checkbox" id="prevent-sleep" checked disabled>
               <span>Prevent computer sleep during transfers</span>

@@ -17,6 +17,8 @@ struct Options {
   FtpProtocol protocol = FtpProtocol::Ftp;
   FtpsMode ftps_mode = FtpsMode::Explicit;
   bool mode_b = false;  // FTP/FTPS only; ignored for SFTP.
+  unsigned ftp_mc_connections = 0;
+  uint32_t ftp_mc_stripe = 0;
   std::optional<std::string> ca_certificate;
   std::optional<std::string> user;
   std::optional<std::string> password;

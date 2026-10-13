@@ -92,6 +92,12 @@
     modeB: $("mode-b"),
     modeBField: $("mode-b-field"),
     modeBInfo: $("btn-mode-b-info"),
+    ftpMcFields: $("ftp-mc-fields"),
+    ftpMc: $("ftp-mc"),
+    ftpMcConnections: $("ftp-mc-connections"),
+    ftpMcConnectionsError: $("ftp-mc-connections-error"),
+    ftpMcStripe: $("ftp-mc-stripe"),
+    ftpMcStripeError: $("ftp-mc-stripe-error"),
     preventSleep: $("prevent-sleep"),
     verbose: $("verbose"),
     memSave: $("btn-mem-save"),
@@ -171,6 +177,8 @@
     units: "si",
     bufferMib: 64,
     retries: 3,
+    ftpMcConnections: 0,
+    ftpMcStripe: 0,
     preventSleep: true,
     completionSound: true,
     showPasswords: false,
@@ -217,6 +225,10 @@
     validateBuffer();
     els.retries.value = String(state.retries);
     validateRetries();
+    els.ftpMc.checked = state.ftpMcConnections > 0;
+    els.ftpMcConnections.value = String(state.ftpMcConnections || 4);
+    els.ftpMcStripe.value = String(state.ftpMcStripe);
+    updateFtpMcFields();
     updateSubmitState();
   }
 
@@ -226,6 +238,8 @@
       state.units = preferences.units;
       state.bufferMib = preferences.buffer_mib;
       state.retries = preferences.retries ?? 3;
+      state.ftpMcConnections = preferences.ftp_mc_connections ?? 0;
+      state.ftpMcStripe = preferences.ftp_mc_stripe ?? 0;
       state.preventSleep = preferences.prevent_sleep ?? true;
       state.completionSound = preferences.completion_sound ?? true;
       state.showPasswords = preferences.show_passwords ?? false;
@@ -241,7 +255,7 @@
 
   async function savePreferences(units, bufferMib, completionSound = state.completionSound,
     showPasswords = state.showPasswords, retries = state.retries, checkUpdates = state.checkUpdates,
-    preventSleep = state.preventSleep) {
+    preventSleep = state.preventSleep, ftpMcConnections = state.ftpMcConnections, ftpMcStripe = state.ftpMcStripe) {
     if (state.preferencesBusy) return false;
     state.preferencesBusy = true;
     updateSubmitState();
@@ -251,15 +265,19 @@
     els.preventSleep.disabled = true;
     els.completionSound.disabled = true;
     els.checkUpdates.disabled = true;
+    updateFtpMcFields();
     for (const input of els.passwordVisibility) input.disabled = true;
     try {
       await invoke("preferences_save", { preferences: {
         units, buffer_mib: bufferMib, completion_sound: completionSound, show_passwords: showPasswords,
         retries, check_updates: checkUpdates, prevent_sleep: preventSleep,
+        ftp_mc_connections: ftpMcConnections, ftp_mc_stripe: ftpMcStripe,
       } });
       state.units = units;
       state.bufferMib = bufferMib;
       state.retries = retries;
+      state.ftpMcConnections = ftpMcConnections;
+      state.ftpMcStripe = ftpMcStripe;
       state.preventSleep = preventSleep;
       state.completionSound = completionSound;
       state.showPasswords = showPasswords;
@@ -282,6 +300,14 @@
     const bufferMib = validateBuffer();
     if (bufferMib === null) return;
     return savePreferences(state.units, bufferMib);
+  }
+
+  function saveFtpMc() {
+    updateFtpMcFields();
+    const mc = validateFtpMc();
+    if (!mc) return;
+    return savePreferences(state.units, state.bufferMib, state.completionSound, state.showPasswords,
+      state.retries, state.checkUpdates, state.preventSleep, mc.connections, mc.stripe);
   }
 
   function saveCompletionSound() {
@@ -511,6 +537,18 @@
 
   function setMode(mode) {
     els.mode.value = mode;
+    updateFtpMcFields();
+  }
+
+  function updateFtpMcFields() {
+    const supported = els.protocol.value !== "sftp" && selectedMode() === "passive";
+    setHidden(els.ftpMcFields, !supported);
+    els.ftpMc.disabled = state.preferencesBusy || !supported;
+    els.ftpMcConnections.disabled = els.ftpMcStripe.disabled = state.preferencesBusy || !supported || !els.ftpMc.checked;
+    if (!els.ftpMc.checked) {
+      setFieldError(els.ftpMcConnections, els.ftpMcConnectionsError, "");
+      setFieldError(els.ftpMcStripe, els.ftpMcStripeError, "");
+    }
   }
 
   function defaultPort(protocol) {
@@ -528,6 +566,7 @@
     setHidden(els.sshButton, !ssh);
     els.knownHosts.disabled = !els.verifyHostKey.checked;
     els.knownHostsButton.disabled = !els.verifyHostKey.checked;
+    updateFtpMcFields();
   }
 
   async function chooseSshFile(input) {
@@ -569,6 +608,20 @@
   const validateRetries = () =>
     parseIntInRange(els.retries, els.retriesError, 1, 4294967295,
       "Upload attempts must be a whole number between 1 and 4294967295.");
+
+  function validateFtpMc() {
+    if (!els.ftpMc.checked) return { connections: 0, stripe: state.ftpMcStripe };
+    const connections = parseIntInRange(els.ftpMcConnections, els.ftpMcConnectionsError, 1, 64,
+      "Data connections must be a whole number between 1 and 64.");
+    // libcurl takes a long for the stripe size; Windows uses a 32-bit long.
+    const maxStripe = navigator.userAgent.includes("Windows") ? 2147483647 : 4294967295;
+    const stripe = parseIntInRange(els.ftpMcStripe, els.ftpMcStripeError, 0, maxStripe,
+      `Stripe size must be a whole number between 0 and ${maxStripe} bytes.`);
+    if (connections === null || stripe === null) {
+      return null;
+    }
+    return { connections, stripe };
+  }
 
   function updateSubmitState() {
     const host = els.host.value.trim();
@@ -826,6 +879,12 @@
     const port = validatePort();
     const buffer = validateBuffer();
     const retries = validateRetries();
+    const mc = els.protocol.value !== "sftp" && selectedMode() === "passive" ? validateFtpMc() : { connections: 0, stripe: 0 };
+    if (!mc) {
+      els.advanced.open = true;
+      focusField(els.ftpMcConnections.hasAttribute("aria-invalid") ? els.ftpMcConnections : els.ftpMcStripe);
+      return null;
+    }
     if (port === null) {
       focusField(els.port);
       return null;
@@ -859,6 +918,8 @@
       buffer_mib: buffer,
       retries,
       mode_b: server.protocol !== "sftp" && server.mode_b,
+      ftp_mc_connections: mc.connections,
+      ftp_mc_stripe: mc.stripe,
       prevent_sleep: state.preventSleep,
       units: state.units,
     };
@@ -1807,6 +1868,12 @@
       invoke("open_block_mode_help").catch((e) => toastError("Could not open the block mode help", e));
     });
     els.port.addEventListener("input", validatePort);
+    els.mode.addEventListener("change", updateFtpMcFields);
+    els.ftpMc.addEventListener("change", saveFtpMc);
+    for (const input of [els.ftpMcConnections, els.ftpMcStripe]) {
+      input.addEventListener("input", validateFtpMc);
+      input.addEventListener("change", saveFtpMc);
+    }
     els.protocol.addEventListener("change", changeProtocol);
     els.sshButton.addEventListener("click", () => els.sshDialog.showModal());
     els.privateKeyButton.addEventListener("click", () => chooseSshFile(els.privateKey));

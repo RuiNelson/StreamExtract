@@ -41,6 +41,7 @@ Transfer::Transfer(const TransferPlan& plan, FtpClient& ftp, PasswordSource& pas
       log_(log),
       progress_(progress),
       pipe_(buffer_bytes),
+      retry_pipe_(std::min(buffer_bytes, kBlockSize)),
       attempts_(std::max(1u, attempts)),
       destination_root_(std::move(destination_root)) {
   progress_.set_buffer_capacity(buffer_bytes);
@@ -55,7 +56,7 @@ Transfer::~Transfer() {
 
 void Transfer::start() {
   // Directory creation and streamed probes also wait for FTP replies.
-  ftp_.set_cancel_check([this] { return cancel_requested_.load(); });
+  ftp_.set_cancel_check([this] { return cancel_requested_.load() || pipe_.aborted(); });
   progress_.set_totals(plan_.upload_files, plan_.upload_bytes, plan_.skip_files, plan_.skip_bytes);
   if (plan_.streamed) {
     progress_.set_streamed();
@@ -73,8 +74,7 @@ void Transfer::cancel() {
   log_.info("Cancelling...");
   progress_.set_activity("Cancelling...");
   pipe_.abort();
-  std::lock_guard lock(reply_mutex_);
-  reply_ready_.notify_all();
+  retry_pipe_.abort();
 }
 
 TransferResult Transfer::wait() {
@@ -116,13 +116,13 @@ void Transfer::fail(const std::string& message) {
     log_.error(message);
   }
   pipe_.abort();
-  std::lock_guard lock(reply_mutex_);
-  reply_ready_.notify_all();
+  retry_pipe_.abort();
 }
 
-std::string Transfer::describe_archive_error(const ArchiveError& error, const std::string& what) const {
-  if (!missing_volume_.empty()) {
-    return fmt::format("volume not found: {}", missing_volume_);
+std::string Transfer::describe_archive_error(const ArchiveError& error, const std::string& what,
+                                             const std::string& missing_volume) const {
+  if (!missing_volume.empty()) {
+    return fmt::format("volume not found: {}", missing_volume);
   }
   switch (error.kind()) {
     case ArchiveError::Kind::BadPassword:
@@ -142,7 +142,7 @@ void Transfer::run_extractor() {
   try {
     extract();
   } catch (const ArchiveError& error) {
-    fail(describe_archive_error(error, "cannot read the archive"));
+    fail(describe_archive_error(error, "cannot read the archive", missing_volume_));
   } catch (const std::exception& error) {
     fail(fmt::format("cannot read the archive: {}", error.what()));
   }
@@ -237,7 +237,7 @@ void Transfer::extract() {
         try {
           archive->skip();
         } catch (const ArchiveError& error) {
-          fail(describe_archive_error(error, entry.name));
+          fail(describe_archive_error(error, entry.name, missing_volume_));
           return;
         }
         continue;
@@ -274,7 +274,10 @@ void Transfer::extract() {
             if (!flush()) {
               return;
             }
-            if (!finish_extraction(current, callbacks, flush)) {
+            PipeMessage end;
+            end.kind = PipeMessage::Kind::FileEnd;
+            end.entry = current;
+            if (!pipe_.push(std::move(end))) {
               return;
             }
             break;
@@ -301,7 +304,7 @@ void Transfer::extract() {
         if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
           return;  // Stopped on purpose.
         }
-        fail(describe_archive_error(error, planned.relative));
+        fail(describe_archive_error(error, planned.relative, missing_volume_));
         return;
       }
     }
@@ -383,7 +386,10 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
           if (!flush()) {
             return;
           }
-          if (!finish_extraction(index, callbacks, flush)) {
+          PipeMessage end;
+          end.kind = PipeMessage::Kind::FileEnd;
+          end.entry = index;
+          if (!pipe_.push(std::move(end))) {
             return;
           }
           break;
@@ -402,7 +408,7 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
       if (archive->aborted_by_callback() && (cancel_requested_ || pipe_.aborted())) {
         return;  // Stopped on purpose.
       }
-      fail(describe_archive_error(error, planned.relative));
+      fail(describe_archive_error(error, planned.relative, missing_volume_));
       return;
     }
     progress_.set_archive_read(archive->bytes_read());
@@ -416,90 +422,86 @@ void Transfer::extract_streamed(ArchiveCallbacks& callbacks, const std::function
   pipe_.push(std::move(end));
 }
 
-bool Transfer::finish_extraction(size_t index, ArchiveCallbacks& callbacks, const std::function<bool()>& flush) {
-  while (true) {
-    PipeMessage end;
-    end.kind = PipeMessage::Kind::FileEnd;
-    end.entry = index;
-    if (!pipe_.push(std::move(end))) {
-      return false;
-    }
-    std::unique_lock lock(reply_mutex_);
-    reply_ready_.wait(lock, [&] { return file_reply_ != FileReply::Waiting || pipe_.aborted(); });
-    if (pipe_.aborted()) {
-      return false;
-    }
-    const bool retry = file_reply_ == FileReply::Retry;
-    file_reply_ = FileReply::Waiting;
-    lock.unlock();
-    if (!retry) {
-      return true;
-    }
-    if (!reread_file(index, callbacks) || !flush()) {
-      return false;
-    }
-  }
-}
-
-bool Transfer::reread_file(size_t index, ArchiveCallbacks callbacks) {
+void Transfer::reread_file(size_t index) {
+  // The main reader may already be extracting a later entry. Own every callback
+  // and buffer here, and never feed retry data into its pending FIFO queue.
+  const PlannedEntry planned = entry(index);
+  std::string missing_volume;
+  std::vector<uint8_t> block;
   bool target = false;
-  const auto on_data = callbacks.on_data;
-  callbacks.on_data = [&](const uint8_t* data, size_t size) {
-    if (cancel_requested_ || pipe_.aborted()) {
-      return false;
-    }
-    if (!target) {
-      progress_.add_unpacked(size);
-      return true;
-    }
-    return on_data(data, size);
+  const auto flush = [&]() {
+    if (block.empty()) return true;
+    PipeMessage message;
+    message.kind = PipeMessage::Kind::Data;
+    message.data = std::move(block);
+    block = std::vector<uint8_t>();
+    return retry_pipe_.push(std::move(message));
   };
-  // Rereading compressed tar must not move its archive-level progress backwards
-  // or inflate it; the original reader resumes after this attempt.
-  const Archive* original = reading_;
-  reading_ = nullptr;
-  struct Restore {
-    const Archive*& reading;
-    const Archive* original;
-    ~Restore() { reading = original; }
-  } restore{reading_, original};
-  progress_.set_activity(fmt::format("Rereading {} for retry", entry(index).relative));
-  const auto archive = open_archive(plan_.archive_path, Archive::Mode::Extract, std::move(callbacks));
-  ArchiveEntry header;
-  size_t current = 0;
-  while (archive->next(header)) {
-    if (cancel_requested_ || pipe_.aborted()) {
+  ArchiveCallbacks callbacks;
+  callbacks.on_data = [&](const uint8_t* data, size_t size) {
+    if (cancel_requested_ || pipe_.aborted() || retry_pipe_.aborted()) {
       return false;
     }
-    if (header.split_before) {
-      archive->skip();
-      continue;
+    progress_.add_unpacked(size);
+    if (!target) return true;
+    while (size > 0) {
+      if (block.capacity() == 0) {
+        size_t capacity = kMinBlockCapacity;
+        while (capacity < planned.entry.size && capacity < kBlockSize) capacity *= 2;
+        block = retry_pipe_.acquire_buffer(capacity);
+      }
+      const size_t take = std::min(size, kBlockSize - block.size());
+      block.insert(block.end(), data, data + take);
+      data += take;
+      size -= take;
+      if (block.size() >= kBlockSize && !flush()) return false;
     }
-    const ArchiveEntry& expected = entry(current).entry;
-    if (header.name != expected.name || header.size != expected.size || header.kind != expected.kind) {
-      fail("the archive changed while it was being read");
-      return false;
+    return true;
+  };
+  callbacks.on_password = [&] { return passwords_.get(); };
+  callbacks.on_volume = [&](const std::string& volume) { log_.info("Reading volume {}", file_name_of(volume)); };
+  callbacks.on_missing_volume = [&](const std::string& volume) { missing_volume = volume; };
+  callbacks.on_large_dictionary = [](uint64_t, uint64_t) { return true; };
+  // Only the main reader contributes to archive-level progress.
+  progress_.set_activity(fmt::format("Rereading {} for retry", planned.relative));
+  try {
+    const auto archive = open_archive(plan_.archive_path, Archive::Mode::Extract, std::move(callbacks));
+    ArchiveEntry header;
+    size_t current = 0;
+    while (archive->next(header)) {
+      if (cancel_requested_ || pipe_.aborted() || retry_pipe_.aborted()) return;
+      if (header.split_before) {
+        archive->skip();
+        continue;
+      }
+      const ArchiveEntry& expected = entry(current).entry;
+      if (header.name != expected.name || header.size != expected.size || header.kind != expected.kind) {
+        fail("the archive changed while it was being read");
+        return;
+      }
+      if (current == index) {
+        target = true;
+        archive->test();
+        if (!flush()) return;
+        PipeMessage end;
+        end.kind = PipeMessage::Kind::FileEnd;
+        end.entry = index;
+        retry_pipe_.push(std::move(end));
+        return;
+      }
+      ++current;
+      if (archive->flags().skip_decompresses) {
+        archive->test();
+      } else {
+        archive->skip();
+      }
     }
-    if (current == index) {
-      target = true;
-      archive->test();
-      return true;
-    }
-    ++current;
-    if (archive->flags().skip_decompresses) {
-      archive->test();
-    } else {
-      archive->skip();
-    }
+    fail("the archive ended before the file to retry was read");
+  } catch (const ArchiveError& error) {
+    if (!retry_pipe_.aborted()) fail(describe_archive_error(error, planned.relative, missing_volume));
+  } catch (const std::exception& error) {
+    if (!retry_pipe_.aborted()) fail(fmt::format("cannot reread {}: {}", planned.relative, error.what()));
   }
-  fail("the archive ended before the file to retry was read");
-  return false;
-}
-
-void Transfer::acknowledge_file(bool retry) {
-  std::lock_guard lock(reply_mutex_);
-  file_reply_ = retry ? FileReply::Retry : FileReply::Continue;
-  reply_ready_.notify_all();
 }
 
 // ---------------------------------------------------------------------------
@@ -554,26 +556,24 @@ void Transfer::upload_loop() {
           }
           if (planned.action == PlannedEntry::Action::Skip) {
             progress_.add_skipped(planned.entry.size);
-            progress_.set_activity(fmt::format("Skipping {} ({})", planned.relative,
-                                              planned.already_published ? "already in the destination"
-                                                                        : "already on the server"));
+            progress_.set_activity(
+                fmt::format("Skipping {} ({})", planned.relative,
+                            planned.already_published ? "already in the destination" : "already on the server"));
             {
               std::lock_guard lock(mutex_);
               ++skipped_files_;
               skipped_bytes_ += planned.entry.size;
             }
-            if (!discard_file()) {
+            if (!discard_file(pipe_)) {
               return;
             }
-            acknowledge_file(false);
             break;
           }
           progress_.add_upload(planned.entry.size - planned.resume_offset);
         }
-        if (!upload_file(planned, ++number)) {
+        if (!upload_file(message->entry, planned, ++number)) {
           return;
         }
-        acknowledge_file(false);
         break;
       }
       case PipeMessage::Kind::End:
@@ -599,8 +599,8 @@ void Transfer::publish_staging() {
         destination.compare(0, plan_.remote_root.size() + 1, plan_.remote_root + "/") == 0) {
       throw std::runtime_error("an archive entry would move into the staging directory: " + planned.relative);
     }
-    if (planned.already_published || (planned.action == PlannedEntry::Action::MakeDir &&
-                                     published_directories_.count(planned.remote) != 0)) {
+    if (planned.already_published ||
+        (planned.action == PlannedEntry::Action::MakeDir && published_directories_.count(planned.remote) != 0)) {
       return;
     }
     if (planned.action != PlannedEntry::Action::MakeDir) {
@@ -656,18 +656,50 @@ void Transfer::publish_staging() {
   log_.info("Moving {} staged file(s) to {}", files.size(), destination_root_);
   progress_.set_activity("Moving staged contents to the destination");
   std::set<std::string> moved_directories;
-  const std::function<void(const std::string&, const std::string&)> publish =
-      [&](const std::string& source_dir, const std::string& destination_dir) {
-        for (const auto& name : children.at(source_dir)) {
+  const std::function<void(const std::string&, const std::string&, bool)> publish =
+      [&](const std::string& source_dir, const std::string& destination_dir, bool newly_created) {
+        const auto& names = children.at(source_dir);
+        // A different destination filesystem can normalize Unicode, trailing
+        // dots/spaces or short-name aliases. Preserve its probes for those sets
+        // of siblings, including an ASCII name that may alias a Unicode name.
+        const bool simple_names = std::all_of(names.begin(), names.end(), [](const std::string& name) {
+          return !name.empty() && name.back() != '.' && name.back() != ' ' &&
+                 std::none_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0x80 || c == '~'; });
+        });
+        std::set<std::string> destination_names;
+        for (const auto& name : names) {
           if (cancel_requested_) return;
           const std::string source = join_remote_path(source_dir, name);
           const std::string destination = join_remote_path(destination_dir, name);
           const bool directory = staged_directories.count(source) != 0;
-          if (directory && ftp_.directory_exists(destination)) {
-            publish(source, destination);  // Merge into an existing folder.
+          // This parent was empty when we created it. Moving a sibling cannot
+          // create this child; case collisions still need the ordinary probe.
+          bool known_absent = newly_created && simple_names;
+          if (known_absent) {
+            std::string folded = name;
+            for (char& c : folded) {
+              if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            }
+            known_absent = destination_names.insert(std::move(folded)).second;
+          }
+          if (directory && !known_absent && ftp_.directory_exists(destination)) {
+            publish(source, destination, false);  // Merge into an existing folder.
           } else if (directory && !archive_directory(source)) {
-            ftp_.ensure_directory(destination);
-            publish(source, destination);  // Keep unrelated staging contents in place.
+            bool created_empty = true;
+            if (known_absent) {
+              try {
+                ftp_.make_directory(destination);  // Its parent already exists.
+              } catch (const FtpError&) {
+                if (cancel_requested_ || pipe_.aborted()) throw;
+                // Servers that reject absolute MKD still get curl's normal
+                // CWD/create sequence and compatibility fallback.
+                ftp_.ensure_directory(destination);
+                created_empty = false;  // The failed MKD may have found an existing directory.
+              }
+            } else {
+              ftp_.ensure_directory(destination);
+            }
+            publish(source, destination, created_empty);  // Keep unrelated staging contents in place.
           } else {
             progress_.set_activity(fmt::format("Moving {} to the destination", source));
             ftp_.move_path(source, destination);
@@ -678,7 +710,7 @@ void Transfer::publish_staging() {
           }
         }
       };
-  publish(plan_.remote_root, destination_root_);
+  publish(plan_.remote_root, destination_root_, false);
 
   // Children sort after parents; remove only empty directories used by this archive.
   // Leave the staging root and any unrelated files available for future uploads.
@@ -697,7 +729,7 @@ void Transfer::publish_staging() {
   log_.info("Staged files moved to the destination");
 }
 
-bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
+bool Transfer::upload_file(size_t index, const PlannedEntry& planned, uint64_t number) {
   const uint64_t size = planned.entry.size;
   uint64_t initial_remaining = size - planned.resume_offset;
   uint64_t counted_prefix = planned.resume_offset;
@@ -724,6 +756,18 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   uint64_t bytes_sent = 0;
   bool complete = false;
   UploadResult result;
+  Pipe* input = &pipe_;
+  std::thread retry_reader;
+  struct JoinRetry {
+    Pipe& pipe;
+    std::thread& reader;
+    ~JoinRetry() {
+      if (reader.joinable()) {
+        pipe.abort();
+        reader.join();
+      }
+    }
+  } join_retry{retry_pipe_, retry_reader};
 
   for (unsigned attempt = 1;; ++attempt) {
     uint64_t remaining = size - resume_offset;
@@ -758,7 +802,14 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
           counted_prefix = resume_offset;
         }
         complete = false;
-        acknowledge_file(true);
+        input = &retry_pipe_;
+        retry_reader = std::thread([this, index] {
+          try {
+            reread_file(index);
+          } catch (const std::exception& error) {
+            if (!retry_pipe_.aborted()) fail(fmt::format("cannot reread the archive: {}", error.what()));
+          }
+        });
       }
     }
 
@@ -784,11 +835,11 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
             return 0;
           }
           if (block.capacity() > 0) {
-            pipe_.release_buffer(std::move(block));
+            input->release_buffer(std::move(block));
             block = std::vector<uint8_t>();
           }
           offset = 0;
-          std::optional<PipeMessage> message = pipe_.pop();
+          std::optional<PipeMessage> message = input->pop();
           progress_.set_buffer_used(pipe_.buffered());
           if (!message) {
             return std::nullopt;
@@ -812,7 +863,7 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
       bytes_sent += result.bytes_sent;
       const bool unsent_data = offset < block.size();
       if (block.capacity() > 0) {
-        pipe_.release_buffer(std::move(block));
+        input->release_buffer(std::move(block));
       }
       if (result.ok && unsent_data) {
         fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
@@ -821,7 +872,7 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
       }
       // curl can stop at INFILESIZE before reading the checksum-gated marker.
       if (!complete && !result.aborted_by_source && (result.ok || result.bytes_sent >= remaining)) {
-        complete = await_file_end(planned);
+        complete = await_file_end(*input, planned);
         if (!complete) {
           result.ok = false;
           result.aborted_by_source = true;
@@ -842,28 +893,27 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
     }
 
     if (result.ok) {
+      if (retry_reader.joinable()) retry_reader.join();
       break;
     }
     if (result.aborted_by_source || cancel_requested_ || pipe_.aborted() || attempt == attempts_) {
       if (!result.aborted_by_source && !cancel_requested_ && !pipe_.aborted()) {
         fail(fmt::format("upload of {} failed after {} attempt(s): {}", planned.relative, attempt, result.error));
       }
-      // Wake the extractor even when curl aborted before requesting data.
+      // Wake both readers even when curl aborted before requesting data.
       pipe_.abort();
-      {
-        std::lock_guard lock(reply_mutex_);
-        reply_ready_.notify_all();
-      }
+      retry_pipe_.abort();
+      if (retry_reader.joinable()) retry_reader.join();
       if (remote_started) {
         remove_partial(planned, bytes_sent);
       }
       return false;
     }
 
-    // Finish verifying this attempt before retrying. Drop its remaining data,
-    // leaving the original archive reader waiting at the same file boundary.
+    // Finish verifying this attempt before retrying. Drop only this file's
+    // remaining data; the main reader can keep preparing later entries.
     if (!complete) {
-      complete = discard_file();
+      complete = discard_file(*input);
       if (!complete) {
         if (remote_started) {
           remove_partial(planned, bytes_sent);
@@ -871,6 +921,7 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
         return false;
       }
     }
+    if (retry_reader.joinable()) retry_reader.join();
     log_.warn("upload of {} failed (attempt {}/{}): {}; retrying immediately", planned.relative, attempt,
               attempts_, result.error);
   }
@@ -893,9 +944,9 @@ bool Transfer::upload_file(const PlannedEntry& planned, uint64_t number) {
   return true;
 }
 
-bool Transfer::await_file_end(const PlannedEntry& planned) {
+bool Transfer::await_file_end(Pipe& input, const PlannedEntry& planned) {
   while (true) {
-    std::optional<PipeMessage> message = pipe_.pop();
+    std::optional<PipeMessage> message = input.pop();
     progress_.set_buffer_used(pipe_.buffered());
     if (!message) {
       return false;  // The extractor failed (e.g. checksum error) or a cancellation.
@@ -905,7 +956,7 @@ bool Transfer::await_file_end(const PlannedEntry& planned) {
         return true;
       case PipeMessage::Kind::Data:
         if (message->data.empty()) {
-          pipe_.release_buffer(std::move(message->data));
+          input.release_buffer(std::move(message->data));
           continue;
         }
         fail(fmt::format("{} is larger than its size in the archive header", planned.relative));
@@ -917,16 +968,16 @@ bool Transfer::await_file_end(const PlannedEntry& planned) {
   }
 }
 
-bool Transfer::discard_file() {
+bool Transfer::discard_file(Pipe& input) {
   while (true) {
-    std::optional<PipeMessage> message = pipe_.pop();
+    std::optional<PipeMessage> message = input.pop();
     progress_.set_buffer_used(pipe_.buffered());
     if (!message) {
       return false;  // The extractor failed or a cancellation.
     }
     switch (message->kind) {
       case PipeMessage::Kind::Data:
-        pipe_.release_buffer(std::move(message->data));
+        input.release_buffer(std::move(message->data));
         break;
       case PipeMessage::Kind::FileEnd:
         return true;

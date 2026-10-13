@@ -10,10 +10,17 @@
 # An archive that ends exactly at a block boundary without an end-of-archive
 # block (RAR 1.5, or rar -en) is still complete, as UnRAR itself decides.
 #
+# Extraction read-ahead and retry readers can run on different threads. Keep
+# the DLL's error state on the calling thread, and initialize the shared BLAKE2
+# SSE constants once instead of rewriting them while another reader uses them.
+# The other decoding caches have already been initialized by the original
+# attempt before a retry starts; retries only begin after its data is verified.
+# Our DLL callbacks handle cancellation, without UnRAR's process signal handler.
+#
 # Each change must match exactly once, or the configuration fails: review the
 # patch when updating UnRAR.
 
-set(_unrar_patched_files dll.hpp archive.hpp archive.cpp arcread.cpp dll.cpp)
+set(_unrar_patched_files dll.hpp archive.hpp archive.cpp arcread.cpp dll.cpp global.hpp blake2s.cpp)
 
 # Writes `name` from the downloaded sources into `output_dir`, patched; only
 # rewrites it when the result changes, so a reconfiguration does not rebuild UnRAR.
@@ -50,6 +57,12 @@ function(_unrar_patch source_dir output_dir name)
     # ProcessFile reads the next header after the file: a cut there is not an unknown error.
     _change("  return Data->Cmd.DllError!=0 ? Data->Cmd.DllError : RarErrorToDll(ErrHandler.GetErrorCode());\n}\n\n\nint PASCAL RARProcessFile("
       "  if (Data->Cmd.DllError==0 && Data->Arc.UnexpectedEnd &&\n      (ErrHandler.GetErrorCode()==RARX_SUCCESS || ErrHandler.GetErrorCode()==RARX_WARNING))\n    return ERAR_TRUNCATED;\n  return Data->Cmd.DllError!=0 ? Data->Cmd.DllError : RarErrorToDll(ErrHandler.GetErrorCode());\n}\n\n\nint PASCAL RARProcessFile(")
+  elseif(name STREQUAL "global.hpp")
+    _change("EXTVAR ErrorHandler ErrHandler;"
+      "EXTVAR thread_local ErrorHandler ErrHandler; // streamextract patch: independent concurrent DLL readers.")
+  elseif(name STREQUAL "blake2s.cpp")
+    _change("  if (_SSE_Version>=SSE_SSE2)\n    blake2s_init_sse();\n"
+      "  if (_SSE_Version>=SSE_SSE2)\n  {\n    // streamextract patch: another reader may already be using these constants.\n    static const bool Initialized=[] {blake2s_init_sse(); return true;}();\n    (void)Initialized;\n  }\n")
   else()
     message(FATAL_ERROR "No UnRAR patch for ${name}")
   endif()

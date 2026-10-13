@@ -4,6 +4,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <doctest/doctest.h>
@@ -721,4 +722,31 @@ TEST_CASE("RAR archives cut inside a header are truncated, not shorter (UnRAR pa
   // "rar -en" archives end: UnRAR accepts it, and so do we.
   const Read boundary = read_all(dir.write("boundary.rar", fixtures::kTinyRar, 50));
   CHECK(boundary.contents == std::vector<std::string>{"hello\n"});
+}
+
+TEST_CASE("concurrent RAR readers keep their checksum errors independent") {
+  const TempDir dir;
+  const std::string valid = dir.write("valid.rar", fixtures::kTinyRar);
+  std::vector<uint8_t> damaged(fixtures::kTinyRar, fixtures::kTinyRar + sizeof(fixtures::kTinyRar));
+  damaged[44] ^= 1;  // Stored file data; leave the archive headers intact.
+  const std::string corrupt = dir.write("corrupt.rar", damaged.data(), damaged.size());
+
+  std::string contents;
+  std::string other_error;
+  ArchiveCallbacks callbacks;
+  callbacks.on_data = [&](const uint8_t* data, size_t size) {
+    contents.append(reinterpret_cast<const char*>(data), size);
+    // Like a retry while read-ahead is blocked in its data callback: the
+    // second reader must finish without affecting the paused first reader.
+    std::thread other([&] { other_error = error_text(corrupt); });
+    other.join();
+    return true;
+  };
+  const auto archive = open_archive(valid, Archive::Mode::Extract, callbacks);
+  ArchiveEntry entry;
+  REQUIRE(archive->next(entry));
+  CHECK_NOTHROW(archive->test());
+  CHECK(other_error.find("checksum") != std::string::npos);
+  CHECK(contents == "hello\n");
+  CHECK_FALSE(archive->next(entry));
 }

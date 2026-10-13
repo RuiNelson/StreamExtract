@@ -83,10 +83,10 @@ by use of this software.
 Copyright (c) 1996 - 2026, Daniel Stenberg and many contributors. curl license
 (an MIT/X derivative): <https://curl.se/docs/copyright.html>.
 
-The bundled source is our fork of curl 8.22.0,
-<https://github.com/RuiNelson/curl-streamextract> (branch `ftp-mode-b`), under the
-same license. It adds FTP block mode (`MODE B`) and fixes SSH key passphrases,
-SFTP renames over existing files and zero-byte SFTP sizes. All transfer
+The bundled source is our fork of curl 8.23.0,
+<https://github.com/RuiNelson/curl-streamextract>, under the
+same license. It adds FTPMC parallel data connections, FTP block mode (`MODE B`)
+and fixes SSH key passphrases, SFTP renames over existing files and zero-byte SFTP sizes. All transfer
 protocols use this same build.
 
 ## FTXUI

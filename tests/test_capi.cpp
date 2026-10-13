@@ -283,6 +283,40 @@ TEST_CASE("block mode is accepted for every protocol without changing the JSON c
   }
 }
 
+TEST_CASE("FTPMC validates the count before opening an archive and preserves the JSON contract") {
+  CHECK(streamextract_job_start_with_ftp_mc(nullptr, 0, 3, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr,
+                                            nullptr, nullptr, 0, 4, 4096) == nullptr);
+  auto missing = make_config("/nonexistent/ftpmc.rar", 1);
+  streamextract_job* invalid = streamextract_job_start_with_ftp_mc(
+      &missing, 0, 1, STREAMEXTRACT_PROTOCOL_FTP, nullptr, nullptr, nullptr, nullptr, 0, 65, 0);
+  REQUIRE(invalid != nullptr);
+  const auto error = wait_for(invalid, "\"phase\":\"finished\"");
+  streamextract_job_free(invalid);
+  CHECK(contains(error, "FTPMC connections must be between 0 and 64"));
+  CHECK(contains(error, "\"archive\":null"));
+  const TempFile archive("streamextractcore-ftpmc.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip));
+  const std::string path = archive.path();
+  auto config = make_config(path, 1);
+  config.user = "test";
+  config.password = "test";
+  for (int protocol : {STREAMEXTRACT_PROTOCOL_FTP, STREAMEXTRACT_PROTOCOL_FTPS_EXPLICIT,
+                       STREAMEXTRACT_PROTOCOL_FTPS_IMPLICIT, STREAMEXTRACT_PROTOCOL_SFTP}) {
+    for (unsigned count : {0U, 1U, 64U}) {
+      CAPTURE(protocol);
+      CAPTURE(count);
+      auto* job = streamextract_job_start_with_ftp_mc(&config, 0, 1, protocol, nullptr, nullptr, nullptr,
+                                                      nullptr, 1, count, 65536);
+      REQUIRE(job != nullptr);
+      const auto json = wait_for(job, "\"phase\":\"finished\"");
+      streamextract_job_free(job);
+      CHECK(contains(json, "\"status\":\"failed\""));
+      CHECK(contains(json, "cannot log in to 127.0.0.1:1"));
+      CHECK(contains(json, "\"mode\":\"passive\""));
+      CHECK_FALSE(contains(json, "FTPMC:"));  // No negotiation without a connection.
+    }
+  }
+}
+
 TEST_CASE("ZIP, 7z and tar archives are read too") {
   const TempFile zip("streamextractcore-tiny.zip", fixtures::kTinyZip, sizeof(fixtures::kTinyZip));
   const TempFile seven_zip("streamextractcore-tiny.7z", fixtures::kTiny7z, sizeof(fixtures::kTiny7z));

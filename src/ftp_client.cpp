@@ -1,7 +1,9 @@
 #include "ftp_client.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <mutex>
 #include <string_view>
 
@@ -53,6 +55,18 @@ bool is_reply_line(std::string_view line) {
          (line[3] == ' ' || line[3] == '-');
 }
 
+std::optional<uint64_t> size_reply(std::string_view reply) {
+  if (reply.size() <= 4 || reply.substr(0, 4) != "213 ") return std::nullopt;
+  reply.remove_prefix(4);
+  uint64_t size = 0;
+  const auto parsed = std::from_chars(reply.data(), reply.data() + reply.size(), size);
+  if (parsed.ec != std::errc() || parsed.ptr != reply.data() + reply.size() ||
+      size > static_cast<uint64_t>(std::numeric_limits<curl_off_t>::max())) {
+    return std::nullopt;
+  }
+  return size;
+}
+
 bool is_data_connection_error(CURLcode code) {
   switch (code) {
     case CURLE_FTP_ACCEPT_FAILED:
@@ -101,11 +115,17 @@ struct FtpClient::Impl {
   Ftpsrv ftpsrv = Ftpsrv::No;
   bool self_conversion = false;
   bool self_conversion_warned = false;
+  // A native file HEAD establishes binary TYPE in both curl's connection
+  // cache and the server. Later SIZE-only requests may then omit REST 0.
+  bool binary_size_ready = false;
+  bool size_reply_compatible = true;
 
   // With mode_b: the transfer mode of the current control connection was
   // logged. Each new connection (seen by its 220 greeting) logs it again.
   bool transfer_mode_reported = false;
   bool mode_b_refusal_warned = false;
+  std::optional<long> mc_connections_reported;
+  bool mc_refusal_warned = false;
 
   // State of the request in progress, used by the callbacks.
   const ReadFn* read = nullptr;
@@ -137,7 +157,10 @@ struct FtpClient::Impl {
           self->ftpsrv = Ftpsrv::Yes;
         }
         self->self_conversion = self->ftpsrv == Ftpsrv::Yes;
+        self->binary_size_ready = false;
+        self->size_reply_compatible = true;
         self->transfer_mode_reported = false;
+        self->mc_connections_reported.reset();
       } else if (line.find("SELF transfer mode disabled") != std::string_view::npos) {
         self->self_conversion = false;
       } else if (line.find("SELF transfer mode enabled") != std::string_view::npos) {
@@ -250,6 +273,27 @@ struct FtpClient::Impl {
     }
   }
 
+  // Data requests alone report FTPMC: NOBODY requests return 0 without negotiating it.
+  // Report again after a reconnect or when a server changes the connection count.
+  void report_ftp_mc() {
+    if (!config.ftp_mc_connections || is_ssh(config.protocol) || config.mode == FtpMode::Active ||
+        (read == nullptr && listing == nullptr))
+      return;
+    long count = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_FTP_MC_CONNECTIONS, &count) != CURLE_OK ||
+        mc_connections_reported == count)
+      return;
+    mc_connections_reported = count;
+    if (count > 0) {
+      log.info("FTPMC: {} parallel data connection(s) per file", count);
+    } else if (!mc_refusal_warned) {
+      mc_refusal_warned = true;
+      log.warn("the server did not accept FTPMC; using one data connection");
+    } else {
+      log.info("FTPMC: using one data connection; the server did not accept FTPMC");
+    }
+  }
+
   // Resets the handle (the connection stays cached) and applies common options.
   void prepare(const std::string& url) {
     curl_easy_reset(curl);
@@ -277,6 +321,10 @@ struct FtpClient::Impl {
       }
     }
     request_transfer_mode();
+    if (!is_ssh(config.protocol) && config.mode == FtpMode::Passive) {
+      curl_easy_setopt(curl, CURLOPT_FTP_MC_CONNECTIONS, static_cast<long>(config.ftp_mc_connections));
+      curl_easy_setopt(curl, CURLOPT_FTP_MC_STRIPE, static_cast<long>(config.ftp_mc_stripe));
+    }
     if (is_ssh(config.protocol)) {
       curl_easy_setopt(curl, CURLOPT_USERNAME, config.user.c_str());
       curl_easy_setopt(curl, CURLOPT_PASSWORD, config.password.c_str());
@@ -344,6 +392,7 @@ struct FtpClient::Impl {
     if (code == CURLE_OK) {
       logged_in = true;
       if (report) report_transfer_mode();
+      report_ftp_mc();
     }
     return code;
   }
@@ -410,6 +459,9 @@ std::once_flag g_curl_init;
 FtpClient::FtpClient(FtpConfig config, Logger& log, bool verbose)
     : impl_(std::make_unique<Impl>(std::move(config), log, verbose)) {
   std::call_once(g_curl_init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  if (impl_->config.ftp_mc_connections > kMaxFtpMcConnections || impl_->config.ftp_mc_stripe > kMaxFtpMcStripe) {
+    throw FtpError("invalid FTPMC connection count or stripe size", CURLE_BAD_FUNCTION_ARGUMENT);
+  }
   if (is_ssh(impl_->config.protocol)) impl_->private_keys = prepare_ssh_settings(impl_->config);
   impl_->curl = curl_easy_init();
   if (impl_->curl == nullptr) {
@@ -523,6 +575,9 @@ void FtpClient::ensure_directory(const std::string& dir) {
 }
 
 std::optional<std::vector<std::string>> FtpClient::list_names(const std::string& dir, bool include_hidden) {
+  // curl requests ASCII TYPE for a listing. Establish binary TYPE with a
+  // native file request again before using SIZE-only queries.
+  impl_->binary_size_ready = false;
   std::string listing;
   impl_->prepare(impl_->path_url(dir, true));
   impl_->listing = &listing;
@@ -559,6 +614,48 @@ std::optional<std::vector<std::string>> FtpClient::list_names(const std::string&
 
 RemoteFile FtpClient::stat_file(const std::string& path) {
   CURLcode code = CURLE_OK;
+  const std::string name = remote_basename(path);
+  // Keep curl's URL validation for invalid paths instead of inserting control
+  // characters into a quoted command, even for direct callers of this method.
+  const bool valid_name = !path.empty() && path.back() != '/' && !name.empty() &&
+                          std::none_of(name.begin(), name.end(), [](unsigned char c) { return c < 0x20; });
+  if (!is_ssh(impl_->config.protocol) && impl_->binary_size_ready && valid_name) {
+    impl_->disable_self_conversion();
+    if (impl_->binary_size_ready) {
+      // The parent-directory URL preserves curl's CWD handling and fallback.
+      // With no filename, NOBODY sends neither SIZE nor REST; POSTQUOTE asks
+      // for the exact binary size without another range-support round trip.
+      impl_->prepare(impl_->path_url(remote_parent(path), true));
+      SList postquote;
+      postquote.append("*SIZE " + name);
+      curl_easy_setopt(impl_->curl, CURLOPT_NOBODY, 1L);
+      curl_easy_setopt(impl_->curl, CURLOPT_POSTQUOTE, postquote.get());
+      code = impl_->perform();
+      if (code == CURLE_OK && impl_->binary_size_ready && !impl_->self_conversion) {
+        const std::string_view reply = impl_->last_reply;
+        if (reply.size() >= 4 && reply.substr(0, 4) == "550 ") return {};
+        if (reply.size() >= 4 && reply.substr(0, 4) == "213 ") {
+          if (const auto size = size_reply(reply)) return {true, size};
+          // curl accepts some non-standard SIZE replies. Let its native
+          // parser handle those, and keep using it on this connection.
+          impl_->size_reply_compatible = false;
+        } else {
+          return {true, std::nullopt};  // SIZE is unavailable, as with a native HEAD.
+        }
+      } else if (code != CURLE_OK) {
+        impl_->binary_size_ready = false;
+        if (code == CURLE_REMOTE_FILE_NOT_FOUND || code == CURLE_REMOTE_ACCESS_DENIED) return {};
+        // POSTQUOTE runs after curl's normal reconnect/retry phase. A closed
+        // cached connection can therefore fail here instead of being retried
+        // by curl; the native read-only query safely reestablishes the session.
+        if (code != CURLE_SEND_ERROR && code != CURLE_RECV_ERROR && code != CURLE_GOT_NOTHING)
+          impl_->fail(fmt::format("cannot query remote file {}", path), code);
+      }
+      // A reconnect invalidates binary TYPE and may enable ftpsrv SELF again.
+      // Ignore that reply and perform the same native query as the first file.
+    }
+  }
+  impl_->binary_size_ready = false;
   // A request that reconnects reaches a new ftpsrv session, where the SELF
   // conversion is on again: turn it off and ask once more.
   for (int pass = 0; pass < 2; ++pass) {
@@ -586,6 +683,7 @@ RemoteFile FtpClient::stat_file(const std::string& path) {
     }
     return file;
   }
+  if (!is_ssh(impl_->config.protocol)) impl_->binary_size_ready = valid_name && impl_->size_reply_compatible;
   curl_off_t length = -1;
   if (curl_easy_getinfo(impl_->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length) == CURLE_OK && length >= 0) {
     file.size = static_cast<uint64_t>(length);
@@ -603,10 +701,10 @@ bool FtpClient::delete_file(const std::string& path) {
 }
 
 void FtpClient::move_path(const std::string& source, const std::string& destination) {
-  const CURLcode code = impl_->quote(is_ssh(impl_->config.protocol)
-                                       ? std::vector<std::string>{"rename " + sftp_quote_path(source) + " " +
-                                                                  sftp_quote_path(destination)}
-                                       : std::vector<std::string>{"RNFR " + source, "RNTO " + destination});
+  const CURLcode code = impl_->quote(
+      is_ssh(impl_->config.protocol)
+          ? std::vector<std::string>{"rename " + sftp_quote_path(source) + " " + sftp_quote_path(destination)}
+          : std::vector<std::string>{"RNFR " + source, "RNTO " + destination});
   if (code != CURLE_OK) {
     impl_->fail(fmt::format("cannot move staged path {} to {}", source, destination), code);
   }
