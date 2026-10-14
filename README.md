@@ -122,7 +122,7 @@ Two optional FTP/FTPS settings can improve transfer speed on compatible servers:
   overhead for archives with many small files. Enable it in the app's **Server**
   settings or with `--mode-b`.
 - **FTPMC** sends each file over several parallel data connections. Enable it
-  under **Advanced** or with `--ftp-mc N`. It requires passive mode.
+  under **Advanced** or with `--ftp-mc N`. It requires passive mode. [More Information](https://github.com/RuiNelson/FTPMC)
 
 Both are off by default and fall back to a normal connection with a warning if
 the server refuses them. Neither applies to SFTP.
