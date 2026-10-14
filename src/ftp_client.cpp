@@ -782,7 +782,7 @@ UploadResult FtpClient::upload(const std::string& path, uint64_t size, int64_t m
     if (is_ssh(d.config.protocol)) {
       d.timestamps = Timestamps::Unsupported;
     } else if (d.timestamps == Timestamps::Unknown) {
-      // No MFMT: try the vsftpd flavour, "MDTM <time> <path>".
+      // No MFMT: try the vsftpd flavor, "MDTM <time> <path>".
       if (d.quote({fmt::format("MDTM {} {}", stamp, path)}) == CURLE_OK) {
         d.timestamps = Timestamps::Mdtm;
         return result;

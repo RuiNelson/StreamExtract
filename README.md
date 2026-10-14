@@ -63,7 +63,7 @@ preferences are remembered automatically.
 
 For SFTP key authentication and host verification, open **SSH settings**.
 An optional **Staging directory** lets you upload files before moving them to
-the destination; see [Transfer behaviour](#transfer-behaviour).
+the destination; see [Transfer behavior](#transfer-behavior).
 
 **Cancel batch** stops the current transfer and prevents the remaining archives
 from starting. The incomplete remote file is removed; completed files remain.
@@ -127,7 +127,7 @@ Two optional FTP/FTPS settings can improve transfer speed on compatible servers:
 Both are off by default and fall back to a normal connection with a warning if
 the server refuses them. Neither applies to SFTP.
 
-## Transfer behaviour
+## Transfer behavior
 
 Files already on the server are handled by **name and size**:
 

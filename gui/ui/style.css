@@ -873,7 +873,7 @@ input[type="checkbox"] {
   text-align: right;
 }
 
-/* Flexible, but never wider than this, so the value + meter pair stays centred. */
+/* Flexible, but never wider than this, so the value + meter pair stays centered. */
 .meter {
   flex: 1 1 auto;
   width: auto;

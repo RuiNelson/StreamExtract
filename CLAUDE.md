@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`StreamExtract` streams the contents of a RAR, ZIP, 7z or tar archive, or an exFAT, PFS or UFS volume image, to an FTP server without extracting to disk (C++17, CMake). See `README.md` for options and behaviour. `StreamExtract` is a desktop front-end for the same engine (Tauri 2 + vanilla HTML/CSS/JS in `gui/`) that talks to it through the `streamextractcore` shared library.
+`StreamExtract` streams the contents of a RAR, ZIP, 7z or tar archive, or an exFAT, PFS or UFS volume image, to an FTP server without extracting to disk (C++17, CMake). See `README.md` for options and behavior. `StreamExtract` is a desktop front-end for the same engine (Tauri 2 + vanilla HTML/CSS/JS in `gui/`) that talks to it through the `streamextractcore` shared library.
 
 ## Build and test
 
