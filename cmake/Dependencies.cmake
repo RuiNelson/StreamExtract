@@ -51,8 +51,8 @@ include(SSH)
 # commit and the SHA-256 of its GitHub archive.
 message(STATUS "streamextract: using bundled libcurl 8.23.0 with FTPMC and FTP block mode (FTP, FTPS and SFTP)")
 FetchContent_Declare(curl
-  URL https://github.com/RuiNelson/curl-streamextract/archive/e2d2644fabe318d9284e3c51769d65fa8e4bdba8.tar.gz
-  URL_HASH SHA256=7ad0cd550f68df6a3027627302097b83941d4e4d10b5dcd919db762e542b6bbf
+  URL https://github.com/RuiNelson/curl-streamextract/archive/bc901172f8602f1d004eead19e50f6cf0b7256e2.tar.gz
+  URL_HASH SHA256=287fcc075225ed770c45f82ae9a990fa0b8fbc57f5be4c44af6fbbeb30d994cf
   EXCLUDE_FROM_ALL)
 
 # Enable FTP/FTPS and SSH; the application exposes SFTP only. No compression.
