@@ -41,7 +41,7 @@ typedef struct streamextract_job_config {
   unsigned buffer_mib;          /* Buffer between decompression and upload; 0: 1024. */
 } streamextract_job_config;
 
-/* "StreamExtract 3.0.1 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.23.0-DEV)". Static
+/* "StreamExtract 3.0.2 (UnRAR 7.31, LZMA SDK 26.03, libarchive 3.8.9, libcurl 8.23.0-DEV)". Static
  * storage, never freed. */
 STREAMEXTRACT_API const char* streamextract_version(void);
 
