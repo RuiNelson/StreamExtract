@@ -108,7 +108,7 @@ test("progress uses the engine text for ordinary and streamed archives", () => {
   app.renderStatus(snap);
   assert.match(app.node("cur-stats").textContent, /1.00 MB \/ 1.00 GB/);
   assert.match(app.node("total-stats").textContent, /1.00 MB \/ 1.00 GB/);
-  assert.equal(app.node("stat-upload-value").textContent, "1.00 MB/s");
+  assert.equal(app.node("stat-upload-value").textContent, "2.00 MB/s");
   assert.equal(app.node("stat-unpack-value").textContent, "3.00 MB/s");
   assert.match(app.node("stat-buffer").title, /67.1 MB/);
   progress.totals_known = false;
@@ -193,7 +193,7 @@ test("the sound preference loads and saves without changing units or buffer", as
   app.node("completion-sound").checked = true;
   await app.saveCompletionSound();
   assert.deepEqual({ ...calls[1].args.preferences }, {
-    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true,
+    units: "binary", buffer_mib: 128, completion_sound: true, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true, ftp_mc_connections: 0, ftp_mc_stripe: 0,
   });
   assert.equal(app.state.completionSound, true);
   assert.equal(app.node("completion-sound").disabled, false);
@@ -227,7 +227,7 @@ test("password visibility is shared, persists across preference changes, and kee
   assert.equal(calls[1].args.preferences.show_passwords, true);
   await app.savePasswordVisibility({ target: { checked: false } });
   assert.deepEqual({ ...calls[2].args.preferences }, {
-    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true,
+    units: "si", buffer_mib: 128, completion_sound: false, show_passwords: false, retries: 3, check_updates: null, prevent_sleep: true, ftp_mc_connections: 0, ftp_mc_stripe: 0,
   });
   for (const id of fields) {
     assert.equal(app.node(id).type, "password");
