@@ -44,10 +44,12 @@ fn find_library_dir(manifest_dir: &Path, file_name: &str) -> PathBuf {
     );
 }
 
-/// The directory of the executables being built: `OUT_DIR` is `<target>/<profile>/build/<pkg>/out`.
+/// The directory of the executables being built: `OUT_DIR` is `<target>/<profile>/build/<pkg>[/<hash>]/out`
+/// (newer Cargo versions add the hash level), so find the `build` directory instead of counting levels.
 fn profile_dir() -> Option<PathBuf> {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR")?);
-    out_dir.ancestors().nth(3).map(Path::to_path_buf)
+    let build = out_dir.ancestors().find(|p| p.file_name().is_some_and(|n| n == "build"))?;
+    build.parent().map(Path::to_path_buf)
 }
 
 fn main() {
@@ -82,7 +84,12 @@ fn main() {
         "windows" => {
             // The loader looks next to the executable: make `cargo run` and `cargo test` work.
             if let Some(profile_dir) = profile_dir() {
-                for dir in [profile_dir.clone(), profile_dir.join("deps")] {
+                // Newer Cargo versions also place test executables inside `OUT_DIR`'s parent build directory.
+                let mut dirs = vec![profile_dir.clone(), profile_dir.join("deps")];
+                if let Some(out_dir) = env::var_os("OUT_DIR") {
+                    dirs.push(PathBuf::from(out_dir));
+                }
+                for dir in dirs {
                     if fs::create_dir_all(&dir).is_ok() {
                         if let Err(error) = fs::copy(&lib_file, dir.join(file_name)) {
                             println!(
