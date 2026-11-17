@@ -18,7 +18,7 @@ pub enum Units {
     Binary,
 }
 
-const DEFAULT_BUFFER_MIB: u32 = 64;
+const DEFAULT_BUFFER_MIB: u32 = 1024;
 
 fn default_buffer_mib() -> u32 {
     DEFAULT_BUFFER_MIB

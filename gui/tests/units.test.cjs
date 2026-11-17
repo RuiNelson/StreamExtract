@@ -288,8 +288,8 @@ test("a failed buffer save restores its previous value", async () => {
   const app = frontend(async () => { throw new Error("read-only directory"); });
   app.node("buffer").value = "256";
   await app.saveBuffer();
-  assert.equal(app.state.bufferMib, 64);
-  assert.equal(app.node("buffer").value, "64");
+  assert.equal(app.state.bufferMib, 1024);
+  assert.equal(app.node("buffer").value, "1024");
   assert.equal(app.node("buffer").disabled, false);
 });
 

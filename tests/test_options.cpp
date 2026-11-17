@@ -203,7 +203,7 @@ TEST_CASE("CLI defaults") {
   CHECK(o.mode == FtpMode::Passive);
   CHECK_FALSE(o.mode_b);
   CHECK(o.retries == 3);
-  CHECK(o.buffer_mib == 64);
+  CHECK(o.buffer_mib == 1024);
   CHECK_FALSE(o.user);
   CHECK_FALSE(o.password);
   CHECK_FALSE(o.directory);

@@ -32,7 +32,7 @@ struct Options {
   std::string extraction_root;
   bool no_tui = false;
   bool verbose = false;
-  size_t buffer_mib = 64;
+  size_t buffer_mib = 1024;
   unsigned retries = 3;  // Total connection/login and per-file upload attempts, including the first.
 };
 

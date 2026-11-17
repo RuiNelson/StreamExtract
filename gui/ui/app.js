@@ -176,7 +176,7 @@
     memory: { saved: false, configs: [] },
     memoryBusy: false,
     units: "si",
-    bufferMib: 64,
+    bufferMib: 1024,
     retries: 3,
     ftpMcConnections: 0,
     ftpMcStripe: 0,

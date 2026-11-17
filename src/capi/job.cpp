@@ -20,7 +20,7 @@ namespace streamextract {
 namespace {
 
 constexpr size_t kMaxLogLines = 5000;
-constexpr unsigned kDefaultBufferMib = 64;
+constexpr unsigned kDefaultBufferMib = 1024;
 constexpr unsigned kMaxBufferMib = 4096;
 
 std::string file_name_of(const std::string& path) {

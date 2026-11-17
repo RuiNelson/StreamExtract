@@ -210,7 +210,7 @@ Cancel with `q`, `Esc` or `Ctrl-C`.
 | `--mode-b` | Enable FTP/FTPS block mode. |
 | `--ftp-mc N` | Parallel passive FTP/FTPS data connections per file: 1–64; `0` disables (default). |
 | `--ftp-mc-stripe BYTES` | FTPMC stripe size; `0` uses the server default. Maximum: 4294967295, or 2147483647 on Windows. |
-| `--buffer MIB` | Memory buffer in MiB: 1–4096. Default: `64`. |
+| `--buffer MIB` | Memory buffer in MiB: 1–4096. Default: `1024`. |
 | `--retries N` | Total connection/login and per-file upload attempts. Default: `3`. |
 | `--no-tui` | Plain log output. |
 | `--verbose` | Detailed connection and protocol logging; credentials are masked. |
