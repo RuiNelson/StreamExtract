@@ -126,6 +126,7 @@
     statusRow: $("status-row"),
     statUpload: $("stat-upload"),
     statUploadValue: $("stat-upload-value"),
+    statUploadAvg: $("stat-upload-avg"),
     statUnpackValue: $("stat-unpack-value"),
     statBuffer: $("stat-buffer"),
     statBufferValue: $("stat-buffer-value"),
@@ -1224,6 +1225,7 @@
     setText(els.totalFiles, "");
 
     setText(els.statUploadValue, "-");
+    els.statUploadAvg.hidden = true;
     setText(els.statUnpackValue, "-");
     setText(els.statBufferValue, "-");
     setMeter(els.bufferMeter, 0);
@@ -1541,8 +1543,12 @@
       return;
     }
     const t = p.text || {};
-    setText(els.statUploadValue, t.average_rate || "-");
-    setTitle(els.statUpload, t.upload_rate ? `Current: ${t.upload_rate}` : "");
+    // While transferring, the current rate: comparable with Unpack and Buffer,
+    // which are also instantaneous. A finished job has no current rate.
+    const finished = snap.phase === "finished";
+    els.statUploadAvg.hidden = !finished;
+    setText(els.statUploadValue, (finished ? t.average_rate : t.upload_rate) || "-");
+    setTitle(els.statUpload, !finished && t.average_rate ? `Average: ${t.average_rate}` : "");
     setText(els.statUnpackValue, t.unpack_rate || "-");
     const buffer = ratio(p.buffer_used, p.buffer_capacity);
     setText(els.statBufferValue, `${Math.round(buffer * 100)}%`);
